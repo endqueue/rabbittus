@@ -114,6 +114,30 @@ its recorded streamed-DEFLATE bytes are MSVC's too, so zlib-ng's output
 is the same on both platforms. `rbtarchive_fuzz` ran 10 minutes there
 (1,834,271 runs): nothing found. **Linux has built none of it.**
 
+## A codec's failure says which (card A52, decided 2026-11-14 with you: b)
+
+Found 2026-11-13 by Latran's allocation-failure test on the Mac:
+`RBTARCHIVE_CODEC`'s `compress` and `decompress` return a `bool`, so when
+the DEFLATE codec can't allocate its libdeflate decompressor, a read
+reports `RBT_RESULT_CORRUPT_DATA` and the caller tells its person the
+archive is damaged when memory ran out.
+
+- `compress` and `decompress` (and `stream_begin` and `stream_process`)
+  return `RBT_RESULT`: `RBT_RESULT_OUT_OF_MEMORY` apart from corrupt data.
+  A listed break of `RBTARCHIVE_CODEC` against `abi.txt`, before 1.0.
+- The built-in DEFLATE codec makes its compressor and decompressor with
+  `libdeflate_alloc_compressor_ex` / `_decompressor_ex`, given Rabbittus'
+  allocation calls, so an allocation-failure test can fail them.
+- Still one per call: the codecs table is read by any number of readers and
+  writers at once and a reader's reads may overlap (`rbtarchive.h`,
+  "Threads"), so a decompressor kept on the table would be shared by
+  overlapping reads. A read with no allocation is card A32's, and the
+  decompressor there is the read's or the caller's, never the table's.
+- A draft header first (`include/archive/rbtarchive_codec_draft.h`), each
+  change marked, for approval (card X21); then built with its tests first,
+  Latran's `latranallocfail_tests` then passing its pack stages without
+  counting them apart.
+
 ## Smaller additions
 
 - **Custom memory allocator.** Game engines expect to supply their own; today it's
