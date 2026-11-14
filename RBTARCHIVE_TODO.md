@@ -116,7 +116,7 @@ is the same on both platforms. `rbtarchive_fuzz` ran 10 minutes there
 
 ## A codec's failure says which (card A52, decided 2026-11-14 with you: b)
 
-Found 2026-11-13 by Latran's allocation-failure test on the Mac:
+Found 2026-11-13 by a caller's allocation-failure test on the Mac:
 `RBTARCHIVE_CODEC`'s `compress` and `decompress` return a `bool`, so when
 the DEFLATE codec can't allocate its libdeflate decompressor, a read
 reports `RBT_RESULT_CORRUPT_DATA` and the caller tells its person the
@@ -135,8 +135,8 @@ archive is damaged when memory ran out.
   decompressor there is the read's or the caller's, never the table's.
 - A draft header first (`include/archive/rbtarchive_codec_draft.h`), each
   change marked, for approval (card X21); then built with its tests first,
-  Latran's `latranallocfail_tests` then passing its pack stages without
-  counting them apart.
+  the caller's allocation-failure test then passing its archive stages
+  without counting them apart.
 
 ## Smaller additions
 
