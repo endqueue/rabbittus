@@ -137,6 +137,64 @@ archive is damaged when memory ran out.
   change marked, for approval (card X21); then built with its tests first,
   the caller's allocation-failure test then passing its archive stages
   without counting them apart.
+- **Drafted 2026-11-14** (`rbtarchive_codec_draft.h` at the repository's
+  root, beside Rabbittus' other drafts; version 1, written unattended on
+  the Mac; waiting on your review): `compress`, `decompress`,
+  `stream_begin` (its state through an `out_state`) and `stream_process`
+  return `RBT_RESULT`, each with a closed list of codes; `stream_end`
+  unchanged; libdeflate through `_ex` with `malloc`/`free` named and
+  zlib-ng's `zalloc`/`zfree` the same; 0.1.0 to 0.2.0. Four questions
+  numbered there.
+- **Reviewed 2026-11-14** (the workspace's review prompt of 2026-11-14; its record,
+  in the workspace's `prompts/`, has every finding):
+  - **Your answers (stage A):** Q1 a (a closed list of codes per
+    callback, any other code `INVALID_ARGUMENT`), Q2 a (told by the
+    compiler), Q3 a (`stream_end` stays `void`), Q4 a (the test codec and
+    `rbtarchive_allocfail_tests`).
+  - **Seven cycles of critique,** each writing its fixes in: the
+    library's rules, libdeflate and zlib-ng underneath, the builder, the
+    callers, failures and versions, threads, tests. The draft reached
+    **version 7**. Q2's claim that the presets make an old codec a compile
+    error was false (C2.7): Apple clang and GCC 14 refuse it by default,
+    MSVC's C compiler only warns and an old codec is then misread.
+    **Answered again 2026-11-14 with you: Q2 b,** a run-time refusal:
+    `RBT_STRUCT_TYPE_ARCHIVE_CODEC_2` (1006), the old type refused by
+    `rbtarchive_codecs_add()`. **Version 8.**
+  - **APPROVED by you 2026-11-14, version 8;** frozen. SHA-256 (carriage
+    returns removed) of `rbtarchive_codec_draft.h`:
+    `9596cfa6dfdf11bb008040b96c110cd7b7adfaabee63424938da1fe54b87f3a5`.
+    Ready to build, from the plan below: the Mac first,
+    `../prompts/rbtarchive_codec_mac.md`, which writes the Windows and
+    Fedora prompts.
+  - **The build plan** (tests first, each step built and run):
+    1. `tests/rbtarchive_tests.cpp`: the test codec (its `user` says which
+       callback fails with which code), each code of Q1's lists and one
+       outside, through every call that runs a codec; the two-thread case
+       (two entry readers of one reader, overlapping, failing apart).
+       Seen failing against today's bools.
+    2. `tests/rbtarchive_allocfail_tests.c` and an injector beside
+       `tests/alloctrace.h` (Apple interposing written and run here;
+       Linux and Windows halves written, compiled on those machines),
+       registered in `CMakeLists.txt` beside
+       `rbtarchive_tests` (Rabbittus has no `tests/CMakeLists.txt`).
+    3. `include/archive/rbtarchive.h`: `RBTARCHIVE_CODEC`'s four callback
+       types and their comments; the calls' result lists; "@par Results".
+       `include/rbtcore.h`: `RABBITTUS_VERSION_MINOR` 1 to 2 and
+       `RBT_STRUCT_TYPE_ARCHIVE_CODEC_2` (1006), the old type kept,
+       retired; `rbtarchive_codecs_add()` refusing it (test first).
+    4. `src/archive/rbtarchive.cpp`: the DEFLATE codec (lines 240-330
+       today: `_ex` with zeroed options and `sizeof_options`, `zalloc`/
+       `zfree` of Rabbittus' own, every return a code); every call site
+       (629, 691, 747, 1458, 1513, 1715, 2222 today) passing each listed
+       code on with its message, any other as `INVALID_ARGUMENT` naming
+       the method and code, an `OK` with no state likewise.
+    5. `./check.sh --update-abi`, the misuse generator rerun, the break
+       listed in the commit; `./check.sh`.
+  - **The callers' follow-up** (C4.4, not this change's): a caller that
+    told its person "damaged" on `CORRUPT_DATA` from a read now gets
+    `OUT_OF_MEMORY` when memory ran out; its own message for that, and its
+    allocation-failure test no longer counting the archive's stages apart,
+    are its own TODO's once this is built.
 
 ## Smaller additions
 
