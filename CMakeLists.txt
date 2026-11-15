@@ -774,6 +774,23 @@ if (RABBITTUS_BUILD_TESTS)
     add_executable(rbtarchive_tests tests/rbtarchive_tests.cpp)
     target_link_libraries(rbtarchive_tests PRIVATE rabbittus)
     add_test(NAME rbtarchive_tests COMMAND rbtarchive_tests)
+    # Rabbittus Archive's DEFLATE paths failing for want of memory (card A52,
+    # tests/rbtarchive_allocfail.h). On Apple the injector is a test-only
+    # dylib whose __interpose section dyld applies at launch; on Linux the
+    # executable replaces glibc's malloc family (dl_iterate_phdr needs
+    # _GNU_SOURCE before any system header); on Windows it patches the
+    # executable's own import slots. Under a sanitizer it reports itself
+    # skipped.
+    add_executable(rbtarchive_allocfail_tests tests/rbtarchive_allocfail_tests.c)
+    target_link_libraries(rbtarchive_allocfail_tests PRIVATE rabbittus)
+    if (APPLE)
+        add_library(rbtarchive_allocfail_interpose SHARED tests/rbtarchive_allocfail_interpose.c)
+        target_link_libraries(rbtarchive_allocfail_tests PRIVATE rbtarchive_allocfail_interpose)
+    elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(rbtarchive_allocfail_tests PRIVATE _GNU_SOURCE)
+    endif ()
+    add_test(NAME rbtarchive_allocfail_tests COMMAND rbtarchive_allocfail_tests)
+    set_tests_properties(rbtarchive_allocfail_tests PROPERTIES TIMEOUT 900)
     # Every public function with every argument zeroed (ROADMAP.md, section
     # 3.1): generated from abi.txt by tests/misuse/make_misuse_tests.py.
     # No allocation per frame (ROADMAP.md, section 3.1): each module's steady

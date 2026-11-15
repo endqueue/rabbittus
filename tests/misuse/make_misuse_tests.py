@@ -62,7 +62,7 @@ FACTORIES = {
 # Handle types with no factory here, each with the reason. A handle type
 # in neither table fails the generator.
 NO_FACTORY = {
-    'rbtrend_': 'an Rbtrend handle needs a GPU device, which these tests never make; '
+    'rbtrend_': 'a Rend handle needs a GPU device, which these tests never make; '
                'rabbittustests/tests/rbtrend_gpu_tests.c, test_destroyed_handles, calls these',
 }
 
@@ -89,7 +89,7 @@ def main():
             raise SystemExit('%s: a handle type with no factory and no reason for none' % handle)
     out = []
     out.append('// Written by tests/misuse/make_misuse_tests.py from abi.txt: not by hand.\n')
-    out.append('// Every public function of rabbittus called with every argument zeroed\n')
+    out.append('// Every public function of Rabbittus called with every argument zeroed\n')
     out.append('// (ROADMAP.md, section 3.1). None may crash; one returning RBT_RESULT returns\n')
     out.append('// an error unless the generator lists zeroes as a valid call for it.\n')
     out.append('// Then, in a Debug build not under a sanitizer, every one whose first\n')
@@ -177,7 +177,7 @@ def main():
     out.append('    // CRT keeps every block freed, filled and never given back to the\n')
     out.append('    // Windows heap, which decommits freed pages: reading one faults (one\n')
     out.append('    // run in about forty did, 2026-10-31). carrottus\'s harness keeps its\n')
-    out.append('    // freed blocks through its allocator; rabbittus uses malloc.\n')
+    out.append('    // freed blocks through its allocator; Rabbittus uses malloc.\n')
     out.append('    _CrtSetDbgFlag(_CrtSetDbgFlag(_CRTDBG_REPORT_FLAG) | _CRTDBG_DELAY_FREE_MEM_DF);\n')
     out.append('#endif\n')
     out.append('    calls_with_destroyed_handles();\n')

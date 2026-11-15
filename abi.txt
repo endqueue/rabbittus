@@ -311,6 +311,7 @@ const RBT_RESULT_TEXT_NOT_A_FONT = 6001
 const RBT_RESULT_TIMEOUT = 12
 const RBT_RESULT_UNSUPPORTED = 7
 const RBT_STRUCT_TYPE_ARCHIVE_CODEC = 1000
+const RBT_STRUCT_TYPE_ARCHIVE_CODEC_2 = 1006
 const RBT_STRUCT_TYPE_ARCHIVE_ENTRY_DESC = 1002
 const RBT_STRUCT_TYPE_ARCHIVE_ENTRY_INFO = 1004
 const RBT_STRUCT_TYPE_ARCHIVE_READER_DESC = 1003
@@ -795,7 +796,7 @@ macro RABBITTUS_VERSION_GET_MAJOR(version) ((uint32_t)(version) >> 22U)
 macro RABBITTUS_VERSION_GET_MINOR(version) (((uint32_t)(version) >> 12U) & 0x3FFU)
 macro RABBITTUS_VERSION_GET_PATCH(version) ((uint32_t)(version) & 0xFFFU)
 macro RABBITTUS_VERSION_MAJOR 0
-macro RABBITTUS_VERSION_MINOR 1
+macro RABBITTUS_VERSION_MINOR 2
 macro RABBITTUS_VERSION_PATCH 0
 macro RBTARCHIVE_ERROR_MESSAGE_SIZE 256
 macro RBTARCHIVE_EXTRA_NTFS_TIMES 0x000A
@@ -889,10 +890,10 @@ field RBTARCHIVE_CODEC.base @0 RBT_STRUCT_BASE
 field RBTARCHIVE_CODEC.method @16 uint16_t
 field RBTARCHIVE_CODEC.user @24 void *
 field RBTARCHIVE_CODEC.compress_bound @32 uint64_t (*)(void *, uint64_t)
-field RBTARCHIVE_CODEC.compress @40 _Bool (*)(void *, int32_t, const void *, uint64_t, void *, uint64_t, uint64_t *)
-field RBTARCHIVE_CODEC.decompress @48 _Bool (*)(void *, const void *, uint64_t, void *, uint64_t)
-field RBTARCHIVE_CODEC.stream_begin @56 void *(*)(void *, _Bool, int32_t)
-field RBTARCHIVE_CODEC.stream_process @64 _Bool (*)(void *, void *, const void *, uint64_t, uint64_t *, void *, uint64_t, uint64_t *, _Bool, _Bool *)
+field RBTARCHIVE_CODEC.compress @40 RBT_RESULT (*)(void *, int32_t, const void *, uint64_t, void *, uint64_t, uint64_t *)
+field RBTARCHIVE_CODEC.decompress @48 RBT_RESULT (*)(void *, const void *, uint64_t, void *, uint64_t)
+field RBTARCHIVE_CODEC.stream_begin @56 RBT_RESULT (*)(void *, _Bool, int32_t, void **)
+field RBTARCHIVE_CODEC.stream_process @64 RBT_RESULT (*)(void *, void *, const void *, uint64_t, uint64_t *, void *, uint64_t, uint64_t *, _Bool, _Bool *)
 field RBTARCHIVE_CODEC.stream_end @72 void (*)(void *, void *)
 struct RBTARCHIVE_ENTRY_DESC size=104 align=8
 field RBTARCHIVE_ENTRY_DESC.base @0 RBT_STRUCT_BASE

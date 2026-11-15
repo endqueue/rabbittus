@@ -2,8 +2,11 @@
 
 #include "archive/rbtarchive.h"
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <stdio.h>
 #include <string.h>
+#include <thread>
 #include <vector>
 #if defined(_MSC_VER) && _DEBUG
 #include <crtdbg.h>
@@ -236,11 +239,11 @@ static void test_codecs()
     // No duplicates, no STORED, no codec without decompress.
     CHECK(rbtarchive_codecs_add_deflate(codecs) == RBT_RESULT_INVALID_ARGUMENT);
     RBTARCHIVE_CODEC stored{};
-    stored.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC;
+    stored.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC_2;
     stored.method = RBTARCHIVE_METHOD_STORED;
     CHECK(rbtarchive_codecs_add(codecs, &stored) == RBT_RESULT_INVALID_ARGUMENT);
     RBTARCHIVE_CODEC zstd{};
-    zstd.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC;
+    zstd.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC_2;
     zstd.method = 93;
     CHECK(rbtarchive_codecs_add(codecs, &zstd) == RBT_RESULT_INVALID_ARGUMENT);
     // Tables are independent: no global registration.
@@ -1254,10 +1257,10 @@ static void test_streamed_entries()
     // none works on whole entries only.
     {
         RBTARCHIVE_CODEC codec{};
-        codec.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC;
+        codec.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC_2;
         codec.method = 99;
-        codec.decompress = [](void *, const void *, uint64_t, void *, uint64_t) { return false; };
-        codec.stream_begin = [](void *, bool, int32_t) -> void * { return nullptr; };
+        codec.decompress = [](void *, const void *, uint64_t, void *, uint64_t) { return RBT_RESULT_CORRUPT_DATA; };
+        codec.stream_begin = [](void *, bool, int32_t, void **) { return RBT_RESULT_OUT_OF_MEMORY; };
         rbtarchive_codecs table = nullptr;
         CHECK(rbtarchive_codecs_create(&table) == RBT_RESULT_OK);
         CHECK(rbtarchive_codecs_add(table, &codec) == RBT_RESULT_INVALID_ARGUMENT);
@@ -1895,6 +1898,529 @@ static void test_destroyed_entry_reader_kept()
 #endif
 }
 
+// ---- A codec's failure says which (card A52) -------------------------------------
+//
+// A test codec, method 99. Its stored bytes are a directive byte, then the
+// data as it is: the directive is the RBT_RESULT that decompressing returns,
+// 0 meaning the data follows. Streamed, the directive is the first byte a
+// decompressing stream takes. Compressing, it writes directive 0 and the
+// data, and its `user` says what each callback returns instead.
+
+static const uint16_t TEST_METHOD = 99;
+
+struct test_codec_t
+{
+    RBT_RESULT compress_result{RBT_RESULT_OK}; // what compress returns (OK: it compresses)
+    RBT_RESULT begin_result{RBT_RESULT_OK};    // what stream_begin returns
+    bool begin_no_state{false};                // stream_begin returns OK and no state
+    RBT_RESULT process_result{RBT_RESULT_OK};  // what a compressing stream_process returns
+    bool process_only_finishing{false};        // ...only once `finish` is set
+    std::atomic<int> decompress_out_of_memory{0}; // decompress runs out of memory this many times first
+    std::atomic<int> compress_calls{0};
+    std::atomic<int> stream_ends{0};
+    std::atomic<int> streams_live{0};
+    // The two-thread case: a decompressing stream's first call waits until
+    // this many streams have reached theirs (10 seconds at most).
+    int overlap_streams{0};
+    std::atomic<int> overlap_arrived{0};
+};
+
+struct test_stream_t
+{
+    bool compress;
+    bool started; // compressing: directive 0 written; decompressing: the directive read
+};
+
+static uint64_t test_compress_bound(void *, uint64_t in_size)
+{
+    return in_size + 1;
+}
+
+static RBT_RESULT test_compress(void *user, int32_t, const void *in, uint64_t in_size, void *out, uint64_t out_capacity,
+                                uint64_t *out_size)
+{
+    test_codec_t &t = *(test_codec_t *)user;
+    t.compress_calls++;
+    if (t.compress_result != RBT_RESULT_OK)
+        return t.compress_result;
+    if (out_capacity < in_size + 1)
+        return RBT_RESULT_INVALID_ARGUMENT;
+    uint8_t *bytes = (uint8_t *)out;
+    bytes[0] = 0;
+    if (in_size)
+        memcpy(bytes + 1, in, (size_t)in_size);
+    *out_size = in_size + 1;
+    return RBT_RESULT_OK;
+}
+
+static RBT_RESULT test_decompress(void *user, const void *in, uint64_t in_size, void *out, uint64_t out_size)
+{
+    test_codec_t &t = *(test_codec_t *)user;
+    if (t.decompress_out_of_memory.load() > 0)
+    {
+        t.decompress_out_of_memory--;
+        return RBT_RESULT_OUT_OF_MEMORY;
+    }
+    if (in_size == 0)
+        return RBT_RESULT_CORRUPT_DATA;
+    const uint8_t *bytes = (const uint8_t *)in;
+    if (bytes[0] != 0)
+        return (RBT_RESULT)bytes[0];
+    if (in_size - 1 != out_size)
+        return RBT_RESULT_CORRUPT_DATA;
+    if (out_size)
+        memcpy(out, bytes + 1, (size_t)out_size);
+    return RBT_RESULT_OK;
+}
+
+static RBT_RESULT test_stream_begin(void *user, bool compress, int32_t, void **out_state)
+{
+    test_codec_t &t = *(test_codec_t *)user;
+    *out_state = nullptr;
+    if (t.begin_no_state)
+        return RBT_RESULT_OK;
+    if (t.begin_result != RBT_RESULT_OK)
+        return t.begin_result;
+    test_stream_t *stream = (test_stream_t *)calloc(1, sizeof(test_stream_t));
+    if (!stream)
+        return RBT_RESULT_OUT_OF_MEMORY;
+    stream->compress = compress;
+    t.streams_live++;
+    *out_state = stream;
+    return RBT_RESULT_OK;
+}
+
+static RBT_RESULT test_stream_process(void *user, void *state, const void *in, uint64_t in_size, uint64_t *in_used,
+                                      void *out, uint64_t out_capacity, uint64_t *out_size, bool finish, bool *done)
+{
+    test_codec_t &t = *(test_codec_t *)user;
+    test_stream_t &stream = *(test_stream_t *)state;
+    const uint8_t *from = (const uint8_t *)in;
+    uint8_t *to = (uint8_t *)out;
+    *in_used = 0;
+    *out_size = 0;
+    *done = false;
+    if (stream.compress)
+    {
+        if (t.process_result != RBT_RESULT_OK && (finish || !t.process_only_finishing))
+            return t.process_result;
+        if (!stream.started)
+        {
+            if (out_capacity == 0)
+                return RBT_RESULT_OK;
+            to[0] = 0;
+            to++;
+            out_capacity--;
+            *out_size = 1;
+            stream.started = true;
+        }
+    }
+    else if (!stream.started)
+    {
+        if (t.overlap_streams)
+        {
+            t.overlap_arrived++;
+            std::chrono::steady_clock::time_point until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (t.overlap_arrived.load() < t.overlap_streams && std::chrono::steady_clock::now() < until)
+                std::this_thread::yield();
+        }
+        if (in_size == 0)
+            return finish ? RBT_RESULT_CORRUPT_DATA : RBT_RESULT_OK;
+        stream.started = true;
+        *in_used = 1;
+        if (from[0] != 0)
+            return (RBT_RESULT)from[0];
+        from++;
+        in_size--;
+    }
+    uint64_t count = in_size < out_capacity ? in_size : out_capacity;
+    if (count)
+        memcpy(to, from, (size_t)count);
+    *in_used += count;
+    *out_size += count;
+    *done = finish && count == in_size;
+    return RBT_RESULT_OK;
+}
+
+static void test_stream_end(void *user, void *state)
+{
+    test_codec_t &t = *(test_codec_t *)user;
+    t.stream_ends++;
+    t.streams_live--;
+    free(state);
+}
+
+static RBTARCHIVE_CODEC test_codec(test_codec_t &t)
+{
+    RBTARCHIVE_CODEC codec{};
+    codec.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC_2;
+    codec.method = TEST_METHOD;
+    codec.user = &t;
+    codec.compress_bound = test_compress_bound;
+    codec.compress = test_compress;
+    codec.decompress = test_decompress;
+    codec.stream_begin = test_stream_begin;
+    codec.stream_process = test_stream_process;
+    codec.stream_end = test_stream_end;
+    return codec;
+}
+
+static rbtarchive_codecs test_codecs(test_codec_t &t)
+{
+    rbtarchive_codecs codecs = nullptr;
+    CHECK(rbtarchive_codecs_create(&codecs) == RBT_RESULT_OK);
+    RBTARCHIVE_CODEC codec = test_codec(t);
+    CHECK(rbtarchive_codecs_add(codecs, &codec) == RBT_RESULT_OK);
+    return codecs;
+}
+
+// An archive of method 99 entries written raw, each its directive and then
+// [data].
+static std::vector<uint8_t> directive_archive(rbtarchive_codecs codecs, const std::vector<uint8_t> &data,
+                                              const uint8_t *directives, const char *const *names, size_t count)
+{
+    std::vector<uint8_t> archive;
+    rbtarchive_writer writer = memory_writer(archive, codecs);
+    uint32_t crc = rbtarchive_compute_crc32(0, data.data(), data.size());
+    for (size_t i = 0; i < count; i++)
+    {
+        std::vector<uint8_t> stored(1, directives[i]);
+        stored.insert(stored.end(), data.begin(), data.end());
+        RBTARCHIVE_ENTRY_DESC entry = entry_desc(names[i], TEST_METHOD);
+        CHECK(rbtarchive_writer_add_raw_entry(writer, &entry, stored.data(), stored.size(), data.size(), crc, nullptr) ==
+              RBT_RESULT_OK);
+    }
+    CHECK(rbtarchive_writer_finish(writer, nullptr) == RBT_RESULT_OK);
+    rbtarchive_writer_destroy(writer);
+    return archive;
+}
+
+static bool says(const RBTARCHIVE_ERROR &error, const char *text)
+{
+    return strstr(error.message, text) != nullptr;
+}
+
+// decompress and a decompressing stream_process: each code of their lists
+// and one outside them, through a whole read and an entry reader's;
+// stream_begin, reading; and what the reader and entry reader are after.
+static void test_codec_failures_read()
+{
+    current_test = "codec failures, reading";
+    test_codec_t t;
+    rbtarchive_codecs codecs = test_codecs(t);
+    std::vector<uint8_t> data = text_data();
+    static const char *const names[] = {"ok.bin", "memory.bin", "corrupt.bin", "outside.bin"};
+    // RBT_RESULT_IO is in neither callback's list.
+    static const uint8_t directives[] = {RBT_RESULT_OK, RBT_RESULT_OUT_OF_MEMORY, RBT_RESULT_CORRUPT_DATA,
+                                         RBT_RESULT_IO};
+    static const RBT_RESULT expected[] = {RBT_RESULT_OK, RBT_RESULT_OUT_OF_MEMORY, RBT_RESULT_CORRUPT_DATA,
+                                          RBT_RESULT_INVALID_ARGUMENT};
+    static const char *const whole_says[] = {"", "out of memory decompressing 'memory.bin'",
+                                             "'corrupt.bin' doesn't decompress",
+                                             "method 99 gave result 3, outside its contract, decompressing 'outside.bin'"};
+    static const char *const pieces_say[] = {"", "out of memory decompressing 'memory.bin'",
+                                             "'corrupt.bin' doesn't decompress",
+                                             "method 99 gave result 3, outside its contract, decompressing 'outside.bin'"};
+    std::vector<uint8_t> archive = directive_archive(codecs, data, directives, names, 4);
+    rbtarchive_reader reader = open_memory(archive, codecs);
+    CHECK(reader != nullptr);
+    if (reader)
+    {
+        for (uint32_t i = 0; i < 4; i++)
+        {
+            std::vector<uint8_t> out(data.size());
+            RBTARCHIVE_ERROR error;
+            CHECK(rbtarchive_reader_read_entry(reader, i, out.data(), out.size(), &error) == expected[i]);
+            if (expected[i] == RBT_RESULT_OK)
+                CHECK(out == data);
+            else
+                CHECK(says(error, whole_says[i]));
+
+            rbtarchive_entry_reader entry = nullptr;
+            CHECK(rbtarchive_reader_open_entry(reader, i, &entry, &error) == RBT_RESULT_OK);
+            uint64_t got = 0;
+            std::fill(out.begin(), out.end(), 0);
+            CHECK(rbtarchive_entry_reader_read(entry, out.data(), out.size(), &got, &error) == expected[i]);
+            if (expected[i] == RBT_RESULT_OK)
+            {
+                CHECK(got == data.size());
+                CHECK(out == data);
+            }
+            else
+            {
+                CHECK(says(error, pieces_say[i]));
+                // Failed for good: each later read refused, the entry opened
+                // again from its start to read it again.
+                CHECK(rbtarchive_entry_reader_read(entry, out.data(), out.size(), &got, &error) ==
+                      RBT_RESULT_INVALID_ARGUMENT);
+                CHECK(says(error, "an earlier read of the entry failed"));
+            }
+            rbtarchive_entry_reader_destroy(entry);
+        }
+
+        // A whole read that ran out of memory leaves the reader as it was:
+        // made again once memory is there, it succeeds.
+        std::vector<uint8_t> out(data.size());
+        t.decompress_out_of_memory = 1;
+        CHECK(rbtarchive_reader_read_entry(reader, 0, out.data(), out.size(), nullptr) == RBT_RESULT_OUT_OF_MEMORY);
+        CHECK(rbtarchive_reader_read_entry(reader, 0, out.data(), out.size(), nullptr) == RBT_RESULT_OK);
+        CHECK(out == data);
+
+        // stream_begin, reading: OUT_OF_MEMORY passed on; INVALID_ARGUMENT
+        // (never a decompressing stream's) and IO outside its list; OK with
+        // no state the codec's mistake too. Nothing more of the codec is
+        // called for any of them, and no entry reader is made.
+        struct
+        {
+            RBT_RESULT given;
+            bool no_state;
+            RBT_RESULT expected;
+            const char *text;
+        } begins[] = {
+            {RBT_RESULT_OUT_OF_MEMORY, false, RBT_RESULT_OUT_OF_MEMORY, "out of memory starting to decompress 'ok.bin'"},
+            {RBT_RESULT_INVALID_ARGUMENT, false, RBT_RESULT_INVALID_ARGUMENT,
+             "method 99 gave result 1, outside its contract, starting to decompress 'ok.bin'"},
+            {RBT_RESULT_IO, false, RBT_RESULT_INVALID_ARGUMENT,
+             "method 99 gave result 3, outside its contract, starting to decompress 'ok.bin'"},
+            {RBT_RESULT_OK, true, RBT_RESULT_INVALID_ARGUMENT, "method 99 gave no stream state for 'ok.bin'"},
+        };
+        for (const auto &begin : begins)
+        {
+            t.begin_result = begin.given;
+            t.begin_no_state = begin.no_state;
+            int ends = t.stream_ends;
+            rbtarchive_entry_reader entry = nullptr;
+            RBTARCHIVE_ERROR error;
+            CHECK(rbtarchive_reader_open_entry(reader, 0, &entry, &error) == begin.expected);
+            CHECK(entry == nullptr);
+            CHECK(says(error, begin.text));
+            CHECK(t.stream_ends == ends);
+        }
+        t.begin_result = RBT_RESULT_OK;
+        t.begin_no_state = false;
+        rbtarchive_reader_destroy(reader);
+    }
+    CHECK(t.streams_live == 0);
+    rbtarchive_codecs_destroy(codecs);
+}
+
+// compress, stream_begin and a compressing stream_process: each code of
+// their lists and one outside them, through every call that writes with a
+// codec; and what the writer is after.
+static void test_codec_failures_write()
+{
+    current_test = "codec failures, writing";
+    test_codec_t t;
+    rbtarchive_codecs codecs = test_codecs(t);
+    std::vector<uint8_t> data = text_data();
+    RBTARCHIVE_ERROR error;
+
+    // compress, through rbtarchive_writer_add_entry() and
+    // rbtarchive_codecs_compress(); CORRUPT_DATA is outside its list.
+    struct
+    {
+        RBT_RESULT given;
+        RBT_RESULT expected;
+        const char *entry_text;
+        const char *method_text;
+    } compresses[] = {
+        {RBT_RESULT_OUT_OF_MEMORY, RBT_RESULT_OUT_OF_MEMORY, "out of memory compressing 'a.bin'",
+         "out of memory compressing with method 99"},
+        {RBT_RESULT_INVALID_ARGUMENT, RBT_RESULT_INVALID_ARGUMENT, "method 99 refused to compress 'a.bin' at level 0",
+         "method 99 refused to compress at level 0"},
+        {RBT_RESULT_CORRUPT_DATA, RBT_RESULT_INVALID_ARGUMENT,
+         "method 99 gave result 8, outside its contract, compressing 'a.bin'",
+         "method 99 gave result 8, outside its contract, compressing"},
+    };
+    for (const auto &compress : compresses)
+    {
+        t.compress_result = compress.given;
+        std::vector<uint8_t> archive;
+        rbtarchive_writer writer = memory_writer(archive, codecs);
+        RBTARCHIVE_ENTRY_DESC entry = entry_desc("a.bin", TEST_METHOD);
+        size_t before = archive.size();
+        CHECK(rbtarchive_writer_add_entry(writer, &entry, data.data(), data.size(), &error) == compress.expected);
+        CHECK(says(error, compress.entry_text));
+        // The codec failed before any byte of the entry: nothing written, and
+        // the writer usable.
+        CHECK(archive.size() == before);
+        t.compress_result = RBT_RESULT_OK;
+        CHECK(rbtarchive_writer_add_entry(writer, &entry, data.data(), data.size(), nullptr) == RBT_RESULT_OK);
+        CHECK(rbtarchive_writer_finish(writer, nullptr) == RBT_RESULT_OK);
+        rbtarchive_writer_destroy(writer);
+
+        t.compress_result = compress.given;
+        std::vector<uint8_t> out(data.size() + 1);
+        uint64_t size = 0;
+        CHECK(rbtarchive_codecs_compress(codecs, TEST_METHOD, 0, data.data(), data.size(), out.data(), out.size(), &size,
+                                         &error) == compress.expected);
+        CHECK(says(error, compress.method_text));
+        // The table as it was: made again, it compresses.
+        t.compress_result = RBT_RESULT_OK;
+        CHECK(rbtarchive_codecs_compress(codecs, TEST_METHOD, 0, data.data(), data.size(), out.data(), out.size(), &size,
+                                         nullptr) == RBT_RESULT_OK);
+        CHECK(size == data.size() + 1);
+    }
+    // Less room than the bound is refused before the codec is called, so no
+    // codec is ever given less than its bound.
+    {
+        int calls = t.compress_calls;
+        std::vector<uint8_t> out(data.size());
+        uint64_t size = 0;
+        CHECK(rbtarchive_codecs_compress(codecs, TEST_METHOD, 0, data.data(), data.size(), out.data(), out.size(), &size,
+                                         &error) == RBT_RESULT_INVALID_ARGUMENT);
+        CHECK(t.compress_calls == calls);
+    }
+
+    // stream_begin, through rbtarchive_writer_begin_entry(): CORRUPT_DATA is
+    // outside its list, and OK with no state the codec's mistake too. The
+    // entry isn't begun, nothing more of the codec is called, and the writer
+    // is usable.
+    struct
+    {
+        RBT_RESULT given;
+        bool no_state;
+        RBT_RESULT expected;
+        const char *text;
+    } begins[] = {
+        {RBT_RESULT_OUT_OF_MEMORY, false, RBT_RESULT_OUT_OF_MEMORY, "out of memory starting to compress 'b.bin'"},
+        {RBT_RESULT_INVALID_ARGUMENT, false, RBT_RESULT_INVALID_ARGUMENT, "method 99 can't stream 'b.bin' at level 0"},
+        {RBT_RESULT_CORRUPT_DATA, false, RBT_RESULT_INVALID_ARGUMENT,
+         "method 99 gave result 8, outside its contract, starting to compress 'b.bin'"},
+        {RBT_RESULT_OK, true, RBT_RESULT_INVALID_ARGUMENT, "method 99 gave no stream state for 'b.bin'"},
+    };
+    for (const auto &begin : begins)
+    {
+        t.begin_result = begin.given;
+        t.begin_no_state = begin.no_state;
+        std::vector<uint8_t> archive;
+        rbtarchive_writer writer = memory_writer(archive, codecs);
+        RBTARCHIVE_ENTRY_DESC entry = entry_desc("b.bin", TEST_METHOD);
+        size_t before = archive.size();
+        int ends = t.stream_ends;
+        CHECK(rbtarchive_writer_begin_entry(writer, &entry, &error) == begin.expected);
+        CHECK(says(error, begin.text));
+        CHECK(t.stream_ends == ends);
+        CHECK(archive.size() == before);
+        t.begin_result = RBT_RESULT_OK;
+        t.begin_no_state = false;
+        CHECK(stream_entry(writer, entry, data, 100) == RBT_RESULT_OK);
+        CHECK(rbtarchive_writer_finish(writer, nullptr) == RBT_RESULT_OK);
+        rbtarchive_writer_destroy(writer);
+    }
+
+    // A compressing stream_process, through
+    // rbtarchive_writer_write_entry_data() and _end_entry(): CORRUPT_DATA
+    // (a decompressing stream's only) and IO are outside its list. The
+    // writer is then failed, as after any failed write: each later call
+    // refused, nothing more written to the sink.
+    struct
+    {
+        RBT_RESULT given;
+        bool finishing;
+        RBT_RESULT expected;
+        const char *text;
+    } processes[] = {
+        {RBT_RESULT_OUT_OF_MEMORY, false, RBT_RESULT_OUT_OF_MEMORY, "out of memory compressing 'c.bin'"},
+        {RBT_RESULT_OUT_OF_MEMORY, true, RBT_RESULT_OUT_OF_MEMORY, "out of memory compressing 'c.bin'"},
+        {RBT_RESULT_CORRUPT_DATA, false, RBT_RESULT_INVALID_ARGUMENT,
+         "method 99 gave result 8, outside its contract, compressing 'c.bin'"},
+        {RBT_RESULT_IO, true, RBT_RESULT_INVALID_ARGUMENT,
+         "method 99 gave result 3, outside its contract, compressing 'c.bin'"},
+    };
+    for (const auto &process : processes)
+    {
+        t.process_result = process.given;
+        t.process_only_finishing = process.finishing;
+        std::vector<uint8_t> archive;
+        rbtarchive_writer writer = memory_writer(archive, codecs);
+        RBTARCHIVE_ENTRY_DESC entry = entry_desc("c.bin", TEST_METHOD);
+        CHECK(rbtarchive_writer_begin_entry(writer, &entry, nullptr) == RBT_RESULT_OK);
+        RBT_RESULT result = rbtarchive_writer_write_entry_data(writer, data.data(), data.size(), &error);
+        if (process.finishing)
+        {
+            CHECK(result == RBT_RESULT_OK);
+            result = rbtarchive_writer_end_entry(writer, &error);
+        }
+        CHECK(result == process.expected);
+        CHECK(says(error, process.text));
+        t.process_result = RBT_RESULT_OK;
+        size_t before = archive.size();
+        CHECK(rbtarchive_writer_write_entry_data(writer, "x", 1, nullptr) == RBT_RESULT_INVALID_ARGUMENT);
+        CHECK(rbtarchive_writer_end_entry(writer, nullptr) == RBT_RESULT_INVALID_ARGUMENT);
+        CHECK(rbtarchive_writer_finish(writer, nullptr) == RBT_RESULT_INVALID_ARGUMENT);
+        CHECK(archive.size() == before);
+        rbtarchive_writer_destroy(writer);
+    }
+    t.process_only_finishing = false;
+    CHECK(t.streams_live == 0);
+    rbtarchive_codecs_destroy(codecs);
+}
+
+// A codec built against the bool callbacks, its base the retired type, is
+// refused and the table left as it was (the draft's Q2 b).
+static void test_codec_old_type_refused()
+{
+    current_test = "codec of the old type refused";
+    test_codec_t t;
+    rbtarchive_codecs codecs = nullptr;
+    CHECK(rbtarchive_codecs_create(&codecs) == RBT_RESULT_OK);
+    RBTARCHIVE_CODEC codec = test_codec(t);
+    codec.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC;
+    CHECK(rbtarchive_codecs_add(codecs, &codec) == RBT_RESULT_STRUCT_WRONG_TYPE);
+    CHECK(!rbtarchive_codecs_has(codecs, TEST_METHOD));
+    codec.base.type = RBT_STRUCT_TYPE_ARCHIVE_CODEC_2;
+    CHECK(rbtarchive_codecs_add(codecs, &codec) == RBT_RESULT_OK);
+    CHECK(rbtarchive_codecs_has(codecs, TEST_METHOD));
+    rbtarchive_codecs_destroy(codecs);
+}
+
+// Two entry readers of one reader, read at once from two threads, their
+// codec failing one with OUT_OF_MEMORY and the other with CORRUPT_DATA:
+// each sees its own code and message, never the other's.
+static void test_codec_failures_two_threads()
+{
+    current_test = "codec failures, two threads";
+    test_codec_t t;
+    t.overlap_streams = 2;
+    rbtarchive_codecs codecs = test_codecs(t);
+    std::vector<uint8_t> data = text_data();
+    static const char *const names[] = {"memory.bin", "corrupt.bin"};
+    static const uint8_t directives[] = {RBT_RESULT_OUT_OF_MEMORY, RBT_RESULT_CORRUPT_DATA};
+    std::vector<uint8_t> archive = directive_archive(codecs, data, directives, names, 2);
+    rbtarchive_reader reader = open_memory(archive, codecs);
+    CHECK(reader != nullptr);
+    if (reader)
+    {
+        rbtarchive_entry_reader entries[2] = {nullptr, nullptr};
+        CHECK(rbtarchive_reader_open_entry(reader, 0, &entries[0], nullptr) == RBT_RESULT_OK);
+        CHECK(rbtarchive_reader_open_entry(reader, 1, &entries[1], nullptr) == RBT_RESULT_OK);
+        RBT_RESULT results[2] = {RBT_RESULT_OK, RBT_RESULT_OK};
+        RBTARCHIVE_ERROR errors[2];
+        auto read = [&](int i) {
+            std::vector<uint8_t> out(data.size());
+            uint64_t got = 0;
+            results[i] = rbtarchive_entry_reader_read(entries[i], out.data(), out.size(), &got, &errors[i]);
+        };
+        std::thread first(read, 0);
+        std::thread second(read, 1);
+        first.join();
+        second.join();
+        CHECK(t.overlap_arrived == 2);
+        CHECK(results[0] == RBT_RESULT_OUT_OF_MEMORY);
+        CHECK(says(errors[0], "out of memory decompressing 'memory.bin'"));
+        CHECK(!says(errors[0], "corrupt.bin"));
+        CHECK(results[1] == RBT_RESULT_CORRUPT_DATA);
+        CHECK(says(errors[1], "'corrupt.bin' doesn't decompress"));
+        CHECK(!says(errors[1], "memory.bin"));
+        rbtarchive_entry_reader_destroy(entries[0]);
+        rbtarchive_entry_reader_destroy(entries[1]);
+        rbtarchive_reader_destroy(reader);
+    }
+    CHECK(t.streams_live == 0);
+    rbtarchive_codecs_destroy(codecs);
+}
+
 int main()
 {
     test_codecs();
@@ -1919,6 +2445,10 @@ int main()
     test_strict();
     test_data_in_front();
     test_destroyed_entry_reader_kept();
+    test_codec_failures_read();
+    test_codec_failures_write();
+    test_codec_old_type_refused();
+    test_codec_failures_two_threads();
     if (failures)
     {
         printf("%d check(s) failed\n", failures);

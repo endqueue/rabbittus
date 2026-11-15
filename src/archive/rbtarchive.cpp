@@ -231,51 +231,96 @@ const RBTARCHIVE_CODEC *rbtarchive_codecs_t::find(uint16_t method) const
     return nullptr;
 }
 
+// ---- A codec's failure (card A52) ----------------------------------------------
+
+// A codec's failure that isn't its data's or its level's, which each call
+// words itself: out of memory, named as what the call was doing, or a code
+// outside the callback's list (rbtarchive.h, RBTARCHIVE_CODEC), the codec's
+// own mistake. [doing] is "decompressing" or the like; [name] the entry's, or
+// NULL for rbtarchive_codecs_compress(), which has none and names the method.
+static RBT_RESULT codec_fail(RBTARCHIVE_ERROR *error, RBT_RESULT result, uint16_t method, const char *doing,
+                             const char *name)
+{
+    if (result == RBT_RESULT_OUT_OF_MEMORY)
+    {
+        if (name)
+            return fail(error, RBT_RESULT_OUT_OF_MEMORY, "out of memory %s '%s'", doing, name);
+        return fail(error, RBT_RESULT_OUT_OF_MEMORY, "out of memory %s with method %u", doing, method);
+    }
+    if (name)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u gave result %u, outside its contract, %s '%s'", method,
+                    (unsigned)result, doing, name);
+    return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u gave result %u, outside its contract, %s", method,
+                (unsigned)result, doing);
+}
+
 // ---- DEFLATE (libdeflate) --------------------------------------------------
 //
 // libdeflate's compressors and decompressors aren't thread-safe, and codec
 // callbacks may run on several threads at once, so each call allocates its
 // own. Both are small; a per-thread cache can come later if it shows up.
+//
+// Each is made with Rabbittus' own allocation calls named in its options
+// (card A52), never the process-wide allocator
+// libdeflate_set_memory_allocator() sets: a caller setting that on one
+// thread while a codec allocates on another would be a data race, and the
+// options take priority over it (libdeflate.h, "Advanced options").
+
+static libdeflate_options deflate_options()
+{
+    libdeflate_options options;
+    memset(&options, 0, sizeof(options));
+    options.sizeof_options = sizeof(options);
+    options.malloc_func = malloc;
+    options.free_func = free;
+    return options;
+}
 
 static uint64_t deflate_compress_bound(void *, uint64_t in_size)
 {
     return libdeflate_deflate_compress_bound(nullptr, (size_t)in_size);
 }
 
-static bool deflate_compress(void *, int32_t level, const void *in, uint64_t in_size, void *out, uint64_t out_capacity,
-                             uint64_t *out_size)
+static RBT_RESULT deflate_compress(void *, int32_t level, const void *in, uint64_t in_size, void *out,
+                                   uint64_t out_capacity, uint64_t *out_size)
 {
     if (level < 0 || level > 12)
-        return false;
-    libdeflate_compressor *compressor = libdeflate_alloc_compressor(level);
+        return RBT_RESULT_INVALID_ARGUMENT;
+    libdeflate_options options = deflate_options();
+    libdeflate_compressor *compressor = libdeflate_alloc_compressor_ex(level, &options);
     if (!compressor)
-        return false;
+        return RBT_RESULT_OUT_OF_MEMORY;
     size_t size = libdeflate_deflate_compress(compressor, in, (size_t)in_size, out, (size_t)out_capacity);
     libdeflate_free_compressor(compressor);
+    // 0 only when the output didn't fit: less room than the bound.
     if (size == 0)
-        return false;
+        return RBT_RESULT_INVALID_ARGUMENT;
     *out_size = size;
-    return true;
+    return RBT_RESULT_OK;
 }
 
-static bool deflate_decompress(void *, const void *in, uint64_t in_size, void *out, uint64_t out_size)
+static RBT_RESULT deflate_decompress(void *, const void *in, uint64_t in_size, void *out, uint64_t out_size)
 {
-    libdeflate_decompressor *decompressor = libdeflate_alloc_decompressor();
+    libdeflate_options options = deflate_options();
+    libdeflate_decompressor *decompressor = libdeflate_alloc_decompressor_ex(&options);
     if (!decompressor)
-        return false;
+        return RBT_RESULT_OUT_OF_MEMORY;
     // A NULL actual_out_nbytes makes libdeflate require exactly out_size
     // bytes - so the data can't decompress past what was declared.
     libdeflate_result result =
         libdeflate_deflate_decompress(decompressor, in, (size_t)in_size, out, (size_t)out_size, nullptr);
     libdeflate_free_decompressor(decompressor);
-    return result == LIBDEFLATE_SUCCESS;
+    return result == LIBDEFLATE_SUCCESS ? RBT_RESULT_OK : RBT_RESULT_CORRUPT_DATA;
 }
 
 // ---- DEFLATE in pieces (zlib-ng) -------------------------------------------
 //
 // For streamed entries only (card A24): raw DEFLATE (no zlib header), its
 // window, memory level and strategy fixed here, so a level gives the same
-// bytes every time with zlib-ng's version pinned.
+// bytes every time with zlib-ng's version pinned. A stream's state and
+// window are allocated at its init, through zalloc and zfree set to
+// Rabbittus' own (card A52), and never as it runs (zlib-ng's inflate.c,
+// alloc_inflate), so out of memory is stream_begin's.
 
 struct deflate_stream_t
 {
@@ -283,26 +328,45 @@ struct deflate_stream_t
     bool compress;
 };
 
-static void *deflate_stream_begin(void *, bool compress, int32_t level)
+// zlib's zalloc: [items] of [size] bytes, NULL for a product past size_t.
+static void *deflate_zalloc(void *, unsigned int items, unsigned int size)
 {
-    if (compress && (level < 0 || level > 9))
+    if (size != 0 && items > SIZE_MAX / size)
         return nullptr;
+    return malloc((size_t)items * size);
+}
+
+static void deflate_zfree(void *, void *address)
+{
+    free(address);
+}
+
+static RBT_RESULT deflate_stream_begin(void *, bool compress, int32_t level, void **out_state)
+{
+    *out_state = nullptr;
+    if (compress && (level < 0 || level > 9))
+        return RBT_RESULT_INVALID_ARGUMENT;
     deflate_stream_t *stream = (deflate_stream_t *)calloc(1, sizeof(deflate_stream_t));
     if (!stream)
-        return nullptr;
+        return RBT_RESULT_OUT_OF_MEMORY;
     stream->compress = compress;
+    stream->z.zalloc = deflate_zalloc;
+    stream->z.zfree = deflate_zfree;
+    stream->z.opaque = nullptr;
     int result = compress ? zng_deflateInit2(&stream->z, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY)
                           : zng_inflateInit2(&stream->z, -15);
     if (result != Z_OK)
     {
         free(stream);
-        return nullptr;
+        // With the parameters fixed above, only its memory can fail it.
+        return result == Z_MEM_ERROR ? RBT_RESULT_OUT_OF_MEMORY : RBT_RESULT_INVALID_ARGUMENT;
     }
-    return stream;
+    *out_state = stream;
+    return RBT_RESULT_OK;
 }
 
-static bool deflate_stream_process(void *, void *state, const void *in, uint64_t in_size, uint64_t *in_used,
-                                   void *out, uint64_t out_capacity, uint64_t *out_size, bool finish, bool *done)
+static RBT_RESULT deflate_stream_process(void *, void *state, const void *in, uint64_t in_size, uint64_t *in_used,
+                                         void *out, uint64_t out_capacity, uint64_t *out_size, bool finish, bool *done)
 {
     deflate_stream_t *stream = (deflate_stream_t *)state;
     // zlib counts in 32 bits: a call takes what fits, and is called again.
@@ -320,7 +384,14 @@ static bool deflate_stream_process(void *, void *state, const void *in, uint64_t
     *in_used = in_count - stream->z.avail_in;
     *out_size = out_count - stream->z.avail_out;
     *done = result == Z_STREAM_END;
-    return result == Z_OK || result == Z_STREAM_END || result == Z_BUF_ERROR;
+    if (result == Z_OK || result == Z_STREAM_END || result == Z_BUF_ERROR)
+        return RBT_RESULT_OK;
+    if (result == Z_MEM_ERROR)
+        return RBT_RESULT_OUT_OF_MEMORY;
+    // Malformed data, decompressing (Z_DATA_ERROR, or Z_NEED_DICT, which
+    // raw DEFLATE never asks for). Compressing, zlib-ng fails only a state
+    // that isn't one, which the archive never hands it.
+    return stream->compress ? RBT_RESULT_INVALID_ARGUMENT : RBT_RESULT_CORRUPT_DATA;
 }
 
 static void deflate_stream_end(void *, void *state)
@@ -626,10 +697,16 @@ static RBT_RESULT add_entry(rbtarchive_writer writer, const RBTARCHIVE_ENTRY_DES
             return fail(error, RBT_RESULT_OUT_OF_MEMORY, "'%s' is too big to compress in memory", desc.name);
         // Never empty, so the codec always has a buffer to write to.
         compressed.resize(bound ? (size_t)bound : 1);
-        if (!codec->compress(codec->user, desc.level, data, size, compressed.data(), bound, &stored_size) ||
-            stored_size > bound)
-            return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u failed to compress '%s' at level %d", desc.method,
+        // A codec's failure writes nothing: the writer stays usable.
+        result = codec->compress(codec->user, desc.level, data, size, compressed.data(), bound, &stored_size);
+        if (result == RBT_RESULT_INVALID_ARGUMENT)
+            return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u refused to compress '%s' at level %d", desc.method,
                         desc.name, desc.level);
+        if (result != RBT_RESULT_OK)
+            return codec_fail(error, result, desc.method, "compressing", desc.name);
+        if (stored_size > bound)
+            return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u wrote past its bound compressing '%s'", desc.method,
+                        desc.name);
         stored = compressed.data();
     }
     return write_whole(writer, desc, stored, stored_size, size, rbtarchive_compute_crc32(0, data, size), error);
@@ -688,13 +765,20 @@ static RBT_RESULT begin_entry(rbtarchive_writer writer, const RBTARCHIVE_ENTRY_D
     void *state = nullptr;
     if (codec)
     {
-        state = codec->stream_begin(codec->user, true, desc.level);
-        if (!state)
+        result = codec->stream_begin(codec->user, true, desc.level, &state);
+        if (result != RBT_RESULT_OK || !state)
         {
+            // The entry isn't begun, and nothing more of the codec is
+            // called: a state it gave with a failure isn't one.
             writer->names.erase(writer->entries.back().name);
             writer->entries.pop_back();
-            return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u can't stream '%s' at level %d", desc.method,
-                        desc.name, desc.level);
+            if (result == RBT_RESULT_INVALID_ARGUMENT)
+                return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u can't stream '%s' at level %d", desc.method,
+                            desc.name, desc.level);
+            if (result != RBT_RESULT_OK)
+                return codec_fail(error, result, desc.method, "starting to compress", desc.name);
+            return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u gave no stream state for '%s'", desc.method,
+                        desc.name);
         }
     }
     writer->streaming = true;
@@ -744,9 +828,15 @@ static RBT_RESULT run_stream(rbtarchive_writer writer, const uint8_t *data, uint
     {
         uint64_t used = 0, made = 0;
         bool done = false;
-        if (!codec->stream_process(codec->user, writer->stream_state, data, size, &used, out, STREAM_BUFFER_SIZE,
-                                   &made, finish, &done) ||
-            used > size || made > STREAM_BUFFER_SIZE)
+        RBT_RESULT result = codec->stream_process(codec->user, writer->stream_state, data, size, &used, out,
+                                                  STREAM_BUFFER_SIZE, &made, finish, &done);
+        if (result != RBT_RESULT_OK)
+        {
+            writer->failed = true;
+            return codec_fail(error, result, writer->entries.back().method, "compressing",
+                              writer->entries.back().name.c_str());
+        }
+        if (used > size || made > STREAM_BUFFER_SIZE)
         {
             writer->failed = true;
             return fail(error, RBT_RESULT_INVALID_ARGUMENT, "method %u failed to compress '%s'",
@@ -754,7 +844,7 @@ static RBT_RESULT run_stream(rbtarchive_writer writer, const uint8_t *data, uint
         }
         data += used;
         size -= used;
-        RBT_RESULT result = emit_stream(writer, out, made, error);
+        result = emit_stream(writer, out, made, error);
         if (result != RBT_RESULT_OK)
             return result;
         if (finish ? done : size == 0 && made < STREAM_BUFFER_SIZE)
@@ -1455,9 +1545,13 @@ static RBT_RESULT read_entry(rbtarchive_reader reader, uint32_t index, void *buf
         uint8_t nothing = 0;
         void *out = buffer ? buffer : &nothing;
         const void *in = compressed.empty() ? &nothing : compressed.data();
-        if (!codec->decompress(codec->user, in, compressed.size(), out, info.uncompressed_size))
+        // A codec's failure leaves the reader as it was.
+        result = codec->decompress(codec->user, in, compressed.size(), out, info.uncompressed_size);
+        if (result == RBT_RESULT_CORRUPT_DATA)
             return fail(error, RBT_RESULT_CORRUPT_DATA, "'%s' doesn't decompress to its declared %llu bytes", info.name,
                         (unsigned long long)info.uncompressed_size);
+        if (result != RBT_RESULT_OK)
+            return codec_fail(error, result, info.method, "decompressing", info.name);
     }
     if (rbtarchive_compute_crc32(0, buffer, info.uncompressed_size) != info.crc32)
         return fail(error, RBT_RESULT_CORRUPT_DATA, "'%s' fails its CRC-32", info.name);
@@ -1510,9 +1604,16 @@ static RBT_RESULT entry_decompress(rbtarchive_entry_reader entry, uint8_t *out, 
         uint8_t *to = to_end ? &extra_byte : out + made;
         uint64_t room = to_end ? 1 : want - made;
         bool done = false;
-        if (!codec->stream_process(codec->user, entry->state, entry->in.data() + entry->in_at,
-                                   entry->in_end - entry->in_at, &used, to, room, &got, finish, &done) ||
-            used > entry->in_end - entry->in_at || got > room)
+        RBT_RESULT result = codec->stream_process(codec->user, entry->state, entry->in.data() + entry->in_at,
+                                                  entry->in_end - entry->in_at, &used, to, room, &got, finish, &done);
+        if (result == RBT_RESULT_CORRUPT_DATA)
+            return entry_fail(entry, error, RBT_RESULT_CORRUPT_DATA, "doesn't decompress");
+        if (result != RBT_RESULT_OK)
+        {
+            entry->failed = true;
+            return codec_fail(error, result, info.method, "decompressing", info.name);
+        }
+        if (used > entry->in_end - entry->in_at || got > room)
             return entry_fail(entry, error, RBT_RESULT_CORRUPT_DATA, "doesn't decompress");
         entry->in_at += (size_t)used;
         entry->stream_done = done;
@@ -1593,7 +1694,11 @@ extern "C"
         RBT_ENTER(codecs->overlap, "rbtarchive", "rbtarchive_codecs_add", "codec table");
         if (!codec)
             return RBT_RESULT_INVALID_ARGUMENT;
-        if (RBT_RESULT result = rbt_struct_check(&codec->base, RBT_STRUCT_TYPE_ARCHIVE_CODEC))
+        // Built against the bool callbacks (Rabbittus before 0.2): refused, so
+        // it is rebuilt and never misread (card A52).
+        if (codec->base.type == RBT_STRUCT_TYPE_ARCHIVE_CODEC)
+            return RBT_RESULT_STRUCT_WRONG_TYPE;
+        if (RBT_RESULT result = rbt_struct_check(&codec->base, RBT_STRUCT_TYPE_ARCHIVE_CODEC_2))
             return result;
         const RBTARCHIVE_CODEC &c = *codec;
         if (c.method == RBTARCHIVE_METHOD_STORED || !c.decompress)
@@ -1624,7 +1729,7 @@ extern "C"
         if (RBT_STALE(codecs, "rbtarchive_codecs_add_deflate", "codecs"))
             return RBT_RESULT_INVALID_ARGUMENT;
         RBTARCHIVE_CODEC codec{};
-        codec.base = rbt_struct_base(RBT_STRUCT_TYPE_ARCHIVE_CODEC);
+        codec.base = rbt_struct_base(RBT_STRUCT_TYPE_ARCHIVE_CODEC_2);
         codec.method = RBTARCHIVE_METHOD_DEFLATE;
         codec.compress_bound = deflate_compress_bound;
         codec.compress = deflate_compress;
@@ -1712,9 +1817,15 @@ extern "C"
         uint64_t size = 0;
         // A buffer of 0 bytes is still somewhere to write, as add_entry's is.
         uint8_t nothing;
-        if (!codec->compress(codec->user, level, in, in_size, out ? out : &nothing, bound, &size) || size > bound)
-            return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "method %u failed to compress at level %d", method,
+        // A codec's failure leaves the table as it was.
+        result = codec->compress(codec->user, level, in, in_size, out ? out : &nothing, bound, &size);
+        if (result == RBT_RESULT_INVALID_ARGUMENT)
+            return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "method %u refused to compress at level %d", method,
                         level);
+        if (result != RBT_RESULT_OK)
+            return codec_fail(out_error, result, method, "compressing", nullptr);
+        if (size > bound)
+            return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "method %u wrote past its bound compressing", method);
         *out_size = size;
         return RBT_RESULT_OK;
     }
@@ -2219,10 +2330,18 @@ extern "C"
         }
         if (result == RBT_RESULT_OK && codec)
         {
-            entry->state = codec->stream_begin(codec->user, false, 0);
+            // Nothing more of the codec is called after a failure, nor on a
+            // state it gave with one: the entry reader is destroyed with no
+            // state.
+            void *state = nullptr;
+            result = codec->stream_begin(codec->user, false, 0, &state);
             entry->codec = codec;
-            if (!entry->state)
-                result = fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "method %u couldn't start reading '%s'",
+            if (result == RBT_RESULT_OK && state)
+                entry->state = state;
+            else if (result != RBT_RESULT_OK)
+                result = codec_fail(out_error, result, info.method, "starting to decompress", info.name);
+            else
+                result = fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "method %u gave no stream state for '%s'",
                               info.method, info.name);
         }
         if (result != RBT_RESULT_OK)

@@ -64,6 +64,8 @@ extern "C" {
  *   - RBT_RESULT_INVALID_ARGUMENT: also an unsafe entry name, or a call in the
  *     wrong state (a writer finished or failed, or with a streamed entry
  *     open, or none).
+ *   - RBT_RESULT_OUT_OF_MEMORY: also a codec that couldn't allocate, its own
+ *     or the DEFLATE codec's.
  *   - RBT_RESULT_IO: the source or sink callback returned false.
  *   - RBT_RESULT_LIMIT: over an RBTARCHIVE_READER_DESC limit.
  *   - RBT_RESULT_UNSUPPORTED: encryption, multiple disks, patch data, or
@@ -170,6 +172,13 @@ typedef struct RBTARCHIVE_SINK {
  * (rbtarchive_writer_begin_entry(), rbtarchive_reader_open_entry()); one
  * without them works on whole entries only.
  *
+ * Each callback that can fail returns RBT_RESULT, one of those its comment
+ * lists: RBT_RESULT_OUT_OF_MEMORY when it couldn't allocate, apart from the
+ * data's or the level's failure. The reader's and writer's calls pass each
+ * listed code on, with a message naming the entry; a code not listed is the
+ * codec's mistake, and the call returns RBT_RESULT_INVALID_ARGUMENT naming
+ * the method and the code.
+ *
  * Thread: the callbacks are called from inside the reader's and writer's
  * calls, on the thread of each; with readers or writers used at once, or a
  * reader's calls overlapping, from several threads at once.
@@ -177,30 +186,42 @@ typedef struct RBTARCHIVE_SINK {
  * @see rbtarchive_codecs_add()
  */
 typedef struct RBTARCHIVE_CODEC {
-	/** This struct's type, RBT_STRUCT_TYPE_ARCHIVE_CODEC, and its chain (rbtcore.h, "Struct bases"). */
+	/** This struct's type, RBT_STRUCT_TYPE_ARCHIVE_CODEC_2, and its chain
+	 * (rbtcore.h, "Struct bases"). rbtarchive_codecs_add() refuses the
+	 * retired RBT_STRUCT_TYPE_ARCHIVE_CODEC, a codec built against the bool
+	 * callbacks of Rabbittus before 0.2, with RBT_RESULT_STRUCT_WRONG_TYPE:
+	 * rebuild it against these. */
 	RBT_STRUCT_BASE base;
 	/** The ZIP method id. Never RBTARCHIVE_METHOD_STORED. */
 	uint16_t method;
 	/** Passed to each callback as its `user`. */
 	void *user;
 	/** The most bytes compressing `in_size` bytes can produce. NULL for a
-	 * decode-only codec. */
+	 * decode-only codec. Can't fail. */
 	uint64_t (*compress_bound)(void *user, uint64_t in_size);
 	/** Compresses `in` into `out` (at least #compress_bound bytes) at
-	 * `level`, whose meaning is the codec's; sets `out_size`; false on
-	 * failure. NULL for a decode-only codec. */
-	bool (*compress)(void *user, int32_t level, const void *in, uint64_t in_size, void *out, uint64_t out_capacity,
-	                 uint64_t *out_size);
-	/** Decompresses `in` into exactly `out_size` bytes; false if the data is
-	 * malformed or decompresses to any other size. Never NULL. */
-	bool (*decompress)(void *user, const void *in, uint64_t in_size, void *out, uint64_t out_size);
+	 * `level`, whose meaning is the codec's; sets `out_size` on
+	 * RBT_RESULT_OK. Returns RBT_RESULT_OK; RBT_RESULT_OUT_OF_MEMORY if it
+	 * couldn't allocate; RBT_RESULT_INVALID_ARGUMENT for a level it refuses,
+	 * or an `out_capacity` below #compress_bound's for `in_size` (which the
+	 * archive never passes). NULL for a decode-only codec. */
+	RBT_RESULT (*compress)(void *user, int32_t level, const void *in, uint64_t in_size, void *out,
+	                       uint64_t out_capacity, uint64_t *out_size);
+	/** Decompresses `in` into exactly `out_size` bytes. Returns
+	 * RBT_RESULT_OK; RBT_RESULT_OUT_OF_MEMORY if it couldn't allocate;
+	 * RBT_RESULT_CORRUPT_DATA if the data is malformed or decompresses to
+	 * any other size. Never NULL. */
+	RBT_RESULT (*decompress)(void *user, const void *in, uint64_t in_size, void *out, uint64_t out_size);
 	/** Starts one entry's stream: compressing at `level` if `compress`
 	 * (`level` as #compress takes it, or its own range, which the codec
-	 * documents), decompressing if not (`level` 0). Returns the stream's
-	 * state, handed to #stream_process and #stream_end, or NULL on failure
-	 * (a level it doesn't take, no memory). NULL, with the other two, for a
-	 * codec that works on whole entries only; never NULL alone. */
-	void *(*stream_begin)(void *user, bool compress, int32_t level);
+	 * documents), decompressing if not (`level` 0). On RBT_RESULT_OK sets
+	 * `*out_state` to the stream's state, handed to #stream_process and
+	 * #stream_end; on failure leaves it NULL and holds nothing. Returns
+	 * RBT_RESULT_OK; RBT_RESULT_OUT_OF_MEMORY if it couldn't allocate;
+	 * RBT_RESULT_INVALID_ARGUMENT for a level it refuses (compressing
+	 * only). NULL, with the other two, for a codec that works on whole
+	 * entries only; never NULL alone. */
+	RBT_RESULT (*stream_begin)(void *user, bool compress, int32_t level, void **out_state);
 	/** Takes up to `in_size` bytes of `in`, setting `in_used` to how many it
 	 * took, and writes up to `out_capacity` bytes to `out`, setting
 	 * `out_size`. `finish` says no input follows `in`: a compressing stream
@@ -208,10 +229,14 @@ typedef struct RBTARCHIVE_CODEC {
 	 * decompressing one sets `done` once it reaches its data's end, finish
 	 * or not. Called again while it takes input or gives output; one call
 	 * that does neither with `finish` set and `done` unset is a failure.
-	 * False on failure: malformed data, when decompressing. */
-	bool (*stream_process)(void *user, void *state, const void *in, uint64_t in_size, uint64_t *in_used, void *out,
-	                       uint64_t out_capacity, uint64_t *out_size, bool finish, bool *done);
-	/** Frees a stream's state, whether it finished or not. */
+	 * Returns RBT_RESULT_OK; RBT_RESULT_OUT_OF_MEMORY if it couldn't
+	 * allocate (a stream that allocates as it goes; the DEFLATE codec's
+	 * never does, so its out of memory is #stream_begin's);
+	 * RBT_RESULT_CORRUPT_DATA for malformed data, when decompressing. The
+	 * stream is then failed: the archive calls only #stream_end on it. */
+	RBT_RESULT (*stream_process)(void *user, void *state, const void *in, uint64_t in_size, uint64_t *in_used,
+	                             void *out, uint64_t out_capacity, uint64_t *out_size, bool finish, bool *done);
+	/** Frees a stream's state, whether it finished or not. Can't fail. */
 	void (*stream_end)(void *user, void *state);
 } RBTARCHIVE_CODEC;
 
@@ -244,8 +269,11 @@ RBT_RESULT rbtarchive_codecs_create(rbtarchive_codecs *out_codecs);
  * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a NULL argument, method
  *         STORED, a method already in the table, no `decompress`, only one
  *         of `compress` and `compress_bound`, or only some of the three
- *         stream callbacks; a struct-base code for a wrong `base`; or
- *         RBT_RESULT_OUT_OF_MEMORY.
+ *         stream callbacks; RBT_RESULT_STRUCT_WRONG_TYPE for a codec whose
+ *         base's type is RBT_STRUCT_TYPE_ARCHIVE_CODEC, built against the
+ *         bool callbacks (Rabbittus before 0.2), which is to be rebuilt, the
+ *         table left as it was; another struct-base code for a wrong `base`;
+ *         or RBT_RESULT_OUT_OF_MEMORY.
  */
 RBT_RESULT rbtarchive_codecs_add(rbtarchive_codecs codecs, const RBTARCHIVE_CODEC *codec);
 /**
@@ -261,6 +289,14 @@ RBT_RESULT rbtarchive_codecs_add(rbtarchive_codecs codecs, const RBTARCHIVE_CODE
  * or above is refused. Its bytes differ from libdeflate's for the same data
  * and are fixed by the zlib-ng version, also pinned. Both decompress any
  * DEFLATE data, so a reader neither knows nor cares which wrote an entry.
+ *
+ * Its libdeflate compressors and decompressors are made through
+ * libdeflate_alloc_compressor_ex() and _decompressor_ex() with Rabbittus'
+ * own allocation calls (malloc and free) named in their options, never the
+ * process-wide allocator libdeflate_set_memory_allocator() sets, and
+ * zlib-ng's streams through zalloc and zfree set to the same: a failed
+ * allocation in either is RBT_RESULT_OUT_OF_MEMORY from the call. Still one
+ * per call: nothing is kept on the table.
  *
  * @param[in] codecs The table.
  *
@@ -320,8 +356,12 @@ RBT_RESULT rbtarchive_codecs_compress_bound(rbtarchive_codecs codecs, uint16_t m
  *
  * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a NULL argument, an
  *         @p out_capacity under the bound, or a level the codec refuses;
+ *         RBT_RESULT_OUT_OF_MEMORY if the codec couldn't allocate;
  *         RBT_RESULT_ARCHIVE_UNKNOWN_METHOD if @p method isn't in the
  *         table; or RBT_RESULT_UNSUPPORTED if its codec only decompresses.
+ *         A failure leaves the table as it was and @p out's bytes
+ *         undefined: the call may be made again, and after
+ *         RBT_RESULT_OUT_OF_MEMORY succeeds once memory is there.
  */
 RBT_RESULT rbtarchive_codecs_compress(rbtarchive_codecs codecs, uint16_t method, int32_t level, const void *in,
                                    uint64_t in_size, void *out, uint64_t out_capacity, uint64_t *out_size,
@@ -456,9 +496,12 @@ typedef struct RBTARCHIVE_ENTRY_DESC {
  * @param[in]  size      The size of @p data in bytes.
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
- * @return RBT_RESULT_OK, or a code from rbtarchive.h's "Results". An entry
- *         refused for its arguments writes nothing and leaves the writer
- *         usable; a sink failure or running out of memory doesn't (see
+ * @return RBT_RESULT_OK, or a code from rbtarchive.h's "Results":
+ *         RBT_RESULT_OUT_OF_MEMORY also if the codec couldn't allocate, and
+ *         RBT_RESULT_INVALID_ARGUMENT for a level it refuses. An entry
+ *         refused for its arguments, or whose codec failed, writes nothing
+ *         and leaves the writer usable; a sink failure, or running out of
+ *         memory anywhere but in the codec, doesn't (see
  *         rbtarchive_writer_destroy()).
  */
 RBT_RESULT rbtarchive_writer_add_entry(rbtarchive_writer writer, const RBTARCHIVE_ENTRY_DESC *desc, const void *data,
@@ -515,7 +558,9 @@ RBT_RESULT rbtarchive_writer_add_raw_entry(rbtarchive_writer writer, const RBTAR
  * @return As rbtarchive_writer_add_entry(); RBT_RESULT_UNSUPPORTED also for a
  *         method whose codec has no stream callbacks; and
  *         RBT_RESULT_INVALID_ARGUMENT for a directory entry, which has no
- *         data to stream, or a level the codec refuses.
+ *         data to stream, or a level the codec refuses. An entry whose codec
+ *         couldn't start its stream (RBT_RESULT_OUT_OF_MEMORY, or a refused
+ *         level) isn't begun: nothing is written, and the writer is usable.
  */
 RBT_RESULT rbtarchive_writer_begin_entry(rbtarchive_writer writer, const RBTARCHIVE_ENTRY_DESC *desc,
                                       RBTARCHIVE_ERROR *out_error);
@@ -532,10 +577,14 @@ RBT_RESULT rbtarchive_writer_begin_entry(rbtarchive_writer writer, const RBTARCH
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
  * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT with no entry open;
- *         RBT_RESULT_LIMIT if the entry reaches 4 GiB without `zip64`; or
+ *         RBT_RESULT_LIMIT if the entry reaches 4 GiB without `zip64`;
+ *         RBT_RESULT_OUT_OF_MEMORY also if the codec couldn't allocate; or
  *         another code from rbtarchive.h's "Results". Anything but a refused
- *         argument leaves the writer unusable: part of the entry is
- *         written.
+ *         argument leaves the writer failed, as after any failed write:
+ *         part of the entry is written, what is in the sink is not an
+ *         archive, and every later call but destroy returns
+ *         RBT_RESULT_INVALID_ARGUMENT. RBT_RESULT_OUT_OF_MEMORY says why,
+ *         not that the writer can go on.
  */
 RBT_RESULT rbtarchive_writer_write_entry_data(rbtarchive_writer writer, const void *data, uint64_t size,
                                            RBTARCHIVE_ERROR *out_error);
@@ -548,8 +597,10 @@ RBT_RESULT rbtarchive_writer_write_entry_data(rbtarchive_writer writer, const vo
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
  * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT with no entry open;
- *         RBT_RESULT_LIMIT as rbtarchive_writer_write_entry_data(); or another
- *         code from rbtarchive.h's "Results", leaving the writer unusable.
+ *         RBT_RESULT_LIMIT as rbtarchive_writer_write_entry_data();
+ *         RBT_RESULT_OUT_OF_MEMORY also if the codec couldn't allocate; or
+ *         another code from rbtarchive.h's "Results", leaving the writer
+ *         failed as rbtarchive_writer_write_entry_data() says.
  */
 RBT_RESULT rbtarchive_writer_end_entry(rbtarchive_writer writer, RBTARCHIVE_ERROR *out_error);
 
@@ -869,8 +920,11 @@ RBT_RESULT rbtarchive_reader_get_data_offset(rbtarchive_reader reader, uint32_t 
  *         in the codec table; RBT_RESULT_NOT_FOUND if @p index is past the
  *         last entry; RBT_RESULT_INVALID_ARGUMENT if @p buffer_size isn't the
  *         entry's size; RBT_RESULT_CORRUPT_DATA if it fails its CRC-32 or
- *         decompresses to another size; or another code from rbtarchive.h's
- *         "Results".
+ *         decompresses to another size; RBT_RESULT_OUT_OF_MEMORY also if
+ *         the codec couldn't allocate; or another code from rbtarchive.h's
+ *         "Results". A failure leaves the reader as it was and
+ *         @p buffer's bytes undefined: the read may be made again, and after
+ *         RBT_RESULT_OUT_OF_MEMORY succeeds once memory is there.
  */
 RBT_RESULT rbtarchive_reader_read_entry(rbtarchive_reader reader, uint32_t index, void *buffer, uint64_t buffer_size,
                                      RBTARCHIVE_ERROR *out_error);
@@ -930,7 +984,8 @@ typedef struct rbtarchive_entry_reader_t *rbtarchive_entry_reader;
  * @return RBT_RESULT_OK; RBT_RESULT_ARCHIVE_UNKNOWN_METHOD if its method
  *         isn't in the codec table; RBT_RESULT_UNSUPPORTED if its codec has
  *         no stream callbacks; RBT_RESULT_NOT_FOUND if @p index is past the
- *         last entry; or another code from
+ *         last entry; RBT_RESULT_OUT_OF_MEMORY also if the codec couldn't
+ *         start its stream; or another code from
  *         rbtarchive_reader_get_data_offset().
  *
  * @see rbtarchive_entry_reader_destroy()
@@ -962,8 +1017,13 @@ RBT_RESULT rbtarchive_reader_open_entry(rbtarchive_reader reader, uint32_t index
  * @param[out] out_error    Why it failed, when it did. May be NULL.
  *
  * @return RBT_RESULT_OK; RBT_RESULT_CORRUPT_DATA if the entry fails its CRC-32
- *         or doesn't decompress to its declared size; or another code from
- *         rbtarchive.h's "Results". After a failure every later call fails.
+ *         or doesn't decompress to its declared size, or the codec finds its
+ *         data malformed; RBT_RESULT_OUT_OF_MEMORY also if the codec
+ *         couldn't allocate; or another code from rbtarchive.h's "Results".
+ *         A failure leaves the entry reader failed: every later read returns
+ *         RBT_RESULT_INVALID_ARGUMENT ("an earlier read of the entry
+ *         failed"), and the caller destroys it and opens the entry again,
+ *         from its start.
  */
 RBT_RESULT rbtarchive_entry_reader_read(rbtarchive_entry_reader entry_reader, void *buffer, uint64_t capacity,
                                      uint64_t *out_size, RBTARCHIVE_ERROR *out_error);

@@ -77,7 +77,7 @@ extern "C" {
 /** @brief The major version of these headers. */
 #define RABBITTUS_VERSION_MAJOR 0
 /** @brief The minor version of these headers. */
-#define RABBITTUS_VERSION_MINOR 1
+#define RABBITTUS_VERSION_MINOR 2
 /** @brief The patch version of these headers. */
 #define RABBITTUS_VERSION_PATCH 0
 
@@ -291,12 +291,14 @@ typedef enum RBT_STRUCT_TYPE RBT_ENUM_BASE {
 	RBT_STRUCT_TYPE_UNKNOWN = 0,
 
 	/* Rabbittus Archive (archive/rbtarchive.h) */
-	RBT_STRUCT_TYPE_ARCHIVE_CODEC = 1000, /**< RBTARCHIVE_CODEC. */
+	RBT_STRUCT_TYPE_ARCHIVE_CODEC = 1000, /**< Retired in 0.2.0: RBTARCHIVE_CODEC with bool callbacks, refused by rbtarchive_codecs_add(). */
 	RBT_STRUCT_TYPE_ARCHIVE_WRITER_DESC = 1001, /**< RBTARCHIVE_WRITER_DESC. */
 	RBT_STRUCT_TYPE_ARCHIVE_ENTRY_DESC = 1002, /**< RBTARCHIVE_ENTRY_DESC. */
 	RBT_STRUCT_TYPE_ARCHIVE_READER_DESC = 1003, /**< RBTARCHIVE_READER_DESC. */
 	RBT_STRUCT_TYPE_ARCHIVE_ENTRY_INFO = 1004, /**< RBTARCHIVE_ENTRY_INFO, an RBT_STRUCT_BASE_OUT. */
 	RBT_STRUCT_TYPE_ARCHIVE_UPDATE_DESC = 1005, /**< RBTARCHIVE_UPDATE_DESC. */
+	/** RBTARCHIVE_CODEC, its callbacks returning RBT_RESULT (since 0.2.0). */
+	RBT_STRUCT_TYPE_ARCHIVE_CODEC_2 = 1006,
 
 	/* Rabbittus Sync (sync/rbtsyncnet.h) */
 	RBT_STRUCT_TYPE_SYNC_SESSION_DESC = 2000, /**< RBTSYNC_SESSION_DESC. */

@@ -190,6 +190,64 @@ archive is damaged when memory ran out.
        the method and code, an `OK` with no state likewise.
     5. `./check.sh --update-abi`, the misuse generator rerun, the break
        listed in the commit; `./check.sh`.
+  - **Built on the Mac 2026-11-15** (Apple M5 Pro, macOS 27.0.1, Xcode
+    27.2, Apple clang 21; `../prompts/rbtarchive_codec_mac.md`, its
+    Progress; card X25: Windows and Linux owed,
+    `../prompts/rbtarchive_codec_windows.md` and `_fedora.md`). Each plan
+    step, by the X25 words:
+    1. *Built and run:* `tests/rbtarchive_tests.cpp`'s test codec
+       (method 99, its stored bytes a directive byte: the code to return),
+       each code of Q1's lists and one outside them through
+       `rbtarchive_reader_read_entry`, an entry reader's open and read,
+       `rbtarchive_writer_add_entry`, `_begin_entry`, `_write_entry_data`,
+       `_end_entry` and `rbtarchive_codecs_compress`; an OK with no state;
+       less room than the bound refused before the codec; the states after
+       a failure; the old type refused; two entry readers of one reader
+       failing apart on two threads. Seen failing first: 8 compile errors
+       against the bool callbacks.
+    2. *Built and run on Apple; written, not compiled, for Linux and
+       Windows:* `tests/rbtarchive_allocfail.h`, its Apple dylib
+       `tests/rbtarchive_allocfail_interpose.c`, and
+       `tests/rbtarchive_allocfail_tests.c`, registered beside
+       `rbtarchive_tests`. The four DEFLATE paths make 15 (whole,
+       compressing: a writer's entry and `rbtarchive_codecs_compress`), 20
+       (streamed, compressing), 16 (whole, decompressing) and 20 (streamed,
+       decompressing) allocations of ours; each failed in turn gives
+       `RBT_RESULT_OUT_OF_MEMORY`, nothing left live. Seen failing first:
+       6 runs gave `CORRUPT_DATA` or `INVALID_ARGUMENT`.
+    3. *Built:* the headers as the draft has them; 0.2.0.
+    4. *Built and run:* the DEFLATE codec through `_ex` with
+       `malloc`/`free` and zlib-ng's `zalloc`/`zfree` of Rabbittus' own;
+       every call site (`codec_fail`, `src/archive/rbtarchive.cpp`, words
+       out of memory and a code outside a callback's list).
+    5. *Run:* `./check.sh --update-abi` (the four callbacks' types changed,
+       `RBT_STRUCT_TYPE_ARCHIVE_CODEC_2` added); the misuse generator rerun
+       (the same calls; its own wording fixed, `claude_made_decisions.md`,
+       2026-11-15).
+    Every ctest (40) in Debug, Release, `-asan` and `-tsan`, no report, no
+    warning; `rbt_misuse_tests` ten times, 0 failures (393 calls with
+    zeroes, 144 with a destroyed handle); `rbtnoalloc_tests` none of ours,
+    Debug and Release; `rbtarchive_fuzz` 15 minutes from a scratch
+    corpus under `rabbittus-macos-metal-fuzz` (ASan and UBSan), 2,533,297
+    inputs, nothing found, and its replay in every build. What builds on
+    Rabbittus was rebuilt and tested on it: the workspace's record, the
+    prompt's Progress.
+  - **For you (2026-11-15, from the build):**
+    - **`rbtarchive_codecs_add()` has nowhere to put Q2 b's message.** It
+      takes no `RBTARCHIVE_ERROR`, and the draft changes no call: an old
+      codec is refused with `RBT_RESULT_STRUCT_WRONG_TYPE` alone, the
+      "rebuild it" wording in the call's result list. A message there is
+      an `out_error` parameter on the call, a public change for a draft of
+      its own, or the code alone as built.
+    - **C5.3's writer paragraph says more than the code does.** It says a
+      writer whose `add_entry` or `begin_entry` failed in its codec "is
+      failed"; the code (and an existing test: a refused stream level,
+      then `finish`) leaves it usable, since nothing is written before the
+      codec runs, and C5.3 was written "as the code has it". Built as the
+      code has it, the header saying so; `write_entry_data` and
+      `end_entry` fail the writer, as the draft says. If the writer is to
+      fail after a codec's failure in those two calls too, it is a
+      one-line change each and that test's change.
   - **The callers' follow-up** (C4.4, not this change's): a caller that
     told its person "damaged" on `CORRUPT_DATA` from a read now gets
     `OUT_OF_MEMORY` when memory ran out; its own message for that, and its
