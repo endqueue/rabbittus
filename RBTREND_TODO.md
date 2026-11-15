@@ -5112,6 +5112,27 @@ unchanged, a BLAS over a colored mesh tracing the same bits as the
 uncolored one, and `test_frame_allocations` with a colored square in the
 frame (none of Rend's). D3D12 and Vulkan not built.
 
+### 51. A transient span's view is made again whenever its offset moves (found 2026-11-15, not carded)
+
+`rbtrend_transient_span_view` (`src/render/rbtrendtransient.cpp`) keeps a
+chunk's views by the exact offset and stride each span landed at, and the
+rewind at a frame's turn destroys every view that turn didn't ask for. A
+draw list whose instance count changes from frame to frame moves the
+offset of every list built after it, so each of those makes a new
+`crgpu_buffer_view` that frame: an allocation of ours in a steady state.
+Found by a caller's shadow views, whose casters change as its cascades
+follow the camera (its noalloc test); the same holds for any caller whose
+visible counts change (a flying camera's culled list), which no test had
+covered. Kept unused for 120 turns, as the render target pool keeps a
+size, wasn't enough: a moving camera keeps bringing new offsets. The fix:
+one view per chunk and stride at offset 0, the instance span's offset
+padded to a multiple of its stride and handed to the draw as its first
+instance (and a vertex span's as its base vertex), so the view never
+depends on where a span lands. Every backend's draws take a first
+instance; the draw list's and the commands' compile change, and
+`rabbittustests`' `test_frame_allocations` gains a case of a list whose
+count changes each frame. For the user: card it, or say go.
+
 ## Suggested order
 
 Each step is usable on its own, and later ones lean on earlier ones. Items 4
