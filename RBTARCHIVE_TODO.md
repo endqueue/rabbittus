@@ -232,6 +232,54 @@ archive is damaged when memory ran out.
     inputs, nothing found, and its replay in every build. What builds on
     Rabbittus was rebuilt and tested on it: the workspace's record, the
     prompt's Progress.
+  - **Built on Windows 2026-11-16** (Windows 11, the ThinkPad P1 Gen 5;
+    MSVC 19.51.36260, toolset 14.51.36231, Windows SDK 10.0.26100.0;
+    `../prompts/rbtarchive_codec_windows.md`, its Progress; card X25:
+    Linux owed, `_fedora.md`). Each plan step, by the X25 words: 1, 3, 4
+    and 5 *built and run on Windows* as the Mac has them; 2 *built and run
+    on Windows*: the injector's Windows half (the executable's import
+    slots) compiled with no change and no warning, at the presets' level
+    (`/W3`, so no C4505). Its first run found what only MSVC can show:
+    - **MSVC's STL allocates when a `std::unordered_set` or
+      `std::unordered_map` is default-constructed** (a list sentinel and
+      the buckets; libc++ and libstdc++ don't). `rbtarchive_writer_create`
+      and `_create_update` (placement new of the writer, its `names`) and
+      `rbtarchive_reader_open` (`new (std::nothrow)` of the reader, its
+      `name_index`: `std::nothrow` covers only the block) built their
+      object outside their `try`, so failing that allocation threw out of
+      the C entry point: `std::terminate`, an abort whose Debug message box
+      held the ctest to its 900 s timeout. Each now constructs inside a
+      `try`, the block freed, `RBT_RESULT_OUT_OF_MEMORY`. A sweep of every
+      module found one more, Rabbittus Sync's session create
+      (`rbtsync_session_t`'s `awaiting_snapshot`), fixed the same way;
+      Rabbittus Sync has no allocation-failure test to prove it (owed).
+    - **The injector's counts on Windows:** 20 (whole, compressing), 28
+      (streamed, compressing), 17 (whole, decompressing) and 21 (streamed,
+      decompressing) allocations of ours, the same in Debug and Release on
+      both backends (the Debug STL's proxies passed over); each failed in
+      turn gives `RBT_RESULT_OUT_OF_MEMORY`, nothing left live. Under both
+      `-asan` presets it reports itself skipped and passes. Each failed
+      allocation's stack, read once: libdeflate's compressor (the whole
+      compressing path's 5th and 20th) and decompressor (the whole
+      decompressing path's 14th and 17th) through `malloc_func` read
+      after the patch, so through the hook; zlib-ng's through
+      `deflate_zalloc`.
+    - `rabbittus-windows-d3d12` and `-vulkan`, Debug and Release, and both
+      `-asan` presets: no warning; every ctest (40) passing in each.
+      `rbt_misuse_tests` ten times in Debug on each backend, 0 failures
+      (393 calls with zeroes, 144 with a destroyed handle);
+      `rbtnoalloc_tests` none of ours in its 16 scenarios, Debug and
+      Release, both backends. `rbtarchive_fuzz` 15 minutes from a scratch
+      corpus under `rabbittus-windows-d3d12-fuzz` (clang 23.1.4): 1,693,294
+      inputs, nothing found; its replay passing in every build. That
+      preset's build warns six times on the CRT's `strncpy` and `fopen`
+      (clang's `-Wdeprecated-declarations`; `carrottus/src/crnet.c`,
+      `craudiowasapi.c`, `tools/rbtrend_reflect`), none in A52's code.
+    - What builds on Rabbittus was rebuilt and tested on it: the
+      workspace's record, the prompt's Progress. A caller's
+      allocation-failure test, its stacks read, found no failure of
+      Rabbittus Archive's left: what it still reports wrongly on Windows
+      is Carrottus Files' path conversion.
   - **For you (2026-11-15, from the build):**
     - **`rbtarchive_codecs_add()` has nowhere to put Q2 b's message.** It
       takes no `RBTARCHIVE_ERROR`, and the draft changes no call: an old

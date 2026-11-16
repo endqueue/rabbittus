@@ -1392,7 +1392,16 @@ static RBT_RESULT create_session(const RBTSYNC_SESSION_DESC *desc, bool hosting,
     if (d.handshake_timeout_ms == 0)
         return fail(error, RBT_RESULT_INVALID_ARGUMENT, "handshake_timeout_ms is 0");
 
-    rbtsync_session_t *s = new (std::nothrow) rbtsync_session_t();
+    // std::nothrow covers only the block: constructing allocates where a
+    // hash set's buckets are made up front (MSVC's STL), and throws.
+    rbtsync_session_t *s = nullptr;
+    try
+    {
+        s = new (std::nothrow) rbtsync_session_t();
+    }
+    catch (const std::bad_alloc &)
+    {
+    }
     if (!s)
         return fail(error, RBT_RESULT_OUT_OF_MEMORY, "out of memory");
     try

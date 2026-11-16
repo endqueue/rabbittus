@@ -1849,7 +1849,17 @@ extern "C"
         rbtarchive_writer_t *writer = (rbtarchive_writer_t *)malloc(sizeof(rbtarchive_writer_t));
         if (!writer)
             return RBT_RESULT_OUT_OF_MEMORY;
-        writer = new (writer) rbtarchive_writer_t();
+        try
+        {
+            // Constructing allocates where a hash set's buckets are made up
+            // front (MSVC's STL).
+            writer = new (writer) rbtarchive_writer_t();
+        }
+        catch (const std::bad_alloc &)
+        {
+            free(writer);
+            return RBT_RESULT_OUT_OF_MEMORY;
+        }
         writer->sink = d.sink;
         writer->codecs = d.codecs;
         writer->allow_directory_entries = d.allow_directory_entries;
@@ -2055,7 +2065,17 @@ extern "C"
         rbtarchive_writer_t *writer = (rbtarchive_writer_t *)malloc(sizeof(rbtarchive_writer_t));
         if (!writer)
             return fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "out of memory creating the writer");
-        writer = new (writer) rbtarchive_writer_t();
+        try
+        {
+            // Constructing allocates where a hash set's buckets are made up
+            // front (MSVC's STL).
+            writer = new (writer) rbtarchive_writer_t();
+        }
+        catch (const std::bad_alloc &)
+        {
+            free(writer);
+            return fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "out of memory creating the writer");
+        }
         writer->sink = d.sink;
         writer->codecs = d.codecs;
         writer->allow_directory_entries = d.allow_directory_entries;
@@ -2139,7 +2159,16 @@ extern "C"
         if ((uint32_t)d.strict & ~strict_known)
             return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "desc's strict has unknown bits 0x%X",
                         (unsigned)((uint32_t)d.strict & ~strict_known));
-        rbtarchive_reader_t *reader = new (std::nothrow) rbtarchive_reader_t();
+        // std::nothrow covers only the block: constructing allocates where a
+        // hash map's buckets are made up front (MSVC's STL), and throws.
+        rbtarchive_reader_t *reader = nullptr;
+        try
+        {
+            reader = new (std::nothrow) rbtarchive_reader_t();
+        }
+        catch (const std::bad_alloc &)
+        {
+        }
         if (!reader)
             return fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "out of memory opening the archive");
         RBT_RESULT result;
