@@ -253,6 +253,15 @@ archive is damaged when memory ran out.
       module found one more, Rabbittus Sync's session create
       (`rbtsync_session_t`'s `awaiting_snapshot`), fixed the same way;
       Rabbittus Sync has no allocation-failure test to prove it (owed).
+      The sweep looked for MSVC's allocating constructors; libstdc++'s
+      `std::deque` allocates when default-constructed too (its map and
+      first node), and two of Rend's creates built a deque-holding object
+      outside a `try`: `rbtrend_shader_make` (the shader's reflection
+      names) and `rbtrend_binding_layout_build` (its block names). Found
+      on Fedora 44 2026-11-16 by a caller's allocation-failure test (a
+      `std::bad_alloc` out of `rbtrend_shader_create`); each now constructs
+      inside a `try`, the block freed, `RBT_RESULT_OUT_OF_MEMORY`. Debug
+      and Release, `-asan` and `-tsan` there, 40 ctests each, passing.
     - **The injector's counts on Windows:** 20 (whole, compressing), 28
       (streamed, compressing), 17 (whole, decompressing) and 21 (streamed,
       decompressing) allocations of ours, the same in Debug and Release on

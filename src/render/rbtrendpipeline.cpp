@@ -664,7 +664,14 @@ static RBT_RESULT rbtrend_binding_layout_build(
 	RBTREND_MALLOC__T(result, rbtrend_binding_layout_t);
 	if (!result)
 		return rbtrend_fail(error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the layout");
-	RBTREND_CONSTRUCT__T(result, rbtrend_binding_layout_t);
+	try {
+		// Constructing allocates where a deque's map is made up front
+		// (libstdc++'s, for its names).
+		RBTREND_CONSTRUCT__T(result, rbtrend_binding_layout_t);
+	} catch (const std::bad_alloc &) {
+		free(result);
+		return rbtrend_fail(error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the layout");
+	}
 	result->instance      = instance;
 	result->binding_count = binding_count;
 
@@ -723,7 +730,14 @@ static RBT_RESULT rbtrend_shader_make(
 	RBTREND_MALLOC__T(result, rbtrend_shader_t);
 	if (!result)
 		return rbtrend_fail(error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the shader");
-	RBTREND_CONSTRUCT__T(result, rbtrend_shader_t);
+	try {
+		// Constructing allocates where a deque's map is made up front
+		// (libstdc++'s, for its names).
+		RBTREND_CONSTRUCT__T(result, rbtrend_shader_t);
+	} catch (const std::bad_alloc &) {
+		free(result);
+		return rbtrend_fail(error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the shader");
+	}
 	result->instance = instance;
 	if (const RBT_RESULT reflected = rbtrend_shader_read_reflection(result, package, error)) {
 		RBTREND_DESTRUCT__T(result, rbtrend_shader_t);

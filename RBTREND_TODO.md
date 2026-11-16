@@ -5137,17 +5137,16 @@ count changes each frame. For the user: card it, or say go.
 
 Decided 2026-11-16 with the user: a, Hillaire's model ("A Scalable and
 Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020), the
-one Unreal's SkyAtmosphere uses, for Latran's planets first and any caller
-after. What Rend takes: a medium in the shell between two radii round a
-centre (Rayleigh, Mie and an absorbing layer's coefficients and heights),
+one Unreal's SkyAtmosphere uses, for any caller. What Rend takes: a
+medium in the shell between two radii round a centre (Rayleigh, Mie and an absorbing layer's coefficients and heights),
 a sun's direction and colour; what it gives: the transmittance and
 multiple-scattering tables (rebuilt when the medium changes), a sky-view
 table a frame (the sky from wherever the camera is, inside or outside the
 shell), and an aerial-perspective volume over the frustum that lit
 surfaces read. No planet, world or game word: the caller says what the
-sphere is. Staged after Latran's stage 1 (`latran.sky`'s up): 2) the
-tables and the sky from inside, 3) aerial perspective, 4) the shell seen
-from space, blended (after transparency). A draft of its own for the
+sphere is. Staged after the caller's own first stage (its sky's up
+direction): 2) the tables and the sky from inside, 3) aerial
+perspective, 4) the shell seen from space, blended (after transparency). A draft of its own for the
 public commands, approved before it is built; Hazel has no atmosphere to
 compare (its sky is Preetham's), so the comparison is Unreal's and
 Hillaire's paper and sample. Tests on three backends: the tables against
