@@ -114,7 +114,7 @@ its recorded streamed-DEFLATE bytes are MSVC's too, so zlib-ng's output
 is the same on both platforms. `rbtarchive_fuzz` ran 10 minutes there
 (1,834,271 runs): nothing found. **Linux has built none of it.**
 
-## A codec's failure says which (card A52, decided 2026-11-14 with you: b)
+## A codec's failure says which (card A52, decided 2026-11-14 with you: b; built on the Mac, Windows and Linux, checked off 2026-11-16)
 
 Found 2026-11-13 by a caller's allocation-failure test on the Mac:
 `RBTARCHIVE_CODEC`'s `compress` and `decompress` return a `bool`, so when
@@ -289,6 +289,49 @@ archive is damaged when memory ran out.
       allocation-failure test, its stacks read, found no failure of
       Rabbittus Archive's left: what it still reports wrongly on Windows
       is Carrottus Files' path conversion.
+  - **Built on Linux 2026-11-16** (Fedora 44, the ThinkPad P1 Gen 5; GCC
+    16.2.1, clang 22.1.8, glibc 2.43, libstdc++ under both;
+    `../prompts/rbtarchive_codec_fedora.md`, its Progress). Each plan
+    step, by the X25 words: 1, 3, 4 and 5 *built and run on Linux*; 2
+    *built and run on Linux*: the injector's glibc half (malloc and the
+    rest replaced in the executable, `dl_iterate_phdr` under
+    `_GNU_SOURCE`) compiled with no change and no warning under GCC and
+    clang, and needed no fix. Built on the Mac, Windows and Linux, **A52
+    is checked off** (card X25).
+    - **The injector's counts on Linux:** 15 (whole, compressing), 20
+      (streamed, compressing), 16 (whole, decompressing) and 20 (streamed,
+      decompressing) allocations of ours, the Mac's own, the same in Debug
+      and Release with GCC and with clang (libstdc++, like libc++,
+      allocates nothing for these paths' empty hash containers; MSVC's STL
+      does, hence Windows' 20, 28, 17 and 21). Each failed in turn gives
+      `RBT_RESULT_OUT_OF_MEMORY`, nothing left live. Under `-asan` and
+      `-tsan` with each compiler it reports itself skipped and passes.
+    - **libstdc++'s `operator new` reaches the executable's `malloc`:**
+      the hooks are in the executable's `.dynsym` (the linker exports
+      them because `libstdc++.so.6` names `malloc`), and a gdb breakpoint
+      on the hook inside a region stopped 621 times with `operator
+      new(unsigned long)` in `libstdc++.so.6` as its caller, from
+      `std::vector<unsigned char>` growth in `rbtarchive.cpp`: vector
+      growth is counted, and `ENABLE_EXPORTS` isn't needed. The same
+      stacks show libdeflate's `_ex` compressor and decompressor taking
+      the hook as `malloc_func`, and zlib-ng's through `deflate_zalloc`.
+    - `rabbittus-linux-vulkan` Debug and Release, `-asan` and `-tsan`
+      Debug, each with GCC and again with clang (`-clang` directories),
+      every tree rebuilt whole: no warning; every ctest (40) passing in
+      each of the eight builds; `rbtarchive_tests`' two-thread case clean
+      under `-tsan` with both compilers. `rbt_misuse_tests` ten times in
+      Debug with each compiler, 0 failures (393 calls with zeroes, 144
+      with a destroyed handle); `rbtnoalloc_tests` none of ours in its 16
+      scenarios, Debug and Release, both compilers. `rbtarchive_fuzz` 15
+      minutes from a scratch corpus under `rabbittus-linux-vulkan-fuzz`
+      (clang 22.1.8, ASan and UBSan): 14,524,743 inputs, nothing found; its
+      replay passing in all eight builds. The fuzz build gives no warning.
+    - What builds on Rabbittus was rebuilt and tested on it: latran (144
+      ctests, Debug and Release; `latranallocfail_tests` counts "a pack
+      opened", 28 allocations, and "a pack written", 201, with every other
+      stage, 0 wrong, 0 leaked), linxerworks (45, Debug and Release), the
+      Endqueue client (7, Debug and Release), trellislib (55, Debug).
+      Nothing broke.
   - **For you (2026-11-15, from the build):**
     - **`rbtarchive_codecs_add()` has nowhere to put Q2 b's message.** It
       takes no `RBTARCHIVE_ERROR`, and the draft changes no call: an old
