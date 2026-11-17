@@ -103,7 +103,7 @@ def main():
             out.append('// - %s%s.\n//   Not covered: %s.\n' % (reason[0].upper(), reason[1:], ', '.join(uncovered)))
     out.append('\n')
     out.append('#include "rbtrend.h"\n#include "archive/rbtarchive.h"\n#include "audio/rbtaudio.h"\n')
-    out.append('#include "audio/rbtaudiocues.h"\n#include "jobs/rbtjobs.h"\n#include "math/rbtmathbvh.h"\n')
+    out.append('#include "audio/rbtaudiocues.h"\n#include "jobs/rbtjobs.h"\n#include "math/rbtmathbvh.h"\n#include "math/rbtmathmedium.h"\n')
     out.append('#include "math/rbtmathpoly.h"\n#include "sync/rbtsyncnet.h"\n#include "text/rbttext.h"\n')
     out.append('#include "rbtmath.h"\n#include "misuse/misuse_factories.h"\n#include <stdio.h>\n#include <string.h>\n\n')
     out.append('#if defined(_MSC_VER) && _DEBUG\n#include <crtdbg.h>\n#endif\n\n')

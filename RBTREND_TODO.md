@@ -5153,6 +5153,27 @@ Hillaire's paper and sample. Tests on three backends: the tables against
 the paper's reference values, a sunset's colour at the horizon, the
 transmittance through the shell from space.
 
+Drafted and approved 2026-11-16 (`rbtrend_atmosphere_draft.h`, with its
+caller's own half beside the caller's headers; two rounds of seven
+critiques). The user drew the line (B3): the medium and the questions a
+caller asks of it with no picture in them are Rabbittus Math's
+(`math/rbtmathmedium.h`, `RBTMATH_SHELL_MEDIUM`: density, transmittance
+along a ray, the two phase functions; built 2026-11-16 on macOS with
+contraction off and an exponential of its own, `rbtmathmedium_tests`
+passing: brute force within 1e-4, the zenith's closed form, the phases
+integrating to 1, 10,000 rays the same bytes alone and on 1 and 4
+threads, CRC-32 7d88a849 on the M5 Pro for other platforms to match);
+Rend's atmosphere takes that struct and draws it. Stage 4 (the shell
+from space) needs a blended full-screen march of Rend's own, not L7's
+transparency, so it moves before L7 as its own session (B4).
+
+Found while drafting stage 1 (measured 2026-11-16, M5 Pro, Release,
+`rabbittustests`' `test_lit_sky_measure`): one LIT_SKY fill at 128/32 is
+4.9 to 6.6 ms from submit to idle, Preetham's the same as Hosek and
+Wilkie's, so the prefilter is the cost, not the model. A cheaper fill
+(fewer samples for a smooth sky, or the prefilter spread over frames) is
+Rend's own work, not started.
+
 ## Suggested order
 
 Each step is usable on its own, and later ones lean on earlier ones. Items 4

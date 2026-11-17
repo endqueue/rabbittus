@@ -16,6 +16,7 @@
 #include "audio/rbtaudiocues.h"
 #include "jobs/rbtjobs.h"
 #include "math/rbtmathbvh.h"
+#include "math/rbtmathmedium.h"
 #include "math/rbtmathpoly.h"
 #include "sync/rbtsyncnet.h"
 #include "text/rbttext.h"
@@ -1649,6 +1650,12 @@ int main(void)
     expect_error("rbtmath_poly_validate", rbtmath_poly_validate((const RBTMATH_POLY_SET *){0}, (RBTMATH_POLY_DEFECT_INFO *){0}, (RBTMATH_ERROR *){0}));
     calls++;
     (void)rbtmath_ray_clip_aabb((RBTMATH_RAY *){0}, (const RBTMATH_AABB *){0});
+    calls++;
+    expect_error("rbtmath_shell_medium_compute_density", rbtmath_shell_medium_compute_density((const RBTMATH_SHELL_MEDIUM *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_shell_medium_compute_phase", rbtmath_shell_medium_compute_phase((const RBTMATH_SHELL_MEDIUM *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_shell_medium_compute_transmittance", rbtmath_shell_medium_compute_transmittance((const RBTMATH_SHELL_MEDIUM *){0}, (const float *){0}, (const float *){0}, (uint32_t){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
     calls++;
     expect_error("rbtrend_batch_add_circles", rbtrend_batch_add_circles((rbtrend_batch){0}, (const RBTREND_BATCH_CIRCLE *){0}, (uint32_t){0}, (RBTREND_ERROR *){0}));
     calls++;

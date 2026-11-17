@@ -77,7 +77,7 @@ extern "C" {
 /** @brief The major version of these headers. */
 #define RABBITTUS_VERSION_MAJOR 0
 /** @brief The minor version of these headers. */
-#define RABBITTUS_VERSION_MINOR 2
+#define RABBITTUS_VERSION_MINOR 3
 /** @brief The patch version of these headers. */
 #define RABBITTUS_VERSION_PATCH 0
 

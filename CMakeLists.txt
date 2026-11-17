@@ -11,6 +11,9 @@ foreach(_part MAJOR MINOR PATCH)
     endif()
 endforeach()
 project(rabbittus VERSION ${RABBITTUS_VERSION_MAJOR}.${RABBITTUS_VERSION_MINOR}.${RABBITTUS_VERSION_PATCH})
+# A raised version reconfigures, so the tests' copy of it (and the shared
+# library's) never lags the header.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/include/rbtcore.h")
 
 # CMake knows no C++26 flag for MSVC; its C++23 maps to /std:c++latest,
 # the newest dialect MSVC offers.
@@ -69,6 +72,7 @@ add_library(rabbittus STATIC
         src/math/rbtmathbvh_internal.hpp
         src/math/rbtmathpoly_internal.hpp
         src/math/rbtmathpoly.cpp
+        src/math/rbtmathmedium.cpp
         src/sync/rbtsync_internal.hpp
         src/sync/rbtsyncnet.cpp
         src/text/rbttext_internal.hpp
@@ -105,6 +109,7 @@ add_library(rabbittus STATIC
         include/math/rbtmathbvh.h
         include/math/rbtmatherror.h
         include/math/rbtmathpoly.h
+        include/math/rbtmathmedium.h
         include/sync/rbtsyncnet.h
         include/text/rbttext.h
         include/jobs/rbtjobs.h
@@ -740,6 +745,9 @@ if (NOT MSVC)
     # The same for RbtMath's BVHs: a cast, an overlap and a sweep give the
     # same bits everywhere (rbtmathbvh.h, "Same bits").
     set_source_files_properties(src/math/rbtmathbvh.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+    # The same for RbtMath's shell media (rbtmathmedium.h, "Same bits"),
+    # whose exponential is its own for the same reason.
+    set_source_files_properties(src/math/rbtmathmedium.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
     # The same for RbtText: a layout's positions and a glyph's distance field
     # are the same bits on every platform (rbttext.h).
     foreach (target rbttext_harfbuzz rbttext_msdfgen rbttext_sheenbidi rbttext_unibreak)
@@ -861,6 +869,9 @@ if (RABBITTUS_BUILD_TESTS)
     target_link_libraries(rbtaudio_bench PRIVATE rabbittus)
     add_executable(rbtmathbvh_bench tests/rbtmathbvh_bench.c)
     target_link_libraries(rbtmathbvh_bench PRIVATE rabbittus)
+    add_executable(rbtmathmedium_tests tests/rbtmathmedium_tests.c)
+    target_link_libraries(rbtmathmedium_tests PRIVATE rabbittus)
+    add_test(NAME rbtmathmedium_tests COMMAND rbtmathmedium_tests)
     add_executable(rbtmathpoly_tests tests/rbtmathpoly_tests.c)
     target_link_libraries(rbtmathpoly_tests PRIVATE rabbittus)
     add_test(NAME rbtmathpoly_tests COMMAND rbtmathpoly_tests)

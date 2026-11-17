@@ -548,6 +548,9 @@ fn rbtmath_poly_skeleton RBT_RESULT (const RBTMATH_POLY_SKELETON_DESC *, rbtmath
 fn rbtmath_poly_triangulate RBT_RESULT (const RBTMATH_POLY_SET *, uint32_t *, uint32_t, uint32_t *, RBTMATH_ERROR *)
 fn rbtmath_poly_validate RBT_RESULT (const RBTMATH_POLY_SET *, RBTMATH_POLY_DEFECT_INFO *, RBTMATH_ERROR *)
 fn rbtmath_ray_clip_aabb _Bool (RBTMATH_RAY *, const RBTMATH_AABB *)
+fn rbtmath_shell_medium_compute_density RBT_RESULT (const RBTMATH_SHELL_MEDIUM *, const float *, uint32_t, float *, RBTMATH_ERROR *)
+fn rbtmath_shell_medium_compute_phase RBT_RESULT (const RBTMATH_SHELL_MEDIUM *, const float *, uint32_t, float *, RBTMATH_ERROR *)
+fn rbtmath_shell_medium_compute_transmittance RBT_RESULT (const RBTMATH_SHELL_MEDIUM *, const float *, const float *, uint32_t, uint32_t, float *, RBTMATH_ERROR *)
 fn rbtrend_batch_add_circles RBT_RESULT (rbtrend_batch, const RBTREND_BATCH_CIRCLE *, uint32_t, RBTREND_ERROR *)
 fn rbtrend_batch_add_glyphs RBT_RESULT (rbtrend_batch, const RBTREND_BATCH_GLYPH *, uint32_t, RBTREND_ERROR *)
 fn rbtrend_batch_add_line RBT_RESULT (rbtrend_batch, const RBTREND_BATCH_LINE *, RBTREND_ERROR *)
@@ -796,7 +799,7 @@ macro RABBITTUS_VERSION_GET_MAJOR(version) ((uint32_t)(version) >> 22U)
 macro RABBITTUS_VERSION_GET_MINOR(version) (((uint32_t)(version) >> 12U) & 0x3FFU)
 macro RABBITTUS_VERSION_GET_PATCH(version) ((uint32_t)(version) & 0xFFFU)
 macro RABBITTUS_VERSION_MAJOR 0
-macro RABBITTUS_VERSION_MINOR 2
+macro RABBITTUS_VERSION_MINOR 3
 macro RABBITTUS_VERSION_PATCH 0
 macro RBTARCHIVE_ERROR_MESSAGE_SIZE 256
 macro RBTARCHIVE_EXTRA_NTFS_TIMES 0x000A
@@ -811,6 +814,7 @@ macro RBTJOBS_POOL_MAX_THREADS 256
 macro RBTMATH_ERROR_MESSAGE_SIZE 256
 macro RBTMATH_POLY_COORD_LIMIT ((int64_t)1 << 40)
 macro RBTMATH_POLY_NO_RING UINT32_MAX
+macro RBTMATH_SHELL_MEDIUM_MAX_STEPS 1024u
 macro RBTREND_BLUR_MAX_SIGMA 32.0f
 macro RBTREND_DRAW_LIST_NO_MATERIAL UINT32_MAX
 macro RBTREND_ERROR_MESSAGE_SIZE 256
@@ -1266,6 +1270,19 @@ field RBTMATH_SHAPE.rotation @32 RbtDVec4
 field RBTMATH_SHAPE.half_extents @64 RbtDVec3
 field RBTMATH_SHAPE.half_height @88 double
 field RBTMATH_SHAPE.radius @96 double
+struct RBTMATH_SHELL_MEDIUM size=88 align=4
+field RBTMATH_SHELL_MEDIUM.bottom_radius @0 float
+field RBTMATH_SHELL_MEDIUM.top_radius @4 float
+field RBTMATH_SHELL_MEDIUM.rayleigh_scattering @8 float[3]
+field RBTMATH_SHELL_MEDIUM.rayleigh_scale_height @20 float
+field RBTMATH_SHELL_MEDIUM.mie_scattering @24 float[3]
+field RBTMATH_SHELL_MEDIUM.mie_extinction @36 float[3]
+field RBTMATH_SHELL_MEDIUM.mie_scale_height @48 float
+field RBTMATH_SHELL_MEDIUM.mie_anisotropy @52 float
+field RBTMATH_SHELL_MEDIUM.absorption_extinction @56 float[3]
+field RBTMATH_SHELL_MEDIUM.absorption_center_height @68 float
+field RBTMATH_SHELL_MEDIUM.absorption_half_width @72 float
+field RBTMATH_SHELL_MEDIUM.ground_albedo @76 float[3]
 struct RBTMATH_SWEEP size=136 align=8
 field RBTMATH_SWEEP.shape @0 RBTMATH_SHAPE
 field RBTMATH_SWEEP.direction @104 RbtDVec3
@@ -2350,6 +2367,7 @@ typedef RBTMATH_POLY_SKELETON_DESC = struct RBTMATH_POLY_SKELETON_DESC
 typedef RBTMATH_RAY = struct RBTMATH_RAY
 typedef RBTMATH_SHAPE = struct RBTMATH_SHAPE
 typedef RBTMATH_SHAPE_KIND = enum RBTMATH_SHAPE_KIND
+typedef RBTMATH_SHELL_MEDIUM = struct RBTMATH_SHELL_MEDIUM
 typedef RBTMATH_SWEEP = struct RBTMATH_SWEEP
 typedef RBTMATH_SWEEP_HIT = struct RBTMATH_SWEEP_HIT
 typedef RBTMATH_VOLUME = struct RBTMATH_VOLUME
