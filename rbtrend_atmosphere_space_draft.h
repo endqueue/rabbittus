@@ -6,29 +6,150 @@
  * 52; card A55 in DECISIONS.md, which names the session that asked).
  * Its caller's own half is drafted beside the caller's headers.
  *
- * DRAFT, 2026-11-16, version 8 (written, then seven critique passes, each
- * fixed before the next: the revision notes below), NOT APPROVED. Not
- * built, not in any target, not compilable. Written on the MacBook (M5
+ * DRAFT, 2026-11-16, version 9 (written, then seven critique passes, each
+ * fixed before the next, and a third round of seven on 2026-11-17: the
+ * revision notes below). APPROVED by the user 2026-11-17 (card A55, every
+ * question as recommended: Q1a to Q5a), with two corrections: a shell's
+ * light given by index is a directional light, or a directional light
+ * with a source place (card L78's RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED,
+ * RBTREND_TODO.md item 58, its own draft to come), its direction and
+ * light taken at the shell's centre; no version is raised while
+ * Rabbittus' 0.3 is untagged (card X2). Q1a waits on Carrottus GPU's
+ * dual-source blending (card S50: a feature bit and the four SRC1 factors,
+ * carrottus/crgpu_dual_source_blend_draft.h, drafted next). Amended by the
+ * third critique round, 2026-11-17, at the user's asking. Built in a
+ * session of its own, after S50 is built. Not built, not in any target,
+ * not compilable. Written on the MacBook (M5
  * Pro) against the approved rbtrend_atmosphere_draft.h (version 10) and
  * what was built from it (rabbittus ede3990, 0.3): render/rbtrendatmosphere.h,
  * rbtrendlit.h (RBTREND_LIT_ATMOSPHERE, rbtrend_lit_scene_set_atmosphere,
  * RBTREND_LIT_SCENE_LIGHT), rbtrendcommands.h (commands 39, 45 to 50, the
  * 120-byte parameters, rbtrend_command_list_send/_compile), rbtcore.h
  * (struct types to 5037), src/render/rbtrendatmosphere.cpp,
- * shaders/rbtrend_atmosphere_model.slang, _skyview_frag, _aerial_frag,
+ * src/render/rbtrendlit.cpp (the scene's array, made where its size
+ * differs), src/render/rbtrendcommands.cpp (LIT_ATMOSPHERE, LIT_REFLECT's
+ * sets), shaders/rbtrend_atmosphere_model.slang (sphere_hits),
+ * rbtrend_atmosphere_pass.slang (atmosphere_march), _skyview_frag,
+ * _aerial_frag, rbtrend_lit_bindings.slang (set 0's 16 bindings),
  * rbtrend_lit_atmosphere.slang, rbtrend_lit_sky_frag.slang; carrottus's
  * crgpu.h (CRGPU_BLEND_FACTOR: no dual-source factor;
  * CRGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET 16, CRGPU_MAX_DESCRIPTOR_SET_LAYOUTS
- * 4); the concurrent large-worlds drafts (rabbittus/rbtrend_large_worlds_draft.h
- * and its caller's half, version 1, not approved:
- * Rend fed a space whose origin is the eye); and Hazel's renderer
- * (../.refs/HazelRenderer2025, present: Hazelnut's
- * Resources/Shaders/PostProcessing/SceneComposite.glsl).
+ * 4; no per-format blend query); the large-worlds drafts
+ * (rabbittus/rbtrend_large_worlds_draft.h and its caller's half, version
+ * 2, approved 2026-11-17, card L66: Rend fed a space whose origin is the
+ * eye); card A57 (volumetric clouds, item 55: marched inside this pass's
+ * order later); and Hazel's renderer (../.refs/HazelRenderer2025, present:
+ * Hazelnut's Resources/Shaders/PostProcessing/SceneComposite.glsl).
  *
  * ===========================================================================
  * Revision notes (the critique's seven passes, 2026-11-16; each fixed
  * before the next; the lenses are the workspace's critique prompt's)
  * ===========================================================================
+ *
+ * Third round, 2026-11-17, at the user's asking: passes 8 to 14, each
+ * fixed before the next (the critique prompt's seven lenses in turn).
+ *
+ * Pass 8 (general purpose, not one game's).
+ * 1. The text still made a point light the star (sections 3, 9, 12, the
+ *    struct). A point light's light is windowed to 0 at its `_range` and
+ *    culled per tile by it (rbtrend_lit_surface.slang), so a star 1e8 m
+ *    off would need a range that puts it in every tile; and its direction
+ *    varies across a shell near it. With card L78 the star is a
+ *    directional light with a source place. Changed everywhere: a shell's
+ *    lights are DIRECTIONAL or DIRECTIONAL_PLACED (once item 58 is built);
+ *    a point or spot light is refused (the decided line names a placed
+ *    directional light alone).
+ * 2. Flat worlds and other genres said (section 4f): a flat level's air is
+ *    stage 2's from inside and has no outside; a globe view, a flight
+ *    high enough to see a curve, a space game, each the same command.
+ * 3. Card A57's clouds (marched inside a shell's order later) given their
+ *    place (section 4f): nothing here closes it.
+ *
+ * Pass 9 (industry standard, compared).
+ * 1. Unity HDRP's Physically Based Sky added to section 8 (from its
+ *    documentation as remembered: one planet, seen from space too,
+ *    precomputed tables, Bruneton's family); still one world a scene.
+ * 2. Hillaire's sample squares the march's spacing from the top of the
+ *    atmosphere for a camera in space (its variable sample count after
+ *    MoveToTopAtmosphere), as atmosphere_march does: kept, said in
+ *    section 3; the crossing test holds it.
+ * 3. A light given per shell is engines' practice (Unreal's atmosphere
+ *    lights are two directional lights by index): the decided index kept.
+ *
+ * Pass 10 (the C API to standard).
+ * 1. A literal 2 (the most lights a shell) became
+ *    RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS, the frozen array's size.
+ * 2. The step checks split one condition each (`_min_steps` 0;
+ *    `_max_steps` below `_min_steps`; `_max_steps` above the most), in
+ *    parameter order; the shell's checks in its members' order.
+ * 3. The feature Q1a needs goes in rbtrend_get_optional_gpu_features()
+ *    for the caller to ask for (rabbittus/CLAUDE.md, "Rend"), and is
+ *    named on the command.
+ *
+ * Pass 11 (data-oriented design and allocation).
+ * 1. Found in rbtrendlit.cpp: a scene's array is made again whenever its
+ *    size differs. A caller crossing a top switches between a sky (256 x
+ *    108 x 34 at the first caller's defaults) and no sky (the transmittance's
+ *    two layers): an array made, a GPU allocation, at every crossing.
+ *    Changed (section 4c): an atmosphere with no sky keeps any array that
+ *    holds its transmittance table; only a larger need makes one.
+ * 2. The copied shells sort in the list's own copy (side storage, as
+ *    BEGIN_RENDERING's arrays), a few entries, insertion; the sets come
+ *    from LIT_REFLECT's view-set cache: steady state allocates nothing,
+ *    held by test_frame_allocations.
+ *
+ * Pass 12 (threads, determinism, errors).
+ * 1. A placed light whose place is inside a shell's top sphere has no one
+ *    direction at its centre: refused at the compile, naming the shell
+ *    and the light (developer English, per call's report).
+ * 2. The sort's order is a function of the copy and the eye alone, so a
+ *    list compiled twice gives the same draws.
+ *
+ * Pass 13 (correctness against the platforms and the code as built).
+ * 1. The turn-on fix made exact (section 4c): a scene's atmosphere turns
+ *    on after its first transmittance copy (a new internal flag), and a
+ *    second internal flag, set by the first sky-view fill, gates the sky
+ *    shader's sky and its suns' dimming (rbtrend_lit_sky_frag.slang reads
+ *    lit_atmosphere() for both today, so with no sky it would draw an
+ *    empty layer 0 and dim the discs); LIT_ATMOSPHERE skips the sky-view
+ *    pass at size 0 (its own pass at 0 x 0 is invalid on every backend).
+ * 2. The layout was wrong: the march needs the scene's block (inverse
+ *    view-projection, eye, the scene's atmosphere frame for 4b), which is
+ *    in set 0 of the lit layout, full at 16 bindings. Now LIT_REFLECT's
+ *    shape (section 7): set 0 the scene's own set, set 1 the atmosphere's
+ *    medium, set 2 three views from the view-set cache; the shell's own
+ *    values 96 bytes of push constants.
+ * 3. atmosphere_march is in rbtrend_atmosphere_pass.slang and reads the
+ *    pass block's suns: it takes them as arguments (the stage 2 passes
+ *    passing the block's), and is called with the entry point as its
+ *    origin, which is section 6's precision with no change to its maths.
+ * 4. The ray-sphere roots: "the near root as c / q" holds only for b < 0;
+ *    now t0 and t1 are the lesser and greater of q and c / q. The entry
+ *    point is put back on the sphere (scaled to top_radius), so its
+ *    height is exact.
+ * 5. The blend per channel, alpha included, written out (section 5);
+ *    Vulkan's dualSrcBlend allows one attachment (maxFragmentDualSrc-
+ *    Attachments), D3D12 and Metal render target 0 alone: the pass has
+ *    one. The three float formats: Vulkan guarantees blending
+ *    R16G16B16A16_SFLOAT only; Carrottus GPU has no per-format query, so
+ *    the other two are LIT_REFLECT's same gap (reported, not fixed here).
+ * 6. Numbers re-derived: the earth's horizon from its top 1,132 km (was
+ *    1,131); a float at 1e8 m within 4 m (half its 8 m step, was "about 6");
+ *    a whole world from 4 radii about an eighth of the view (was a sixth),
+ *    its cost unchanged at 0.1 to 0.2 ms; the sky-view's own step rule
+ *    is by the shell's thickness, not the chord (both said).
+ * 7. 4b's composition over a drawn surface uses the slice the lit pass
+ *    applied (the last, past aerial_distance), so the pair is P's own.
+ *
+ * Pass 14 (tests, formats, records, the build).
+ * 1. Test 9 now a placed light (once item 58 is built; until then
+ *    directional lights alone, and the test pending as
+ *    RBT_RESULT_NOT_IMPLEMENTED); tests added: the turn-on with no sky,
+ *    the array kept at a crossing, a point light refused, the device
+ *    without the blend feature refused.
+ * 2. The version raise (0.3 to 0.4) struck: card X2.
+ * 3. The order the build session takes: S50 built and tested on Metal,
+ *    then this; D3D12 and Vulkan written, run in their sessions (card X25).
  *
  * 2026-11-17: caller names removed (check.sh caller-names), meaning kept.
  *
@@ -55,7 +176,9 @@
  *    star are lit from opposite directions, which one scene-wide direction
  *    can't say. Changed: each shell names its lights by index into the
  *    scene's own lights, a point light (a star) included, its direction and
- *    radiance taken at the shell's centre (section 3, Q2).
+ *    radiance taken at the shell's centre (section 3, Q2). [Superseded by
+ *    card L78 and pass 8.1: the star is a placed directional light; a
+ *    point light is refused.]
  * 4. Missing: where transparent surfaces go (after this pass: a cockpit's
  *    glass is in front of the air). Added to section 5's order.
  *
@@ -123,8 +246,8 @@
  *    continuous (the same integral both sides); far surfaces are not
  *    unless the aerial volume reaches every surface the eye sees from the
  *    top: sqrt(top^2 - bottom^2), 99.5 km for a 150 km world with a 30 km
- *    top, where the first caller's default reach is 32 km and its game's
- *    today 400 m. Changed: section 4b states the rule and its test; the caller's
+ *    top, where the first caller's default reach is 32 km and its own
+ *    first user's today 400 m. Changed: section 4b states the rule and its test; the caller's
  *    choice is Q4 in the card (the caller's half).
  * 2. Precision at system distances: a centre 1e7 to 1e8 m from the eye in
  *    floats (camera-relative, the large-worlds drafts). Section 6 works
@@ -165,7 +288,8 @@
  *    M5 Pro at 1080p and 1440p by test_atmosphere_shell_measure before the
  *    first caller turns it on, as stages 2 and 3 were.
  * 3. ABI listed (section 11); the version raise shared with the large-
- *    worlds draft if both are built in one session.
+ *    worlds draft if both are built in one session. [Superseded: no raise
+ *    while 0.3 is untagged, card X2.]
  *
  * ===========================================================================
  * 1. What is drawn, and why a draft
@@ -206,7 +330,8 @@
  * tables, rbtrendatmosphere.h), where its centre is this frame, and which
  * of the scene's lights light it.
  *
- * [ADDED] One limit macro, RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS.
+ * [ADDED] Two limit macros, RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS and
+ * RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS (2, the shell's frozen array).
  *
  * [CHANGED] RBTREND_LIT_ATMOSPHERE's sky-view sizes accept both 0: an
  * atmosphere that lights a scene's surfaces through its transmittance and
@@ -234,11 +359,18 @@
  *    (bottom_radius) and the drawn surface's distance from `_depth`
  *    (section 4d). The march runs from max(t0, 0) to there.
  * 4. Steps: from `_min_steps` to `_max_steps`, more for a longer part of
- *    the ray inside the shell: steps = min + (max - min) * saturate(length
- *    / longest), longest = 2 sqrt(top^2 - bottom^2), the shell's longest
- *    chord that misses the ground; spaced closer near the entry, as the
- *    sky-view's march (stage 2's atmosphere_march, the same function: one
- *    model, one march, in rbtrend_atmosphere_model.slang).
+ *    the ray inside the shell: steps = floor(min + (max - min) *
+ *    saturate(length / longest)), longest = 2 sqrt(top^2 - bottom^2), the
+ *    shell's longest chord that misses the ground (the sky-view's own rule
+ *    takes the shell's thickness: from inside, every ray but the zenith's
+ *    is longer, so it means "the most past the thickness"; from outside,
+ *    near-vertical rays are about the thickness, so the chord). Spaced
+ *    closer near the start, squared, as Hillaire's sample spaces a march
+ *    moved to the top of the atmosphere: stage 2's atmosphere_march
+ *    (rbtrend_atmosphere_pass.slang), the same function, one model and
+ *    one march, given the shell's suns as arguments where the stage 2
+ *    passes give it their block's, and called with the entry point as its
+ *    origin and 0 as its start (section 6).
  * 5. At each step: each of the shell's lights' light scattered once
  *    (through the transmittance towards the light, read from the shell's
  *    transmittance table; none where the ground sphere hides it: the
@@ -254,17 +386,25 @@
  *    texel behind it gets through); the texel becomes texel x T + L, or
  *    with the ground (6) the ground's light and T 0.
  *
- * A shell's lights (Q2): each `_lights` entry names a light of the scene
- * (rbtrend_lit_scene_set_lights' list), directional or point. A
- * directional light's direction and _radiance are used as they are; a
- * point light's direction is from the shell's centre towards it, and its
- * radiance what a white matte face square to it at the centre would read
- * (its _radiance and fall-off at that distance): a star far from its
- * world, whose direction and strength don't change across the shell to
- * within the shell's radius over its distance. A spot light is refused (a
- * cone is no sun). Each light's illuminance is pi x radiance, as inside
- * (rbtrendatmosphere.h, "Units and light"). The lights are the very ones
- * that light the world's ground, so its ground and its air agree.
+ * A shell's lights (Q2, as corrected by card L78): each `_lights` entry
+ * names a light of the scene (rbtrend_lit_scene_set_lights' list), a
+ * directional light or a placed one. A directional light's direction and
+ * _radiance are used as they are. A placed directional light
+ * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED, item 58, its own draft) has
+ * its direction and radiance taken at the shell's centre by item 58's
+ * rule (from the centre towards its source place; its radiance by the
+ * inverse square from its reference distance), worked out on the CPU at
+ * the compile: a star far from its world against the shell, so its
+ * direction across the shell is within top_radius / distance radians of
+ * the centre's (a degree for a 180 km shell 10,000 km from its star),
+ * while two worlds either side of it are lit from their own sides. Until
+ * item 58 is built, a shell's lights are directional alone. A point light
+ * is refused (its light is windowed to 0 at its range and culled per tile
+ * by it, so no point light reaches a world from a star's distance; card
+ * L78: "not a sphere light"), and a spot light (a cone is no sun). Each
+ * light's illuminance is pi x radiance, as inside (rbtrendatmosphere.h,
+ * "Units and light"). The lights are the very ones that light the
+ * world's ground, so its ground and its air agree.
  *
  * ===========================================================================
  * 4. How it composes
@@ -286,7 +426,7 @@
  * slice (air up to aerial_distance only); outside, the march reaches it.
  * So a caller that crosses tops with no step sets aerial_distance at
  * least sqrt(top^2 - bottom^2), the farthest ground seen from the top (99.5
- * km for a 150 km world with a 30 km top; 1,131 km for the earth's 6,360
+ * km for a 150 km world with a 30 km top; 1,132 km for the earth's 6,360
  * and 6,460 km). Whether the caller does that, or switches to the per-pixel
  * path lower (4c), or Rend later marches only the remainder beyond the
  * volume, is the caller's choice and Q4 (none needs another item here).
@@ -297,7 +437,9 @@
  * with L_s, T_s the shell's and L_h, T_h the scene's own air along the
  * texel's ray (for a texel with nothing drawn, the sky-view's radiance and
  * the transmittance from the eye out of the scene's shell, one lookup
- * each; for a drawn surface, the aerial volume's slice at its distance),
+ * each; for a drawn surface, the aerial volume's slice at its distance,
+ * the last one past aerial_distance: the very pair the lit pass applied
+ * to it, so the identity below holds for what P carries),
  * the texel P = L_h + T_h x S becomes
  *     P x T_s + L_h x (1 - T_s) + T_h x L_s  =  L_h + T_h x (L_s + T_s x S),
  * per channel and with no division: the blend's source is the last two
@@ -311,12 +453,32 @@
  *   environment or analytic sky, its suns' discs not dimmed): the shell
  *   pass, given the same atmosphere and centre, dims and lights them;
  * - LIT_ATMOSPHERE copies its transmittance table into the scene's array
- *   and fills nothing else; the scene reads its atmosphere from the frame
- *   after that copy (today: after the first sky-view fill, which a scene
- *   with no sky-view never has: pass 2.2);
+ *   (layer 1, as with a sky) and fills nothing else: no sky-view pass at
+ *   0 x 0, no slices; the scene reads its atmosphere from the frame after
+ *   that copy (today: after the first sky-view fill, which a scene with no
+ *   sky-view never has: pass 2.2);
+ * - the scene's array: layer 0 (the sky-view's) stays, unread, so every
+ *   shader still reads the transmittance at layer 1; an atmosphere with
+ *   no sky keeps the array the scene holds whenever it has two layers and
+ *   holds the transmittance table, so a caller switching one world
+ *   between a sky and no sky at its top makes nothing (pass 11.1); one is
+ *   made only for a larger need, as today;
  * - LIT_ATMOSPHERE_ENVIRONMENT leaves the environment as it was (as for a
  *   sky-view not yet filled): a caller keeps the last one filled, from
  *   nearer the ground, which is the better light for that ground.
+ * The turn-on fix, in the built code (pass 2.2, pass 13.1): the scene
+ * keeps two internal flags where it keeps one. Its block's ATMOSPHERE flag
+ * (surfaces read their suns' transmittance; rbtrend_lit_scene_resolve_
+ * atmosphere) is set once LIT_ATMOSPHERE has copied the transmittance,
+ * with or without a sky-view, in place of `!scene->sky_view_filled`; a new
+ * SKY flag, set once a sky-view with sizes above 0 is filled, gates the sky
+ * shader's lit_atmosphere_sky() and its discs' dimming by
+ * lit_atmosphere_sun_transmittance() at the eye (rbtrend_lit_sky_frag.slang,
+ * which tests lit_atmosphere() for both today), and LIT_ATMOSPHERE_
+ * ENVIRONMENT keeps reading `sky_view_filled`. Both cleared where
+ * `sky_view_filled` is cleared today (a new atmosphere, a new array, none).
+ * A scene with a sky behaves bit for bit as today: its first
+ * LIT_ATMOSPHERE sets both together.
  * This is how a caller draws a world it is outside of with its ground
  * still lit through its air (the shell pass drawing the air), and how it
  * draws a world it is inside of per pixel (4b's other way): the same
@@ -327,7 +489,8 @@
  * 4d. AGAINST DEPTH. `_depth` is the depth the lit surfaces were drawn
  * with, through the scene's view-projection. A texel whose depth is the
  * projection's cleared far value (0 for a reversed projection, 1 for a
- * forward one, read from the view-projection Rend holds) is "nothing
+ * forward one, read from the view-projection Rend holds, as LIT_REFLECT
+ * reads it: rbtrend_lit_scene_depth_reversed) is "nothing
  * drawn": its ray runs to the shell's exit or its ground, whatever the
  * projection's far plane. Elsewhere the surface's distance along the ray,
  * from the depth by the inverse view-projection. Points of the march under
@@ -345,8 +508,25 @@
  * has a negative power and is drawn last, nearest. Rend sorts the copied
  * array at the compile (a few entries, insertion, in place). Two shells
  * that intersect (a moon's air dipping into a planet's) are drawn in that
- * order and composed wrongly where they overlap: a game keeps shells
- * apart, as card L62's B1 already asks of nesting.
+ * order and composed wrongly where they overlap: a caller keeps shells
+ * apart, as card L62's B1 already asks of nesting. The sort runs on the
+ * list's own copy and depends on the copy and the scene's eye alone, so a
+ * list compiled twice draws the same.
+ *
+ * 4f. WHAT ELSE IT IS FOR, AND WHAT IT LEAVES ROOM FOR. The command knows
+ * no planet: a shell is a medium round a centre. Any caller seeing a
+ * sphere's air from outside uses it the same way: a globe or map view, a
+ * flight high enough to see the horizon curve, an orbit, several bodies
+ * of a system at once. A flat world's air (stage 2's shell of a radius
+ * large against its level, its centre below) is seen from inside only and
+ * has no outside to draw: nothing here changes it. Card A57's clouds
+ * (item 55: bounded by a shell or a slab, marched by Rend, seen from
+ * outside in its second stage) will compose inside a shell's march: the
+ * march is a function over [start, end] with a (light, transmittance)
+ * result, so a cloud layer's own (L, T) can be put between the march's
+ * part above it and the part below in the same per-channel form (L1 + T1
+ * (L2 + T2 L3)). This draft draws no cloud and fixes nothing that would
+ * stop that.
  *
  * ===========================================================================
  * 5. Blending, the frame's order, barriers
@@ -358,17 +538,32 @@
  * source today, so a per-channel T can't be the factor while X is the
  * colour. Q1, one answer for every device (Rend's rule: no behaviour by
  * device):
- * a. Dual-source blending (recommended): the pass writes X to its first
+ * a. Dual-source blending (decided, Q1a): the pass writes X to its first
  *    output and T to its second, blended ONE, SRC1_COLOR. One draw a shell,
- *    nothing more in memory, coloured. Needs Carrottus GPU's draft first
- *    (carrottus/crgpu_dual_source_blend_draft.h, not written: the
+ *    nothing more in memory, coloured. Needs Carrottus GPU's card S50 first
+ *    (carrottus/crgpu_dual_source_blend_draft.h, drafted next: the
  *    SRC1_COLOR, ONE_MINUS_SRC1_COLOR, SRC1_ALPHA and ONE_MINUS_SRC1_ALPHA
  *    factors and a feature bit; Metal's MTLBlendFactorSource1Color, D3D12's
  *    D3D12_BLEND_SRC1_COLOR, Vulkan's dualSrcBlend), and the shader step
  *    to emit a second output on each backend (Slang's, to SPIR-V, DXIL and
- *    a .metallib: checked in that draft). This command then names the
- *    feature and is refused (RBT_RESULT_UNSUPPORTED, at the compile) on a
- *    device created without it, as Rend refuses other features.
+ *    a .metallib: confirmed in that draft). Every backend allows it with
+ *    one colour attachment only (Vulkan's maxFragmentDualSrcAttachments,
+ *    1 where the feature is; D3D12's and Metal's render target 0): the
+ *    pass has one. Per channel, c in r, g, b:
+ *        target.c = X.c x ONE + target.c x T.c   (SRC1_COLOR)
+ *    and alpha, which no reader of the picture uses, kept: the first
+ *    output's alpha 0 and the second's 1, blended ONE, SRC1_ALPHA. The
+ *    feature goes in rbtrend_get_optional_gpu_features() for the caller to
+ *    ask for at device creation; this command names it and is refused
+ *    (RBT_RESULT_UNSUPPORTED, at the compile) on a device created without
+ *    it, as Rend refuses other features.
+ *    The target's format: R16G16B16A16_FLOAT is blendable on every device
+ *    (Vulkan's mandatory format table, D3D12's and Metal's); Vulkan leaves
+ *    blending R32G32B32A32_SFLOAT and B10G11R11_UFLOAT optional per
+ *    device, and Carrottus GPU reports no per-format blend support today.
+ *    LIT_REFLECT, which blends over the same three formats, has the same
+ *    gap: a Carrottus card, not this draft's (the three kept, as
+ *    LIT_REFLECT's).
  * b. A copy, then a write: the shell's bounds copied from `_target` to a
  *    render-target-pool texture of its format, then the march reads the
  *    copy and writes P x T + X with no blend. Every device, coloured; a
@@ -396,10 +591,11 @@
  * ===========================================================================
  *
  * Rend takes positions in the scene's space, whatever its origin. The
- * large-worlds drafts (version 1, not approved) feed Rend a space whose
- * origin is the eye, the caller subtracting in double on the CPU: then a
- * centre 1e8 m off (between worlds of a system) is a float good to about 6
- * m, under a millionth of a radian from the eye, well under a texel. This
+ * large-worlds drafts (approved 2026-11-17, card L66) feed Rend a space
+ * whose origin is the eye, the caller subtracting in double on the CPU:
+ * then a centre 1e8 m off (between worlds of a system) is a float within
+ * 4 m (half its 8 m step), 4e-8 radians from the eye, well under a texel
+ * (a 60-degree view's texel at 1440p is 7e-4 radians). This
  * draft holds in such a space and in any other; it needs nothing of the
  * caller but the scene's space, and it adds no double to Rend's API.
  * What the pass does to stay exact at those distances:
@@ -407,12 +603,20 @@
  *   Akenine-Moller, "Precision Improvements for Ray/Sphere Intersection",
  *   Ray Tracing Gems, 2019, ch. 7): b = dot(o, d); the discriminant as
  *   r^2 - |o - b d|^2, not b^2 - (|o|^2 - r^2), whose two terms of 1e16
- *   cancel in floats; the near root as c / q with q = -b - sign(b)
- *   sqrt(disc). Measured in the test at 1e7 and 1e9 units (section 12).
- * - The march from the entry point: the entry p0 = o + t0 d found once (to
- *   a few metres at 1e8 m, a thousandth of a scale height), every step's
- *   point taken as p0 + s d with s from 0, so heights inside the shell
- *   carry the precision of a radius, not of the eye's distance.
+ *   cancel in floats (a float's step at 1e16 is about 1e9, against r^2 of
+ *   2.25e10 for a 150 km sphere: 4% of the discriminant, ruinous at the
+ *   limb; |o - b d|, the ray's least distance from the centre, is good to
+ *   a step of 1e8's, 8 m, 8e-8 radians at the limb); c = |o|^2 - r^2 and
+ *   q = -b - sign(b) sqrt(disc); the roots q and c / q, t0 the lesser and
+ *   t1 the greater (c / q is the near one only when b < 0, the sphere
+ *   ahead). Measured in the test at 1e7 and 1e9 units (section 12).
+ * - The march from the entry point: the entry p0 = o + t0 d found once,
+ *   then scaled to top_radius (it lies on the sphere, so its height is
+ *   exact where t0's few metres at 1e8 m would move it), and every step's
+ *   point taken as p0 + s d with s from 0: atmosphere_march called with
+ *   p0 as its origin and 0 as its start, so heights inside the shell carry
+ *   the precision of a radius, not of the eye's distance. For an eye
+ *   inside the shell, o itself (no larger than top_radius).
  * - Depth: the caller's projection; reversed float depth holds a
  *   centimetre's near plane with a far plane of 1e9 m (the large-worlds
  *   drafts' test). A surface's distance is read from depth as the view's
@@ -438,8 +642,9 @@
  * scattering). The M5 Pro's GPU taken at 8 to 9 TFLOPS of float32 (its
  * cores, 128 lanes each, about 1.6 GHz; the measurement decides) at half
  * of that in practice:
- * - a whole 150 km world from 4 radii (the first caller's world from high orbit; about
- *   a sixth of a 60-degree view; most rays near-vertical through 30 km of
+ * - a whole 150 km world from 4 radii (a world seen whole from high orbit; its
+ *   top sphere about 35 degrees across, an eighth of a 16:9 view 60 degrees
+ *   high; most rays near-vertical through 30 km of
  *   air, about 8 steps of a 4 to 32 range): 0.1 to 0.2 ms at 1440p;
  * - from low orbit, the world filling half the view, about 10 steps on
  *   average: 0.5 to 0.7 ms at 1440p, 0.3 to 0.4 ms at 1080p;
@@ -458,18 +663,32 @@
  * edges), measured, not assumed.
  *
  * Memory: nothing per shell (each atmosphere's tables exist already, 136
- * KiB); a shell's position and lights are push constants (the centre, the
- * two lights' directions and illuminances: 64 bytes, within the 128 every
- * backend gives). Q1's b alone adds the pool's texture.
+ * KiB at 256 x 64 and 32 x 32 in R16G16B16A16_FLOAT); a shell's own
+ * values are push constants, 96 bytes, within the 128 Vulkan guarantees
+ * (maxPushConstantsSize) and Carrottus GPU passes on every backend:
+ *     float4 center_lights;        xyz the centre, w the light count
+ *     float4 light_direction[2];   xyz towards each light, at the centre
+ *     float4 light_illuminance[2]; rgb pi x radiance at the centre
+ *     uint4  steps;                the least, the most, whether the
+ *                                  scene's own air is in front (4b), and
+ *                                  whether depth is reversed
+ * Q1's b alone would add the pool's texture.
  *
- * Bindings: the pass has its own layout, four sets, within Carrottus GPU's
- * four set layouts and 16 bindings a set: set 0 the atmosphere's medium
- * block (its material, as its tables' passes have it); set 1 its
- * transmittance table and sampler; set 2 its multiple-scattering table
- * and sampler; set 3 the frame's: `_depth`, the scene's atmosphere array
- * (for 4b's composition: the sky-view, the transmittance, the volume's
- * slices), their sampler, and under Q1's b the copy: 5 bindings. Nothing
- * of set 0 of the lit scene's layout changes.
+ * Bindings (pass 13.2: LIT_REFLECT's shape): the pass's own layout, three
+ * sets, within Carrottus GPU's four set layouts and 16 bindings a set.
+ * Set 0 is the lit scene's own set, unchanged and already full at 16
+ * (rbtrend_lit_bindings.slang): its block (the inverse view-projection,
+ * the eye, the target size, the scene's atmosphere frame and sizes for
+ * 4b), its atmosphere array at binding 15 (the sky-view, the transmittance,
+ * the volume's slices) and its environment_sampler, the one the stage 2
+ * passes read tables with. Set 1 is the shell's atmosphere's own material
+ * set (its medium block, written when its medium changes). Set 2 holds
+ * three views, `_depth` (read by texel, no sampler), the atmosphere's
+ * transmittance and its multiple-scattering tables: 3 bindings, from the
+ * instance's view-set cache (rbtrend_view_set_get, keyed by the views, as
+ * LIT_REFLECT's inputs are), so a steady frame makes none. Nothing of set 0
+ * of the lit scene's layout changes, and no caller's lit shader is
+ * touched.
  *
  * No compute and no 3D storage image: a full-screen fragment pass a shell,
  * as stages 2 and 3's tables are, so nothing is refused for a missing
@@ -493,8 +712,13 @@
  *   setting where this takes the shell's longest chord); a coloured
  *   transmittance by dual-source blending where the platform has it and a
  *   grey one where not (which Rend's rule forbids it to copy); one
- *   SkyAtmosphere per scene, a planet's centre by its transform. Several
- *   worlds at once go past it.
+ *   SkyAtmosphere per scene, a planet's centre by its transform, its
+ *   lights two directional lights by an atmosphere index. Several worlds
+ *   at once go past it.
+ * - Unity HDRP's Physically Based Sky (from its documentation as
+ *   remembered, not in this workspace): one planet a volume profile, seen
+ *   from space as well as from its ground, from precomputed tables of
+ *   Bruneton's family; one world a scene, as Unreal's.
  * - Bruneton 2008/2017: a 4D in-scattering table per medium gives a ray's
  *   light from space in one or two lookups; card L62 chose Hillaire over it
  *   (a table per medium, rebuilt on change, heavy for several worlds). See
@@ -552,20 +776,26 @@
  *   command's refusals are and reported at the compile, naming the
  *   command and the field (rbtrend_command_list_compile's list gains
  *   LIT_ATMOSPHERE_SHELLS): a NULL or destroyed scene (RBT_STALE); a
- *   `_shell_count` above 0 with NULL `_shells`; a step count out of range,
- *   the least above the most; a `_depth` not a SHADER_RESOURCE 2D view of
+ *   `_shell_count` above 0 with NULL `_shells`; the steps, each its own
+ *   check in order (`_min_steps` 0; `_max_steps` below `_min_steps`;
+ *   `_max_steps` above RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS); a
+ *   `_depth` not a SHADER_RESOURCE 2D view of
  *   depth at the view's target size, single-sampled; a `_target` not a
  *   RENDER_TARGET 2D view of R16G16B16A16_FLOAT, R32G32B32A32_FLOAT or
- *   R11G11B10_FLOAT at that size; and in each shell (its index named): a
- *   NULL or destroyed atmosphere, or one of another instance; a centre not
- *   finite (each axis); a `_light_count` above 2; a light index past the
- *   scene's lights, or naming a spot light. At the compile again: the
- *   lights (they may change after the send); an atmosphere whose medium
+ *   R11G11B10_FLOAT at that size; and in each shell (its index named), in
+ *   its members' order: a NULL or destroyed atmosphere, or one of another
+ *   instance; a centre not finite (each axis); a `_light_count` above
+ *   RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS; each light index (by its
+ *   place) past the scene's lights, or naming a light neither directional
+ *   nor placed directional (a point or a spot light). At the compile
+ *   again: the lights (they may change after the send), and a placed
+ *   light whose place is inside the shell's top sphere (refused: no one
+ *   direction at its centre); an atmosphere whose medium
  *   was never set or whose tables were never built (the shell is skipped,
  *   and the compile's Debug report says so, as a stale sky-view is); a
  *   shell naming the scene's own atmosphere with a sky-view (refused,
  *   RBT_RESULT_INVALID_ARGUMENT); Q1's a on a device without the feature
- *   (RBT_RESULT_UNSUPPORTED).
+ *   (RBT_RESULT_UNSUPPORTED, naming it).
  * - Errors: RBT_RESULT and the compile's RBTREND_ERROR (the send keeps no
  *   result of its own, rbtrendcommands.h); nothing printed.
  * - The Debug overlap check: the send is the list's (RBTREND_ENTER on the
@@ -578,9 +808,12 @@
  *   hot record (a few entries, cold beside a draw list's).
  * - Shaders: shaders/rbtrend_atmosphere_shell_frag.slang (its entry point
  *   rbtrend_atmosphere_shell_frag), importing rbtrend_atmosphere_model
- *   (the march, the stable hits added there) and Rend's full-screen
- *   vertex shader; added to RABBITTUS_SHADERS; a second output under Q1's
- *   a. Written from the paper.
+ *   (the stable hits added there beside sphere_hits),
+ *   rbtrend_atmosphere_pass (atmosphere_march, its suns made arguments),
+ *   rbtrend_lit_bindings (set 0, declared whole: Carrottus GPU's "Every
+ *   binding of a set") and Rend's full-screen vertex shader; added to
+ *   RABBITTUS_SHADERS; its second output, for Q1's a, as S50's draft says
+ *   Slang writes it. Written from the paper.
  * - Rabbittus Math's line (the user's): nothing here is a question a caller
  *   asks with no picture in it. The transmittance through a shell from
  *   outside is already rbtmath_shell_medium_compute_transmittance's (its
@@ -598,14 +831,15 @@
  *
  * Additions: one enumerator (RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS = 51),
  * its parameters in RBTREND_COMMAND's union (48 bytes of 120), one frozen
- * struct, one macro. Changed in meaning, no layout: RBTREND_LIT_ATMOSPHERE's
+ * struct (32 bytes), two macros; the dual-source feature added to what
+ * rbtrend_get_optional_gpu_features() returns. Changed in meaning, no
+ * layout: RBTREND_LIT_ATMOSPHERE's
  * sky-view sizes accept both 0 (a value refused before now has a meaning,
  * so no caller that worked breaks); rbtrend_lit_scene_set_atmosphere's and
  * LIT_ATMOSPHERE's comments. No layout, enum value or result changes; set
  * 0 of the lit scene's layout unchanged. Listed in the commit by
- * ./check.sh --update-abi. Rabbittus 0.3 to 0.4 (the session's one raise,
- * shared with the large-worlds draft's if both are built together).
- * Under Q1's a, Carrottus's own draft lists its additions.
+ * ./check.sh --update-abi. No version raise while 0.3 is untagged (card
+ * X2). Under Q1's a, Carrottus's own draft (S50) lists its additions.
  *
  * ===========================================================================
  * 12. Tests (C through the public API; rabbittustests on Metal under its
@@ -647,12 +881,24 @@
  *    radius on the screen within half a texel of the analytic, no texel
  *    across the limb out of order (no speckle), the scaled scene's texels
  *    within 1%.
- * 9. test_atmosphere_shell_point_light: a star as a point light 1e3 radii
- *    off on each side of two worlds: each world's lit side faces it.
+ * 9. test_atmosphere_shell_placed_light: a star as a placed directional
+ *    light 1e3 radii off between two worlds: each world's lit side faces
+ *    it; a placed light inside a shell refused. Pending
+ *    (RBT_RESULT_NOT_IMPLEMENTED) until item 58 is built; with directional
+ *    lights alone until then: a point light and a spot light named by a
+ *    shell, each refused with its index.
  * 10. test_atmosphere_no_sky: a scene atmosphere with no sky-view: the
  *    sky shader's texels those of the same scene with no atmosphere, bit
  *    for bit; a surface's sun light dimmed as with a sky-view, bit for bit
- *    against test_atmosphere_sun_through_air's.
+ *    against test_atmosphere_sun_through_air's; nothing dimmed in the
+ *    frame of its first LIT_ATMOSPHERE and dimmed in the next (the turn-on,
+ *    pass 13.1); then the same atmosphere given a sky and no sky in turn
+ *    over a frame each: the scene's array made once (its views the same
+ *    handles), and test_frame_allocations' scenario of it none of Rend's.
+ * 10a. test_atmosphere_shell_unsupported: a device created without the
+ *    dual-source feature: the command refused at the compile,
+ *    RBT_RESULT_UNSUPPORTED, the feature named; and
+ *    rbtrend_get_optional_gpu_features() naming it.
  * 11. test_atmosphere_none_unchanged (stage 2's) and every lit and sky
  *    test: the same pixels with no shell recorded.
  * 12. test_atmosphere_shell_measure (RABBITTUSTESTS_MEASURE, Release,
@@ -662,6 +908,12 @@
  * 13. test_frame_allocations with shells drawn: none of Rend's; the
  *    destroyed-handle tests (make_destroyed_tests.py) with a shell's
  *    destroyed atmosphere; the misuse harness regenerated from abi.txt.
+ * The build: S50 built and tested first; then this on Metal under its
+ * validation (warnings fatal), Debug and Release, and under -asan and
+ * -tsan; check.sh's abi, struct-bases, plain-data, doxygen and
+ * caller-names; the shader's SPIR-V made at every build (its reflection),
+ * its second output seen in it. D3D12 and Vulkan run in their
+ * sessions (card X25), the measurement there as well.
  */
 
 /* ========================================================================= */
@@ -672,6 +924,13 @@
 #define RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS 128u
 /* [ADDED] Why: the command's step counts are checked against it, as the
  * sky-view's are against RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS. */
+
+/** The most lights an RBTREND_LIT_ATMOSPHERE_SHELL names: the size of its
+ * frozen #RBTREND_LIT_ATMOSPHERE_SHELL::_lights array, as a scene's
+ * atmosphere takes at most two suns. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS 2u
+/* [ADDED] Why: `_light_count` is checked against it, and the array's size
+ * is written with it, so no 2 stands alone at a point of use (pass 10.1). */
 
 /**
  * @brief An atmosphere's shell drawn from where the eye is, by
@@ -688,18 +947,22 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
 	rbtrend_atmosphere _atmosphere;
 	/** Its centre in the scene's space this frame: finite. */
 	float _center[3];
-	/** How many of #_lights light it: 0 to 2. 0: its air is dark, its
+	/** How many of #_lights light it: 0 to
+	 * RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS. 0: its air is dark, its
 	 * ground black, and it still dims what is behind it (a world's night). */
 	uint32_t _light_count;
 	/**
 	 * Its lights, by their places in the scene's light list
-	 * (rbtrend_lit_scene_set_lights()): each a directional or a point
-	 * light. A directional light's direction and radiance are used as they
-	 * are; a point light's direction from the centre towards it and its
-	 * radiance at the centre (a star, far from the shell against its
-	 * radius). Entries past #_light_count are not read.
+	 * (rbtrend_lit_scene_set_lights()): each a directional light
+	 * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL) or a placed one
+	 * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED). A directional light's
+	 * direction and radiance are used as they are; a placed one's taken at
+	 * the centre (towards its place, by its fall-off: a star, far from the
+	 * shell against its radius; its place must be outside the shell's top
+	 * sphere). A point or spot light is refused. Entries past #_light_count
+	 * are not read.
 	 */
-	uint32_t _lights[2];
+	uint32_t _lights[RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS];
 } RBTREND_LIT_ATMOSPHERE_SHELL;
 
 /* ========================================================================= */
@@ -731,8 +994,11 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
  * sky-view sizes 0): the sky shader draws as with no atmosphere, the suns'
  * discs undimmed; each of the first sun_count directional lights still
  * reaches a surface through the transmittance. Refused: one sky-view size
- * 0 and not the other; a volume without a sky-view." And its Memory line:
- * "with no sky, the transmittance's layer only."
+ * 0 and not the other; a volume without a sky-view. The sky-view's steps
+ * are checked as ever, and not read." And its Memory line: "with no sky,
+ * two layers of the transmittance table's size (the first unread); an
+ * array the scene already holds that is as large is kept, so switching an
+ * atmosphere between a sky and none makes nothing."
  *
  * RBTREND_COMMAND_LIT_ATMOSPHERE's comment gains: "For a scene whose
  * atmosphere has no sky, copies its transmittance table only; the scene
@@ -756,8 +1022,9 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
  *	 * at the projection's far value holds none, whatever its far plane), in
  *	 * `_min_steps` to `_max_steps` steps, more for a longer ray (the most
  *	 * at the shell's longest chord, 2 sqrt(top^2 - bottom^2)); the light it
- *	 * gathers from the shell's lights (Hillaire's model, with its
- *	 * atmosphere's two tables) is added and what is behind dimmed by its
+ *	 * gathers from the shell's lights (directional, or placed and taken
+ *	 * at its centre; RBTREND_LIT_ATMOSPHERE_SHELL), by Hillaire's model with its
+ *	 * atmosphere's two tables, is added and what is behind dimmed by its
  *	 * transmittance, per channel. Where the ray meets the ground sphere and
  *	 * no surface is drawn, the medium's ground is drawn there, opaque, lit
  *	 * by the lights through the air. A texel the ray doesn't reach in the
@@ -784,8 +1051,10 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
  *	 * RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS. `_shells` copied at the send.
  *	 *
  *	 * The frame's order: after the lit surfaces and LIT_REFLECT, before the
- *	 * transparent surfaces and the tone map. [Under Q1's a:] Needs
- *	 * CRGPU_FEATURE_DUAL_SOURCE_BLEND on the device: refused with
+ *	 * transparent surfaces and the tone map. Needs Carrottus GPU's
+ *	 * dual-source blending feature on the device (card S50; its name that
+ *	 * draft's, CRGPU_FEATURE_DUAL_SOURCE_BLEND here), which
+ *	 * rbtrend_get_optional_gpu_features() names: refused with
  *	 * RBT_RESULT_UNSUPPORTED at the compile without it.
  *	 *
  *	 * It binds pipelines and sets of its own, as BLOOM does.
@@ -820,9 +1089,8 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
 /* ========================================================================= */
 
 /*
- * No struct type (the shell is a frozen value), no result code. The
- * version: RABBITTUS_VERSION_MINOR 3 -> 4, once, shared with any other
- * draft built in the same session.
+ * No struct type (the shell is a frozen value), no result code. No
+ * version raise while 0.3 is untagged (card X2).
  */
 
 /*
@@ -830,11 +1098,15 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
  * Questions for the user (card A55; each with a recommendation)
  * ---------------------------------------------------------------------------
  *
+ * Every question decided 2026-11-17 as recommended (Q1a to Q5a), with
+ * the corrections in the head.
  * Q1. Coloured transmittance over what is behind a shell: a, dual-source
- *     blending, Carrottus GPU's draft first (recommended); b, a copy of the
- *     shell's bounds and a write; c, grey (the mean). Section 5.
- * Q2. A shell's lights: a, the scene's lights by index, a point light's
- *     direction and radiance at the centre (recommended); b, directions and
+ *     blending, Carrottus GPU's draft first (recommended; decided, card
+ *     S50); b, a copy of the shell's bounds and a write; c, grey (the
+ *     mean). Section 5.
+ * Q2. A shell's lights: a, the scene's lights by index, a far light's
+ *     direction and light taken at the centre (recommended; decided, the
+ *     far light a placed directional light, card L78); b, directions and
  *     radiances given per shell; c, the scene's first directional lights,
  *     as inside. Sections 3, 9F.
  * Q3. A world's ground seen from outside its shell: a, lit through its air

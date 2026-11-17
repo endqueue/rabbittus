@@ -4,9 +4,13 @@
  * and read back (card A54, which names the session that asked; over
  * carrottus/crgpu_astc_draft.h, card S48, which it needs approved first).
  *
- * DRAFT, 2026-11-16, version 8 (version 1, then seven critique passes,
- * each fixed before the next: the revision notes below), for the user's
- * approval. Written unattended
+ * DRAFT, 2026-11-16, version 9 (version 1, then seven critique passes,
+ * each fixed before the next, then a third round of seven: the revision
+ * notes below), for the user's approval. APPROVED by the user 2026-11-17
+ * (every question as recommended: Q1a to Q5a), with one correction: no
+ * version is raised for it while Rabbittus' 0.3 is untagged (card X2);
+ * amended by the third critique round, 2026-11-17, at the user's asking.
+ * Written unattended
  * on the Mac (Apple M5 Pro) against include/render/rbtrendimages.h,
  * rbtrendcontext.h ("Texture updates and clears", "Results and errors"),
  * src/render/rbtrendimages.cpp and rbtrendimages_internal.hpp, as read on
@@ -26,6 +30,84 @@
  * ---------------------------------------------------------------------------
  *
  * 2026-11-17: caller names removed (check.sh caller-names), meaning kept.
+ *
+ * Third round, 2026-11-17, at the user's asking: passes 8 to 14 (the
+ * workspace's seven lenses, each fixed before the next). Version 9.
+ *
+ * Pass 8 (general purpose). Checked: no game, genre or caller is named
+ * (the first caller is "a game engine's renderer", a card number its
+ * record); the call takes any format, so uncompressed cubes and arrays
+ * gain from it as much as cooked textures; nothing assumes a flat or a
+ * round world. Nothing changed.
+ *
+ * Pass 9 (industry standard). Checked against Unity's
+ * LoadRawTextureData, Unreal's RHIUpdateTexture2D, bgfx, Filament, wgpu's
+ * write_texture and NVRHI's writeTexture (Hazel's), as pass 5 left them:
+ * Rend's two shapes (a region of a level, a whole range of levels) are
+ * theirs; KTX2's supercompression (zstd, Basis) stays the caller's to
+ * undo before the call, as every one of them leaves it. Nothing changed.
+ *
+ * Pass 10 (the C API). 1. rbtrend_texture2d_update_levels()'s @return
+ * listed `levels` NULL before `base_mip`, out of parameter order. Changed:
+ * the checks are listed and made in parameter order (the texture; the
+ * queue, then the instance's; base_mip; base_layer; layer_count 0, then
+ * past the texture; levels NULL; level_count 0, then past the texture;
+ * the format's texel block; then each level's data and size in index
+ * order), each range check written by subtraction so `base + count` can't
+ * wrap. 2. RBTREND_TEXTURE_LEVEL_DATA: frozen, plain, its pointer's
+ * lifetime said; nothing changed.
+ *
+ * Pass 11 (data and allocation). 1. Pass 3's bound, "16384^2 texels,
+ * 2048 layers: under 2^40 bytes", is wrong twice: a 2D image may be 32768
+ * a side since Carrottus' largest image sizes (card S33; the M5 Pro
+ * reports 32768), and 16384^2 texels of 16 bytes in 2048 layers are
+ * already 2^43. Re-derived: 32768^2 texels x 16 bytes x 2048 layers is
+ * 2^45, a full chain's 4/3 and each row padded to 256 bytes keep it under
+ * 2^46, far from 2^64; the guard and its "no input reaches it" stand, the
+ * number changed. 2. Checked: one staging for the whole call, one copy
+ * per level and layer, none allocating in Carrottus; the frame test named.
+ *
+ * Pass 12 (threads and errors). 1. Carrottus' two copies return a result
+ * after S48 (its Q6), and Rend's recording callbacks ignore it today (the
+ * lambdas in rbtrendimages.cpp's upload and readback). Rend's own checks
+ * come first, so a refusal there is a disagreement between the two
+ * layers' checks, never the caller's input: it is returned all the same,
+ * as Carrottus' code through rbtrend_fail_cr naming the level and layer,
+ * after the batch's closing transitions are recorded (the batch stays
+ * balanced, nothing else in it). Changed under "Not in a header"; no test
+ * can reach it through the C API, said. 2. Checked: messages in Rend's
+ * developer English per call (card A2).
+ *
+ * Pass 13 (the platforms and the code as built: rbtrendimages.h,
+ * rbtrendimages.cpp, rbtrendimages_internal.hpp, and S48's draft as
+ * amended). 1. rbtrend_immediate_on_texture() moves one level of one
+ * layer, from that subresource's tracked layout: "one transition of the
+ * whole range" can't be one barrier where the range's subresources were
+ * found in different layouts. Changed: a range form moves each run of
+ * subresources that share a tracked layout with one barrier (one for the
+ * whole range of a texture nothing has written yet), and back. 2.
+ * rbtrend_format_scalar_type() already gives every BC format below 100
+ * float (by its default) and their TYPELESS forms none; only the 28 ASTC
+ * values, at 1000 and on, fall into its range test. Changed: "names the
+ * 28 ASTC formats float". 3. S48's amended copies (its pass 9 and 13)
+ * take a row pitch that is a multiple of
+ * crgpu_image_get_buffer_copy_row_pitch_alignment() and a layer step that
+ * is a multiple of the offset alignment: Rend's pitch is
+ * crgpu_image_get_buffer_copy_size()'s, which always is, and it records
+ * one copy per layer, so both hold. Said. 4. S48's texel block now
+ * refuses the planar formats (NV12 and the rest), which
+ * rbtrend_texel_bytes() took at a plane's guessed bytes: update and
+ * readback of one are now RBT_RESULT_UNSUPPORTED. No caller makes one;
+ * listed under the breaks.
+ *
+ * Pass 14 (tests, records, the build). 1. The sampling test's BC4 and
+ * BC5 "endpoints 0 and 255" are right for the UNORM forms only: the SNORM
+ * forms' constant blocks are 0x81 (-1.0, drawn as 0) and 0x7F (1.0).
+ * Changed; BC2, BC3 and BC6H named as left to the byte test. 2. Added:
+ * update_levels on a cube texture of which only some faces were written
+ * before (the range's layouts differ). 3. No version raise (card X2;
+ * version 8's "up by one" superseded). The session card A54 names builds it after S48 on
+ * the Mac; D3D12 and Vulkan owed in their sessions.
  *
  * Pass 1 (wrong, missing, more than the need). 1. The partial-update test
  * named "a 12 x 12 texture in ASTC 5x4", whose level 0 isn't whole blocks
@@ -196,10 +278,14 @@
  *    relied on RBT_RESULT_UNSUPPORTED for one (none does) gets a copy.
  *  - rbtrend_texture2d_resize(): refuses a size not whole blocks for a
  *    block-format texture.
- *  - RABBITTUS_VERSION_MINOR up by one when built, unless the building
- *    session finds it already raised and untagged since (card X2; L66's
- *    Rend anchor may have raised it to 0.4 first). ./check.sh --update-abi
- *    lists the addition; rabbittustests' make_destroyed_tests.py is rerun.
+ *  - rbtrend_texture2d_update() and rbtrend_texture2d_get_data() refuse a
+ *    planar format (RBT_RESULT_UNSUPPORTED, "format %d has no texel
+ *    block"), whose rows they took at a plane's guessed bytes before
+ *    (pass 13). No caller makes one.
+ *  - No version raise: Rabbittus' 0.3.0 is untagged, so this lands in it
+ *    (card X2, the approval's correction; version 8's "up by one"
+ *    superseded). ./check.sh --update-abi lists the addition;
+ *    rabbittustests' make_destroyed_tests.py is rerun.
  *
  * New handles: none. New struct types: none (the level struct is frozen,
  * an array element, with no base). Stored formats: none (Rend reads no
@@ -318,7 +404,10 @@
  *    0 is 4 x 2 blocks; level 2, 5 x 2 texels, one block, written with a
  *    height of 2 that reaches the bottom edge), each read back whole:
  *    equal. update_levels of a sub-range (levels from 1, layers 1 and 2 of
- *    3) leaves level 0 and layer 0 as they were (pass 6). On D3D12 (the
+ *    3) leaves level 0 and layer 0 as they were (pass 6). update_levels of
+ *    a cube's six faces after faces 0 and 3 alone were written by
+ *    update(), so the range's layouts differ, read back equal and sampled
+ *    with no validation message (pass 14). On D3D12 (the
  *    Windows session) a level of 4 BC7 blocks a row, 64 bytes, is staged at
  *    the 256-byte pitch and read back equal.
  *  - test_block_texture_sampling: what the GPU decodes is what was
@@ -327,13 +416,15 @@
  *    BC1 with both endpoints 0x0000 or both 0xFFFF and every index 0 (equal
  *    endpoints are BC1's three-colour mode, whose index 3 is transparent
  *    black: not used), BC7 mode 6 with every
- *    endpoint 0 or 127 and its p-bit, BC4 and BC5 endpoints 0 and 255,
+ *    endpoint 0 or 127 and its p-bit, BC4 and BC5 UNORM endpoints 0 and
+ *    255 (SNORM: 0x81 and 0x7F, -1.0 and 1.0, drawn as 0 and 255),
  *    an ASTC LDR void-extent block of 0x0000 or 0xFFFF per channel), a
  *    different colour per level, drawn into an RGBA8 target through a
  *    nearest sampler at each level's LOD and read back: each pixel exact.
  *    sRGB forms of the same give the same 0 and 255. Mid values are left
  *    to the byte test above, since BC1's and BC7's expansion to 8 bits may
- *    round differently between GPUs.
+ *    round differently between GPUs, and BC2, BC3 and BC6H to it whole
+ *    (pass 14).
  *  - test_block_texture_contract: each refusal once, with its message and
  *    nothing recorded: a BC and an ASTC texture on an instance over a
  *    device created without each bit (a second device the test makes on
@@ -415,8 +506,9 @@
  *           RBT_RESULT_INVALID_ARGUMENT as before, and for a region's
  *           offset, width or height off the block (Q5 a);
  *           RBT_RESULT_UNSUPPORTED if the texture's format has no texel
- *           block (crgpu_format_get_texel_block(): R1_UNORM and the video
- *           formats), where it was "no whole number of bytes to a texel";
+ *           block (crgpu_format_get_texel_block(): R1_UNORM and the
+ *           planar formats, S48 as amended), where it was "no whole number
+ *           of bytes to a texel";
  *           RBT_RESULT_OUT_OF_MEMORY; or the code for Carrottus GPU's
  *           result if the copy couldn't be staged or recorded.
  *
@@ -478,9 +570,12 @@ typedef struct RBTREND_TEXTURE_LEVEL_DATA {
  * clears"): every level is staged at once, in the frame's transient memory
  * where the instance has room for all of it, and in one buffer of the
  * call's own where it hasn't, each row padded to the backend's row pitch
- * (crgpu_image_get_buffer_copy_size()) by Rend; then one copy per level
- * and layer is recorded, between one transition of the whole range into
- * CRGPU_IMAGE_LAYOUT_TRANSFER_DST and one back. Each level is left in the
+ * (crgpu_image_get_buffer_copy_size()) by Rend and each copy's start to
+ * the copy offset alignment; then one copy per level and layer is
+ * recorded, between the range's transition into
+ * CRGPU_IMAGE_LAYOUT_TRANSFER_DST and its transition back: one barrier per
+ * run of the range's subresources found in the same layout (one for the
+ * whole range of a texture nothing has written yet). Each level is left in the
  * image layout it was found in, as rbtrend_texture2d_update() leaves it;
  * a level nothing had written ends in
  * CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY, and a list compiled against it
@@ -497,8 +592,9 @@ typedef struct RBTREND_TEXTURE_LEVEL_DATA {
  * instance (RBTREND_ENTER), as rbtrend_texture2d_update(); a refused call
  * records and stages nothing. The staging's size, each level's rows padded
  * to the pitch and each copy's offset aligned, is worked out with overflow
- * checked; no texture the device can make reaches the bound (its levels
- * are under 2^40 bytes), so the check is a guard no input can trip.
+ * checked; no texture the device can make reaches the bound (its levels,
+ * padded, are under 2^46 bytes: 32768^2 texels of 16 bytes in 2048 layers
+ * is 2^45), so the check is a guard no input can trip.
  *
  * Why: Q1 a. A texture prepared off the device arrives as whole levels;
  * this uploads them in one call, one staging and one transition, where
@@ -526,17 +622,23 @@ typedef struct RBTREND_TEXTURE_LEVEL_DATA {
  *                        texture's last level.
  * @param[out] out_error  Why it failed, when it did. May be NULL.
  *
- * @return RBT_RESULT_OK if every copy was recorded;
- *         RBT_RESULT_INVALID_ARGUMENT if @p texture, @p queue or @p levels
- *         is NULL, @p queue is not the instance's, @p base_mip or
- *         @p base_layer doesn't exist, @p layer_count or @p level_count is
- *         0 or runs past the texture, a level's `data` is NULL, or a
- *         level's `data_size` isn't its bytes times @p layer_count (the
- *         message names the level and both sizes); RBT_RESULT_UNSUPPORTED
- *         if the texture's format has no texel block;
- *         RBT_RESULT_OUT_OF_MEMORY if no staging can be had; or the code for Carrottus GPU's result if a
- *         copy couldn't be staged or recorded. Checked in that order, the
- *         levels in index order.
+ * @return RBT_RESULT_OK if every copy was recorded; otherwise, checked in
+ *         this order (parameter order, pass 10), each its own check and
+ *         message: RBT_RESULT_INVALID_ARGUMENT if @p texture is NULL (or
+ *         destroyed, in Debug), @p queue is NULL, @p queue is not the
+ *         instance's, @p base_mip doesn't exist, @p base_layer doesn't
+ *         exist, @p layer_count is 0, @p layer_count runs past the
+ *         texture's layers, @p levels is NULL, @p level_count is 0, or
+ *         @p level_count runs past the texture's levels (each range checked
+ *         by subtraction, so no sum wraps); RBT_RESULT_UNSUPPORTED if the
+ *         texture's format has no texel block; then, level by level in
+ *         index order, RBT_RESULT_INVALID_ARGUMENT if a level's `data` is
+ *         NULL or its `data_size` isn't its bytes times @p layer_count (the
+ *         message names the level and both sizes);
+ *         RBT_RESULT_OUT_OF_MEMORY if no staging can be had; or the code
+ *         for Carrottus GPU's result if a copy couldn't be staged or
+ *         recorded (a copy's refusal named by its level and layer, pass
+ *         12).
  */
 RBT_RESULT rbtrend_texture2d_update_levels(
 	rbtrend_texture2d texture,
@@ -560,14 +662,24 @@ RBT_RESULT rbtrend_texture2d_update_levels(
  *   (S48's rule); the readback the same the other way.
  * - rbtrendimages.cpp: rbtrend_texture2d_update_levels() over the same
  *   staging (rbtrend_upload_staging_begin, sized for every level at once)
- *   and one rbtrend_immediate_on_texture() over the range.
+ *   and a range form of rbtrend_immediate_on_texture()
+ *   (rbtrendimages_internal.hpp), which moves each run of subresources
+ *   found in one tracked layout with one barrier and writes each one's
+ *   tracked layout after (pass 13).
+ * - rbtrendimages.cpp: the recording callbacks read the copies' CR_RESULT
+ *   (S48's Q6), and the first refusal becomes the call's result through
+ *   rbtrend_fail_cr, after the closing transitions are recorded (pass 12);
+ *   for update() and get_data() as for the new call. The pitch passed is
+ *   crgpu_image_get_buffer_copy_size()'s, a multiple of S48's row pitch
+ *   alignment, and each copy is one layer, so S48's layer rule holds.
  * - rbtrendimages.cpp: RBT_PLAIN_DATA(RBTREND_TEXTURE_LEVEL_DATA) beside
  *   the call, the array it walks (check.sh plain-data's list).
- * - rbtrendimages_internal.hpp: rbtrend_format_scalar_type() names every
- *   BC and ASTC format a float format (they are sampled as floats) before
- *   its range test, which takes everything from CRGPU_FORMAT_AYUV up for
- *   a video format and would otherwise take ASTC's 1000 and on for one
- *   (S48's pass 2).
+ * - rbtrendimages_internal.hpp: rbtrend_format_scalar_type() names the 28
+ *   ASTC formats float (they are sampled as floats) before its range test,
+ *   which takes everything from CRGPU_FORMAT_AYUV up but B4G4R4A4 for a
+ *   video format and would otherwise take ASTC's 1000 and on for one
+ *   (S48's pass 2). The BC formats, below 100, are float already by its
+ *   default and their TYPELESS forms none (pass 13).
   *
  * ---------------------------------------------------------------------------
  * Records when built (pass 7)

@@ -59,6 +59,82 @@ and triangulation).
   `offset_moves`: a square moved in past half its width came out as a 2x2
   square, not nothing (see "Offset: edges that go", below).
 
+## rbtmathnoise: noise from double places (card A56, decided 2026-11-17)
+
+Decided 2026-11-17 with you: `rbtmath_noise_draft.h` approved, every
+question as recommended: OpenSimplex2 for simplex (Q1a); gradient
+(improved Perlin) kept beside it, the kind that tiles (Q2a); an optional
+analytic gradient on every kind, refused for ERODED (Q3a); warping a call
+of its own with Jacobians (Q4a); 64-bit cells and a 24-bit fraction (Q5a);
+a kind's bits frozen once released, a new algorithm a new kind (Q6a);
+cellular exact at any jitter (Q7a); no 4D now (Q8a). No version raise
+while 0.3 is untagged (card X2). Built as `math/rbtmathnoise.h` (the
+meta repo's `ROADMAP.md` names the session), its bits recorded on the M5
+Pro for Windows and Linux to match. Third-party
+code it is compared with (FastNoise Lite and the like) is cloned, if at
+all, into the workspace's `.deps/`, never into a project (the user,
+2026-11-17).
+
+**Amended by the third critique round, 2026-11-17 (the draft's version
+3, approval kept):**
+- **Section 5a is the definition:** every kind's evaluation in written,
+  parenthesised float order, every constant a hex literal, the gradient
+  tables in index order, the turns, kernels, cellular search and fractal
+  sums; only the four scale constants are left for the build to find and
+  write into the header, in hex, before any bits are recorded.
+- **`RBTMATH_NOISE_ORIENTATION`** (UNKNOWN 0 refused for 3D simplex, EVEN
+  1, Y_UP 2, Z_UP 3), the desc's last field, read by 3D simplex only: EVEN
+  on a sphere or in a volume, the up axis for a flat world's 3D noise.
+- **A finding against OpenSimplex2's reference:** its 3D sums two points
+  of each cubic lattice, but up to four of one lattice (six in all) lie
+  inside its kernel, so it drops kernel tails and steps by up to 0.0055
+  (0.0046 off the full sum) where its choice of point changes (measured
+  in a throwaway program). The draft sums every point inside the kernel
+  (the 8 corners of each lattice's cube, 16 candidates), so its bits are
+  deliberately **not** OpenSimplex2's reference bits; lattice, turn,
+  gradients and kernel are kept. Its test 13 confirms the finding first
+  (a brute-force sum over every lattice point within 3 cells, and
+  continuity across the reference's cut planes); if the finding does not
+  hold, the build stops and cards it.
+- Octave seeds `s_i = H(seed ^ X_i)` and a warp channel's `seed ^ Y_a`
+  (fixed hashes; the old additive seeds lined one world's octaves up with
+  another's); a cell's value from its feature's id; RIDGED's sign 0 below
+  2^-100; `FLT_EVAL_METHOD == 0` asserted; the warp's refusal before
+  anything is written; the finest octave's frequency checked finite; the
+  octave record 56 bytes with three 64-bit periods; 3D simplex about 20
+  to 25 ns an octave, a 33 x 33 chunk of four layers and a warp 0.65 to
+  0.9 ms a core (estimates). Test 12 holds the coarser as the finer's sum
+  stopped early (the coarser plus the last term equal to the finer),
+  never a subtraction.
+- **Contraction:** the guard must be the compiler's ID, not `MSVC`
+  (clang-cl contracts by default; MSVC 17.0 or later): card A63, which
+  also covers this repository's existing bit-exact sources.
+
+## Deterministic elementary functions (card A61, open)
+
+Found 2026-11-17 by a caller's terrain draft's third critique round: a
+tangent warp needs tan and atan, a crater's size law exp2 and log2, and
+libm's bits differ between Apple's libm, glibc and the MSVC runtime.
+Rabbittus Math allows floor and sqrt alone from libm; `rbtmathmedium`
+keeps a private exponential for that reason. Card A61 recommends a small
+public draft of its own (tan, atan and atan2, exp2, log2, in float and
+double where needed, each defined by its written evaluation with hex
+constants and contraction off, its bits recorded and frozen at 1.0 as
+the noise's are, an error bound stated against a high-precision
+reference), the medium's exponential moved onto it. A prerequisite of
+that caller's build; a draft first, with seven critique passes.
+
+## Cloud density (card A57, decided 2026-11-17)
+
+Decided 2026-11-17 with you: a cloud layer's density (coverage from a
+map, types' height profiles, erosion over the baked noise) is Rabbittus
+Math's, beside `rbtmathmedium.h`, so a caller can ask the density at a
+place on the CPU and agree with what Rend draws; the noise volumes are
+baked from `rbtmathnoise` on the caller's jobs. Its layers' bounds a
+spherical shell or a flat slab. To be drafted with Rend's clouds (its
+item 55). Card A59 (fog near the eye) may add a height fog's and a fog
+volume's density here too.
+
 ## rbtmathbvh: shapes and an instance BVH changed in place
 
 **Drafted 2026-11-05, revised 2026-11-06 after two reviews, approved by the

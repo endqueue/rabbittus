@@ -5135,6 +5135,16 @@ count changes each frame. For the user: card it, or say go.
 
 ### 52. Atmospheric scattering round a sphere (card L62, decided 2026-11-16)
 
+**Stage 4 decided 2026-11-17 with you (card A55), every question as
+recommended:** `rbtrend_atmosphere_space_draft.h` approved:
+`RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS` (51) over an array of frozen
+shells, a sky-view size of 0 meaning no sky, coloured transmittance by
+dual-source blending (waiting on Carrottus GPU's card S50), a shell's
+lights by the scene's index (a placed directional light's direction at
+the shell's centre, item 58), the ground lit through its air from outside.
+Built in a session of its own, Rend first, measured in Release at 1080p
+and 1440p.
+
 Decided 2026-11-16 with the user: a, Hillaire's model ("A Scalable and
 Production Ready Sky and Atmosphere Rendering Technique", EGSR 2020), the
 one Unreal's SkyAtmosphere uses, for any caller. What Rend takes: a
@@ -5219,12 +5229,219 @@ to idle: the tables 1.10 ms; the sky-view and its copy 0.24 to 0.26 ms;
 with the aerial volume (32 x 32 x 32, a step a slice) 0.94 ms; the
 environment's fill from it 4.2 ms (LIT_SKY's own fill's cost).
 
+**Stage 4 amended by the third critique round, 2026-11-17 (the draft's
+version 9, approval kept):**
+- A shell's lights are `DIRECTIONAL` or `DIRECTIONAL_PLACED` (item 58)
+  only; point and spot lights are refused for shells (they fade at range
+  and are tile-culled), narrowing Q2a's wording as item 58 reads it. At
+  most `RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS` a shell; a placed light
+  whose place is inside a shell's top sphere refused when compiled.
+- The turn-on fix split in two internal flags: ATMOSPHERE (set after the
+  first transmittance copy) and SKY (set after the first non-zero
+  sky-view fill, gating the lit atmosphere's sky and the sun disc's
+  dimming); the sky-view pass skipped at size 0, and a scene with no sky
+  keeps an adequate held array (the scene's array remade only on a size
+  change).
+- The pass's layout as the reflection pass's (LIT_REFLECT's): set 0 the
+  scene's own, set 1 the medium's values, set 2 the depth, transmittance
+  and multiple-scattering views; a shell's values 96 bytes of push
+  constants. `atmosphere_march` (in `rbtrend_atmosphere_pass.slang`) takes
+  the suns as arguments. The ray-sphere roots as min and max of q and c/q,
+  the entry rescaled to the top sphere.
+- The blend: colour `X * ONE + dst * SRC1_COLOR`, alpha `ONE, SRC1_ALPHA`,
+  one colour attachment (Carrottus GPU's S50 bit 19 and its limit); dual
+  source named in `rbtrend_get_optional_gpu_features()`, a scene with
+  shells and no feature refused.
+- Tests: a placed light (once item 58 is built; point and spot refused),
+  the turn-on and the array made once, no blend feature refused. The
+  build: S50 first, then Metal.
+
 Found while drafting stage 1 (measured 2026-11-16, M5 Pro, Release,
 `rabbittustests`' `test_lit_sky_measure`): one LIT_SKY fill at 128/32 is
 4.9 to 6.6 ms from submit to idle, Preetham's the same as Hosek and
 Wilkie's, so the prefilter is the cost, not the model. A cheaper fill
 (fewer samples for a smooth sky, or the prefilter spread over frames) is
 Rend's own work, not started.
+
+### 53. A layered lit surface (card L68's Rend half, decided 2026-11-17)
+
+Decided 2026-11-17 with you: `rbtrend_lit_layers_draft.h` approved as
+recommended (Q-L1a: a layered surface of Rend's sharing the lit
+lighting, `lit_shade()` split into its reads and its lighting; Q-L2a: 2D
+texture arrays; Q-L3a: base colour, normal and ORMH a layer; Q-L4a: a
+dithered fade carded, not added). Given a second round of seven critique
+passes, at your asking, for general purpose and industry standard, and
+approved as version 3 (explicit gradients for every read in a branch, the
+normals' blend space, a 48-byte layer block). Its sampler's anisotropy
+above 1 waits on Carrottus GPU's anisotropy bit and limit (card S49): every
+Rend sampler made above 1 on Vulkan is outside Vulkan's rules until then. Its set 1 holds the layered material; set 0
+is untouched. No version raise while 0.3 is untagged (card X2). Built
+after its caller's terrain, its GPU tests first.
+
+**Amended by the third critique round, 2026-11-17 (the draft's version
+4, approval kept):** the split of `lit_shade()` as written couldn't be
+built (`rbtrend_lit_surface.slang` imports the lit material's set 1), so
+the lighting becomes a module of its own, `rbtrend_lit_lighting.slang`
+(in `RABBITTUS_SHADER_MODULES`), importing no material, its surface
+struct gaining transmission, coat, sheen and emission; location 9 is the
+quaternion (the body's rotation, made in the caller's vertex shader from
+its rows, which must be a rotation with no scale), ten locations in all,
+the old duplicate of location 1 removed; `rbtrend_material_get_layer()`
+added; the blend `w' = w * max(a - max(a) + d, 0)`, a zero-weight layer
+dropped (the old formula pulled to equal shares); the layer count in the
+block's row 0, an index past it no layer; set 1 numbered (block 0,
+arrays 1 to 3, sampler 4); the block 784 bytes whatever the count; three
+neutral 1 x 1 sixteen-layer arrays per instance (ORMH's height the byte
+128); fragment sampled images 14 on the layered shader, 15 on the lit,
+against Vulkan's floor of 16. Tests 13 and 14 added.
+
+### 54. A view-model pass: a second pass with its own field of view, depth cleared (card A58, decided 2026-11-17: drafted when wanted)
+
+Asked for by you on 2026-11-17: a draft, when wanted, for drawing chosen
+instances in a second pass with their own field of view and near plane,
+depth cleared between, lit and shadowed with the scene. Card A58 says
+what the draft settles. Not drafted; nothing waits on it.
+
+### 55. Volumetric clouds (card A57, decided 2026-11-17)
+
+Decided 2026-11-17 with you: clouds the Nubis way (tiling 3D noise and a
+coverage map, density from height profiles and erosion, marched) (Q1a);
+the density function Rabbittus Math's, the noise volumes baked from
+Math's noise on the caller's jobs and uploaded, the march, its light and
+its reprojection Rend's (Q2a); quarter resolution with a history of the
+clouds' own, A39's handle (Q4a); a coverage map as a cube map on a sphere
+(Q5a); stages: from under and inside, then from outside the shell, then
+cloud shadows with a binding plan of their own (Q6a). **Q3a, the object,
+as reshaped with you:** `rbtrend_clouds`, an object of its own (its noise
+volumes, coverage maps and history), not part of the atmosphere, and not
+shaped for one kind of world:
+- its layers bounded by a spherical shell or a flat slab, the same object
+  for a round world and a flat level;
+- lit through an atmosphere when the caller gives one, else by the
+  scene's lights alone, so a scene with no atmosphere has clouds;
+- several layers drawn a frame (low and high clouds, a fog-bank layer),
+  an array sent each frame as the atmosphere's shells are;
+- its look entirely the caller's data through Math's density model
+  (coverage, types, profiles, erosion), so overcast, storms, dust or a
+  fog bank are settings, not code;
+- the reduced-resolution march and its history Rend's internals, shared
+  later with item 56's fog.
+To be drafted (Rend's object and Math's density, for approval) after the
+atmosphere's stage 4 is built, and a GPU test of a 3D texture written by
+compute and sampled on three backends first. No version raise while 0.3
+is untagged.
+
+### 56. Volumetric fog near the eye (card A59, decided 2026-11-17)
+
+Opened and decided 2026-11-17 with you, every question as recommended,
+apart from item 55's clouds: a froxel grid fed by a height fog and local
+fog volumes (boxes, spheres, their density from Math's noise and a
+falloff), lit by the scene's lights and their shadows, integrated, applied
+to every surface and to transparents, with a history (Q1a); staged:
+analytic height fog first (its density in Rabbittus Math), then the grid
+with directional lights and local volumes, then point and spot lights and
+transparents (Q2a); fog's density Math's, the grid Rend's (Q3a); shared
+internals with item 55's clouds, each its own public object (Q4a). To be
+drafted; needs the 3D-texture GPU test, A39's history, the transparency
+stage for transparents.
+
+### 57. GPU particles (card L73, decided 2026-11-17)
+
+Decided 2026-11-17 with you: particles simulated on the GPU in compute
+over storage buffers Rend owns (spawn, forces, curl noise from a baked 3D
+texture, collision with the depth buffer, death), sorted in compute for
+blending, drawn as billboards, streaks, ribbons or meshes and lit by the
+lit scene, never read back (Q1a); an effect a fixed set of modules with
+parameters and curves over a particle's life, the caller's data, no
+graph (Q2a); each system's particles relative to an anchor whose
+eye-relative offset is given each frame (Q3a). Needs item 34's indirect
+dispatch (Carrottus GPU's, a draft first), a compute sort, depth reads for
+soft particles. To be drafted, for approval, with its caller's emitter.
+
+### 58. A directional light given a place (card L78, decided 2026-11-17)
+
+Decided 2026-11-17 with you (a, named in Rend's terms after comparing
+Unreal, Unity HDRP, Godot and KSP): `RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED`,
+appended to the light types (the light struct is frozen): a directional
+light whose direction and irradiance are worked out per pixel from a
+source place (an inverse square from a reference distance), its angular
+radius the sun disc's (Unreal's Source Angle, HDRP's angular diameter).
+It keeps everything a directional light carries: its cascades (at the
+large-worlds cascade anchor), the sky's sun disc and colour, traced
+shadows, and the atmosphere's shells (its direction at each shell's
+centre, card A55's Q2a). Without a place a directional light is exactly
+today's. Not a sphere light: an engine's sphere or point light has a
+range, cube shadows and no sun's role. Needed where a light's source is
+near the scene against its extent (a moon lit from a few thousand
+kilometres off is 14 degrees wrong under one fixed direction). A draft
+first, read with A55's.
+
+**Open questions for its draft** (from the third critique round of A55's
+and the large-worlds anchor's drafts, 2026-11-17):
+- Does a placed light count among `RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS` and
+  in the scene's sun count, as a directional light does?
+- The sky-view's and transmittance tables' sun direction: per sun, at
+  which place (the eye's, the shell's centre)?
+- The reference-distance rule: the irradiance given at what distance, and
+  what a place nearer than it means.
+- A place inside a shell's top sphere: refused (A55's draft refuses it
+  when a shell names the light).
+- Along which direction its cascades are fitted: at the eye (a parallax
+  crawl as the eye moves) or at a fixed place (off by the distance over
+  the source's distance). Card A60 (open) covers the slide of cascades
+  under any turning light, a placed one among them.
+
+### 59. Block-compressed textures: created, uploaded with their levels, read back (card A54, decided 2026-11-17)
+
+Decided 2026-11-17 with you: `rbtrend_block_formats_draft.h` approved,
+every question as recommended: `rbtrend_texture2d_update_levels()` writing
+whole levels of a range of layers in one call, one staging and one
+transition (Q1a); a pointer and a size per level, so a file's levels are
+passed in place (Q2a); the device's block-format feature checked in
+Rend's create with its own message (Q3a); block formats read back as they
+are written (Q4a); a partial region in texels, block-aligned or reaching
+the level's edge (Q5a). Every pitch and offset read from Carrottus GPU's
+block query and copy layout; the scalar-type range test fixed so a format
+numbered 1000 or more is never taken for a video one. After Carrottus
+GPU's block formats (card S48). No version raise while 0.3 is untagged.
+
+**Amended by the third critique round, 2026-11-17 (the draft's version
+9, approval kept):** `update_levels`' results in order, its ranges by
+subtraction, an overflow bound of 2^45 (S33's 32768); every copy's
+`CR_RESULT` read, the first refusal reported through `rbtrend_fail_cr`
+after the opening transitions are closed; a range of subresources
+transitioned with one barrier per run of the same layout (today
+`rbtrend_immediate_on_texture` goes per subresource); updates and
+readback of planar formats refused (a listed break); the scalar fix names
+the 28 ASTC formats only; BC4 and BC5 SNORM's constants 0x81 and 0x7F;
+the cube test's faces in different layouts. Its copies use Carrottus
+GPU's new row-pitch alignment query (S48's third round).
+
+### 60. A material's binding sets kept per frame in flight (card L79, decided 2026-11-17)
+
+Decided 2026-11-17 with you (a now, b when A15's item 33 is built): a
+material keeps one binding set per frame in flight, and a changed
+resource (a map swapped to another texture) is written into the set no
+frame in flight reads (`crgpu_device_update_descriptor_sets`), so a swap
+allocates nothing after the material's first frames; today it builds the
+whole set again, about seven allocations a swap. Rend's internals; a draft
+only if what `rbtrendmaterial.h` says a rebuild costs changes. Its test: a
+swap a frame in the no-allocation tests, at zero. Bindless (item 33)
+supersedes it where it exists.
+
+### 61. Writing some bytes of a buffer while submitted work reads others (card A62, open)
+
+Found 2026-11-17 by a caller's terrain draft's third critique round:
+`rbtrendbuffers.h` forbids any write to a buffer while submitted work that
+uses it has yet to finish, so a large `RBTREND_BUFFER_WRITES_MANY` pool
+drawn every frame (slots written as they are retired) can't be written at
+all, though no unfinished frame reads the slot written. Per-frame copies
+would hold frames-in-flight copies of the pool. The staging copy and the
+device copy are already per range. Card A62 asks for the rule by bytes,
+recommending that a write name the last submission that may read those
+bytes, refused in every build if it hasn't finished. A Rend draft first
+(seven critique passes), approved and built before the caller's renderer
+half that needs it.
 
 ## Suggested order
 
