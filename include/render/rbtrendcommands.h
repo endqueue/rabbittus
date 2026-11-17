@@ -69,6 +69,9 @@ typedef struct rbtrend_blas_t *rbtrend_blas;
  * RBTREND_COMMAND_BUILD_TLAS and traced by RBTREND_COMMAND_LIT_SHADOW_MASK and
  * RBTREND_COMMAND_LIT_PATH_TRACE. */
 typedef struct rbtrend_tlas_t *rbtrend_tlas;
+/** A medium in a sphere's shell and its tables (rbtrendatmosphere.h),
+ * rebuilt by RBTREND_COMMAND_ATMOSPHERE_TABLES. */
+typedef struct rbtrend_atmosphere_t *rbtrend_atmosphere;
 
 /**
  * @brief What RBTREND_COMMAND_BUILD_BLAS does to its BLAS
@@ -1108,6 +1111,43 @@ enum {
 	 * It binds pipelines and sets of its own, as BLOOM does.
 	 */
 	RBTREND_COMMAND_LIT_REFLECT                 = 47,
+	/**
+	 * Rebuilds `_atmosphere`'s tables (rbtrendatmosphere.h), outside a
+	 * pass, where its medium changed since they were last built
+	 * (rbtrend_atmosphere_set_medium()): its transmittance table, then its
+	 * multiple-scattering table from it. Records nothing otherwise, so it is
+	 * sent every frame at no cost. Recorded before any LIT_ATMOSPHERE of a
+	 * scene that draws it, in the same list or an earlier one.
+	 *
+	 * It binds pipelines and sets of its own, as BLOOM does.
+	 */
+	RBTREND_COMMAND_ATMOSPHERE_TABLES           = 48,
+	/**
+	 * Works out `_scene`'s sky-view table (and, where its atmosphere asks
+	 * for one, its aerial volume) for its view, outside a pass, after the
+	 * scene's view, lights and atmosphere are set for the frame
+	 * (rbtrend_lit_scene_set_atmosphere(), rbtrendlit.h), from its
+	 * atmosphere's tables. Once a frame for a scene that draws an
+	 * atmosphere; a scene drawn with none since its view changed reads
+	 * the tables of the last one, a frame stale. Nothing for a scene with
+	 * no atmosphere.
+	 *
+	 * It binds pipelines and sets of its own, as BLOOM does.
+	 */
+	RBTREND_COMMAND_LIT_ATMOSPHERE              = 49,
+	/**
+	 * Fills `_environment` (rbtrendlit.h) from `_scene`'s sky-view table,
+	 * outside a pass, after the scene's LIT_ATMOSPHERE: each texel of its
+	 * radiance cube the sky seen along its direction, the cube in the frame
+	 * the scene's ambient light names (RBTREND_LIT_AMBIENT's
+	 * `environment_rotation`), then prefiltered as LIT_SKY's fill is. As
+	 * costly: for a sky that has moved enough, not every frame. A scene
+	 * whose sky-view table holds nothing yet (no atmosphere drawn, or no
+	 * LIT_ATMOSPHERE since it was set) leaves it as it was.
+	 *
+	 * It binds pipelines and sets of its own, as BLOOM does.
+	 */
+	RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT  = 50,
 };
 
 /**
@@ -1566,6 +1606,20 @@ typedef struct RBTREND_COMMAND {
 			/** The picture: a RENDER_TARGET 2D view of a float format at the view's target size. */
 			rbtrend_texture_view _target;
 		} _lit_reflect; /**< RBTREND_COMMAND_LIT_REFLECT. */
+		struct {
+			/** The atmosphere whose tables are rebuilt where its medium changed. */
+			rbtrend_atmosphere _atmosphere;
+		} _atmosphere_tables; /**< RBTREND_COMMAND_ATMOSPHERE_TABLES. */
+		struct {
+			/** The scene whose sky-view table and aerial volume are worked out. */
+			rbtrend_lit_scene _scene;
+		} _lit_atmosphere; /**< RBTREND_COMMAND_LIT_ATMOSPHERE. */
+		struct {
+			/** The environment filled. */
+			rbtrend_lit_environment _environment;
+			/** The scene whose sky-view table fills it. */
+			rbtrend_lit_scene _scene;
+		} _lit_atmosphere_environment; /**< RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT. */
 		/**
 		 * Never read. Fixes `_params` at 120 bytes, so the command's size
 		 * stays 128 as commands are added: a new command's parameters fit

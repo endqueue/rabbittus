@@ -23,5 +23,6 @@
 #include "render/rbtrendpost.h"
 #include "render/rbtrendbatch.h"
 #include "render/rbtrendraytracing.h"
+#include "render/rbtrendatmosphere.h"
 
 #endif // RBTREND_H

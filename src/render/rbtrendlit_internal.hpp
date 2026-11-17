@@ -92,6 +92,16 @@ struct rbtrend_lit_scene_block {
 	float occlusion_strength;
 	float scene_color_mips;
 	rbtrend_lit_light_block lights[RBTREND_LIT_MAX_LIGHTS];
+	/* The scene's atmosphere (rbtrendatmosphere.h), where
+	 * RBTREND_LIT_SCENE_FLAG_ATMOSPHERE is set: worked out from the
+	 * atmosphere as set, the eye and the first sun by each commit. */
+	float atmosphere_center[4];
+	float atmosphere_up[4];
+	float atmosphere_x[4];
+	float atmosphere_y[4];
+	float atmosphere_sizes[4];
+	float atmosphere_aerial[4];
+	float atmosphere_array[4];
 };
 
 /* Bits of rbtrend_lit_scene_block::flags, as the shader has them. */
@@ -103,6 +113,8 @@ enum : uint32_t {
 	RBTREND_LIT_SCENE_FLAG_OCCLUSION       = 16u,
 	RBTREND_LIT_SCENE_FLAG_BENT_NORMALS    = 64u,
 	RBTREND_LIT_SCENE_FLAG_SCENE_COLOR     = 256u,
+	RBTREND_LIT_SCENE_FLAG_ATMOSPHERE      = 512u,
+	RBTREND_LIT_SCENE_FLAG_AERIAL          = 1024u,
 };
 
 /* RbtrendLitShadowPass in shaders/rbtrend_lit_shadow_pass.slang. */
@@ -268,6 +280,32 @@ struct rbtrend_reflect_params {
  * is near at 0. */
 bool rbtrend_lit_scene_depth_reversed(rbtrend_lit_scene scene);
 
+/* The lit passes prepared (rbtrendlit.cpp's), for the atmosphere's. False,
+ * reported, if they can't be. */
+bool rbtrend_lit_prepare_passes_for(rbtrend_instance instance);
+
+/* A pipeline over the full-screen vertex shader with [fragment], rendering
+ * to [format], [layouts] at its first slots, [push_size] bytes of fragment
+ * push constants (none if 0). NULL, reported, if it can't be made. */
+rbtrend_graphics_pipeline rbtrend_lit_fullscreen_pipeline_for(rbtrend_instance instance, rbtrend_shader fragment, const rbtrend_binding_layout *layouts,
+                                                            uint32_t layout_count, CRGPU_FORMAT format, uint32_t push_size, const char *name);
+
+/* The scene's block, resolved, into the materials that read it, for the
+ * next compile that binds them (every setter's last step). */
+void rbtrend_lit_scene_commit(rbtrend_lit_scene scene);
+
+/* One member a block must have, where its C++ mirror has it. */
+struct rbtrend_block_member {
+	const char *name;
+	uint32_t offset;
+};
+
+/* Whether the block at [binding] of [layout] is [size] bytes, give or take
+ * std140's rounding, and has each of [members] where the mirror puts it.
+ * Reported if not: the shader and the mirror have drifted apart. */
+bool rbtrend_lit_check_block(rbtrend_binding_layout layout, uint32_t binding, const char *what, uint32_t size, const rbtrend_block_member *members,
+                             size_t count);
+
 /* ---- The instance's lit objects ---------------------------------------- */
 
 /* The full-target passes Rend's lit and post work is made of, each a
@@ -379,6 +417,16 @@ struct rbtrend_lit_builtins {
 	rbtrend_texture_view placeholder_cube_view{nullptr};
 	rbtrend_texture2d placeholder_depth{nullptr};
 	rbtrend_texture_view placeholder_depth_view{nullptr};
+	/* A 2D array of one layer, for a scene's aerial volume while it has
+	 * none (rbtrendatmosphere.h). */
+	rbtrend_texture2d placeholder_2d_array{nullptr};
+	rbtrend_texture_view placeholder_2d_array_view{nullptr};
+	/* Rend's atmosphere passes (rbtrendatmosphere_internal.hpp): fragment
+	 * shaders by RBTREND_ATMOSPHERE_PASS_, the layout of their set 0 (their
+	 * block), and a pipeline each, made on first use. */
+	rbtrend_shader atmosphere_frags[6]{};
+	rbtrend_binding_layout atmosphere_layout{nullptr};
+	rbtrend_graphics_pipeline atmosphere_pipelines[6]{};
 	rbtrend_buffer placeholder_tiles{nullptr};
 	/* A material's maps, read linear, mipmapped and repeating. */
 	rbtrend_sampler material_sampler{nullptr};
@@ -595,6 +643,27 @@ typedef struct rbtrend_lit_scene_t {
 	/* The same for LIT_SSR's set 0, which isn't traced: made by the first
 	 * march of the scene. */
 	rbtrend_binding_set ssr_set{nullptr};
+	/* The atmosphere as last set (rbtrend_lit_scene_set_atmosphere(); its
+	 * `atmosphere` NULL for none), and its tables as the lit shaders read
+	 * them, in one binding (set 0 holds at most sixteen): a 2D array whose
+	 * layer 0 holds the sky-view table, 1 a copy of the atmosphere's
+	 * transmittance table, 2 on the aerial volume's slices, each in the top
+	 * left of its layer; a render target view per layer, the whole as an
+	 * array, and layer 0 alone (the environment fill's), kept while their
+	 * sizes hold; and the material of the atmosphere pass layout its
+	 * LIT_ATMOSPHERE and fills write, made with the first atmosphere. */
+	RBTREND_LIT_ATMOSPHERE atmosphere{};
+	rbtrend_texture2d atmosphere_tables{nullptr};
+	std::vector<rbtrend_texture_view> atmosphere_targets{};
+	rbtrend_texture_view atmosphere_tables_view{nullptr};
+	rbtrend_texture_view sky_view_view{nullptr};
+	rbtrend_material atmosphere_material{nullptr};
+	/* Whether a LIT_ATMOSPHERE has filled the sky-view table (and volume)
+	 * since they were made: until then the scene draws no atmosphere. */
+	bool sky_view_filled{false};
+	bool aerial_filled{false};
+	/* The width, height and layers the array was made at. */
+	uint32_t atmosphere_array_size[3]{};
 	RBT_STALE_TAG
 } rbtrend_lit_scene_t;
 

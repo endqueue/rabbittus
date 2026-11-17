@@ -8,10 +8,13 @@
 // one (its radius, as 1 - cos, above 0): its radiance spread over the disc's
 // solid angle, so it carries the light it lights surfaces with (pi times
 // radiance, as the surface scales light), its edge softened over the change
-// in angle across a texel.
+// in angle across a texel. A scene with an atmosphere (rbtrendatmosphere.h)
+// draws its sky-view table in the environment's place, and each of its
+// suns' discs through the medium's transmittance from the eye.
 
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
+import rbtrend_lit_atmosphere;
 
 float3 unproject(float2 ndc, float depth) {
     float4 p = mul(u_lit_scene.inverse_view_projection, float4(ndc, depth, 1.0));
@@ -29,7 +32,9 @@ float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
     if (dot(direction, u_lit_scene.view_direction.xyz) < 0.0)
         direction = -direction;
     float3 color = float3(0.0);
-    if ((u_lit_scene.flags & RBTREND_LIT_SCENE_ENVIRONMENT) != 0u) {
+    if (lit_atmosphere()) {
+        color = lit_atmosphere_sky(direction);
+    } else if ((u_lit_scene.flags & RBTREND_LIT_SCENE_ENVIRONMENT) != 0u) {
         float3 d = float3(dot(u_lit_scene.environment_rotation[0].xyz, direction), dot(u_lit_scene.environment_rotation[1].xyz, direction),
                           dot(u_lit_scene.environment_rotation[2].xyz, direction));
         color    = u_lit_scene.environment_intensity * environment_specular.SampleLevel(environment_sampler, d, 0.0).rgb;
@@ -47,7 +52,7 @@ float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
         if (d.radiance_disc.w > 0.5 && versine > 0.0) {
             float inside = clamp((versine - away) / texel + 0.5, 0.0, 1.0);
             float solid  = 2.0 * 3.14159265359 * versine;
-            color += inside * 3.14159265359 / solid * d.radiance_disc.rgb;
+            color += inside * 3.14159265359 / solid * d.radiance_disc.rgb * lit_atmosphere_sun_transmittance(i, u_lit_scene.eye_position.xyz);
         }
     }
     color *= u_lit_scene.exposure;

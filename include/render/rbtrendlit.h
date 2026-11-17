@@ -1289,6 +1289,95 @@ typedef struct RBTREND_LIT_AMBIENT {
  */
 RBT_RESULT rbtrend_lit_scene_set_ambient(rbtrend_lit_scene scene, const RBTREND_LIT_AMBIENT *ambient, RBTREND_ERROR *out_error);
 
+/** The fewest texels a side of a scene's sky-view table has. */
+#define RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE 32u
+/** The most texels a side of a scene's sky-view table has. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE 1024u
+/** The fewest texels a side of a scene's aerial volume has. */
+#define RBTREND_LIT_ATMOSPHERE_MIN_AERIAL_SIZE 8u
+/** The most texels a side of a scene's aerial volume has. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_SIZE 128u
+/** The most steps a texel of the sky-view table takes. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS 128u
+/** The most steps an aerial slice takes. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_STEPS 16u
+
+/**
+ * @brief The atmosphere a scene draws (rbtrendatmosphere.h), where it is,
+ * and the sizes of the scene's own tables. No field has a default.
+ */
+typedef struct RBTREND_LIT_ATMOSPHERE {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE, and its chain (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/** The atmosphere, or NULL for none (every other field then unread).
+	 * It must outlive its use by the scene, as an environment must. */
+	rbtrend_atmosphere atmosphere;
+	/** Its centre, in the scene's space: finite. Set as often as it moves. */
+	float center[3];
+	/** How many of the scene's directional lights, the first, light the
+	 * medium: 1 or 2. A scene with fewer has as many as it has; with none,
+	 * nothing lights the medium (a black sky, as a night with no moon). */
+	uint32_t sun_count;
+	/** The sky-view table's width (round the eye) and height (from the
+	 * zenith to the nadir), each RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE to
+	 * RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE. 192 x 108 is the paper's. */
+	uint32_t sky_view_width;
+	/** See #sky_view_width. */
+	uint32_t sky_view_height;
+	/** The aerial volume's width, height and depth (its slices), each
+	 * RBTREND_LIT_ATMOSPHERE_MIN_AERIAL_SIZE to
+	 * RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_SIZE, or all three 0 for none
+	 * (surfaces aren't faded by the air). 32 x 32 x 32 is the paper's. */
+	uint32_t aerial_width;
+	/** See #aerial_width. */
+	uint32_t aerial_height;
+	/** See #aerial_width. */
+	uint32_t aerial_depth;
+	/** How far from the eye the volume's last slice is, in the scene's
+	 * unit: finite, above 0; beyond it, the last slice's. Unread without a
+	 * volume. */
+	float aerial_distance;
+	/** The least and most steps a texel of the sky-view table takes, more
+	 * for a longer ray (the paper's 4 and 14): 1 to
+	 * RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS each, the least at most the
+	 * most. */
+	uint32_t sky_view_min_steps;
+	/** See #sky_view_min_steps. */
+	uint32_t sky_view_max_steps;
+	/** The steps each slice of the aerial volume takes: 1 to
+	 * RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_STEPS (the paper's 1). Unread without
+	 * a volume. */
+	uint32_t aerial_steps_per_slice;
+} RBTREND_LIT_ATMOSPHERE;
+
+/**
+ * @brief Sets the atmosphere a scene draws, or none. The scene's sky-view
+ * table and aerial volume are made (or remade) here where their sizes
+ * differ from those it holds; the same sizes again allocate nothing, so it
+ * is called each frame as the centre moves.
+ *
+ * With an atmosphere, from the frame's RBTREND_COMMAND_LIT_ATMOSPHERE on:
+ * RBTREND_LIT_SHADER_SKY_FRAGMENT draws the sky-view table; each of the
+ * first `sun_count` directional lights reaches a surface, and its disc the
+ * eye, through the atmosphere's transmittance; each lit surface is faded
+ * by the aerial volume where the scene has one. With none, nothing of this
+ * is read, and the scene draws as it did.
+ *
+ * Memory: the sky-view table and the volume, R16G16B16A16_FLOAT: 162 KiB at
+ * 192 x 108, 256 KiB at 32 x 32 x 32.
+ *
+ * @param[in]  scene      The scene.
+ * @param[in]  atmosphere What it draws. Only read during the call.
+ * @param[out] out_error  Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a NULL argument or
+ *         a field out of its range, each its own check and message; the
+ *         struct codes for `atmosphere->base`; RBT_RESULT_OUT_OF_MEMORY; or
+ *         RBT_RESULT_REND_GPU_FAILURE if a table can't be made. Nothing
+ *         changes on failure.
+ */
+RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTREND_LIT_ATMOSPHERE *atmosphere, RBTREND_ERROR *out_error);
+
 /**
  * @brief Sets the ambient occlusion of the view, or takes it away: a texture
  * the size of the view's target whose red is how open each texel is to the

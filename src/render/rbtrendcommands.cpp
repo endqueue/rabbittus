@@ -3,6 +3,7 @@
 #include "rbtrendbatch_internal.hpp"
 #include "rbtrendimages_internal.hpp"
 #include "rbtrendlit_internal.hpp"
+#include "rbtrendatmosphere_internal.hpp"
 #include "rbtrendraytracing_internal.hpp"
 
 #include <cmath>
@@ -1581,6 +1582,45 @@ static void rbtrend_send_command_recorded(
 			fault = "a _ground_albedo that is negative or not a number";
 		if (fault) {
 			rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_SKY with %s", fault);
+			cmd_list->recording_error = true;
+			return;
+		}
+	}
+	if (cmd._type == RBTREND_COMMAND_ATMOSPHERE_TABLES) {
+		const rbtrend_atmosphere a = cmd._params._atmosphere_tables._atmosphere;
+		const char *fault          = nullptr;
+		if (!a)
+			fault = "a NULL atmosphere";
+		else if (a->instance != cmd_list->instance)
+			fault = "an atmosphere of another instance";
+		if (fault) {
+			rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "ATMOSPHERE_TABLES with %s", fault);
+			cmd_list->recording_error = true;
+			return;
+		}
+	}
+	if (cmd._type == RBTREND_COMMAND_LIT_ATMOSPHERE) {
+		const rbtrend_lit_scene scene = cmd._params._lit_atmosphere._scene;
+		const char *fault             = nullptr;
+		if (!scene)
+			fault = "a NULL scene";
+		else if (scene->instance != cmd_list->instance)
+			fault = "a scene of another instance";
+		if (fault) {
+			rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_ATMOSPHERE with %s", fault);
+			cmd_list->recording_error = true;
+			return;
+		}
+	}
+	if (cmd._type == RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT) {
+		const auto &p     = cmd._params._lit_atmosphere_environment;
+		const char *fault = nullptr;
+		if (!p._environment || !p._scene)
+			fault = "a NULL environment or scene";
+		else if (p._environment->instance != cmd_list->instance || p._scene->instance != cmd_list->instance)
+			fault = "an environment or scene of another instance";
+		if (fault) {
+			rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_ATMOSPHERE_ENVIRONMENT with %s", fault);
 			cmd_list->recording_error = true;
 			return;
 		}
@@ -3218,6 +3258,125 @@ static bool rbtrend_cmd_lit_sky(rbtrend_command_list cmd_list, const RBTREND_COM
 	for (uint32_t face = 0; face < 6; ++face) {
 		params.face = face;
 		rbtrend_cmd_own_pass(cmd_list, sky, env->radiance_faces[face], size, size, hosek ? &sky_set : nullptr, hosek ? 1 : 0, &params, sizeof(params));
+	}
+	return rbtrend_cmd_prefilter_environment(cmd_list, env);
+}
+
+/* ATMOSPHERE_TABLES, outside a pass: where the atmosphere's medium changed
+ * since its tables were last built, its transmittance table, then its
+ * multiple-scattering table from it, each left in SHADER_READ_ONLY. */
+static bool rbtrend_cmd_atmosphere_tables(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	rbtrend_atmosphere a = command._params._atmosphere_tables._atmosphere;
+	if (!a->has_medium || !a->changed)
+		return true;
+	rbtrend_instance instance                = cmd_list->instance;
+	rbtrend_graphics_pipeline transmittance = rbtrend_atmosphere_pipeline(instance, RBTREND_ATMOSPHERE_PASS_TRANSMITTANCE);
+	rbtrend_graphics_pipeline multiscatter  = rbtrend_atmosphere_pipeline(instance, RBTREND_ATMOSPHERE_PASS_MULTISCATTER);
+	if (!transmittance || !multiscatter)
+		return false;
+	rbtrend_atmosphere_pass_block block{};
+	rbtrend_atmosphere_fill_block(*a, block);
+	rbtrend_atmosphere_write_block(a->material, block);
+	if (!rbtrend_cmd_use_material(cmd_list, a->material))
+		return false;
+	rbtrend_binding_set table_set = rbtrend_texture_view_environment_set(a->transmittance_view);
+	if (!table_set)
+		return false;
+	rbtrend_binding_set block_set = a->material->set;
+	rbtrend_cmd_own_pass(cmd_list, transmittance, a->transmittance_target, a->desc.transmittance_width, a->desc.transmittance_height, &block_set, 1,
+	                    nullptr, 0);
+	rbtrend_binding_set sets[2] = {block_set, table_set};
+	rbtrend_cmd_own_pass(cmd_list, multiscatter, a->multiple_scattering_target, a->desc.multiple_scattering_size, a->desc.multiple_scattering_size, sets,
+	                    2, nullptr, 0);
+	a->changed = false;
+	a->built   = true;
+	return true;
+}
+
+/* LIT_ATMOSPHERE, outside a pass: the scene's sky-view table from its
+ * atmosphere's tables, for its eye and suns as the scene holds them now,
+ * into layer 0 of its array, and the transmittance table copied into layer
+ * 1 (rbtrend_lit_scene_t::atmosphere_tables), left in SHADER_READ_ONLY. Nothing for a scene with no atmosphere, or one
+ * whose tables have never been built. The first fill turns the scene's
+ * atmosphere on (its block's flag, from the next frame's binding). */
+static bool rbtrend_cmd_lit_atmosphere(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	rbtrend_lit_scene scene = command._params._lit_atmosphere._scene;
+	rbtrend_atmosphere a     = scene->atmosphere.atmosphere;
+	if (!a || !rbtrend_atmosphere_drawable(*a))
+		return true;
+	rbtrend_graphics_pipeline sky_view = rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_SKY_VIEW);
+	if (!sky_view)
+		return false;
+	rbtrend_atmosphere_pass_block block{};
+	rbtrend_lit_scene_atmosphere_block(scene, block);
+	rbtrend_atmosphere_write_block(scene->atmosphere_material, block);
+	if (!rbtrend_cmd_use_material(cmd_list, scene->atmosphere_material))
+		return false;
+	rbtrend_binding_set sets[3] = {scene->atmosphere_material->set, rbtrend_texture_view_environment_set(a->transmittance_view),
+	                              rbtrend_texture_view_environment_set(a->multiple_scattering_view)};
+	if (!sets[1] || !sets[2])
+		return false;
+	rbtrend_cmd_transition_range(cmd_list, rbtrend_texture_view_range(a->transmittance_view), CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY, true);
+	rbtrend_cmd_transition_range(cmd_list, rbtrend_texture_view_range(a->multiple_scattering_view), CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY, true);
+	rbtrend_graphics_pipeline copy = rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_COPY);
+	if (!copy)
+		return false;
+	// Layer 0 of the scene's array the sky-view table, layer 1 the
+	// transmittance table copied texel for texel, each in its top left.
+	rbtrend_cmd_own_pass(cmd_list, sky_view, scene->atmosphere_targets[0], scene->atmosphere.sky_view_width, scene->atmosphere.sky_view_height, sets, 3,
+	                    nullptr, 0);
+	rbtrend_cmd_own_pass(cmd_list, copy, scene->atmosphere_targets[1], a->desc.transmittance_width, a->desc.transmittance_height, &sets[1], 1, nullptr, 0);
+	// Layers 2 on the aerial volume's slices, each in its top left, where
+	// the scene has a volume.
+	const uint32_t slices = scene->atmosphere.aerial_depth;
+	if (slices > 0) {
+		rbtrend_graphics_pipeline aerial = rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_AERIAL);
+		if (!aerial)
+			return false;
+		for (uint32_t slice = 0; slice < slices; ++slice) {
+			const rbtrend_aerial_params params = {slice, 0, {(float)scene->atmosphere.aerial_width, (float)scene->atmosphere.aerial_height}};
+			rbtrend_cmd_own_pass(cmd_list, aerial, scene->atmosphere_targets[2 + slice], scene->atmosphere.aerial_width, scene->atmosphere.aerial_height,
+			                    sets, 3, &params, (uint32_t)sizeof(params));
+		}
+	}
+	const bool first_sky    = !scene->sky_view_filled;
+	const bool first_aerial = slices > 0 && !scene->aerial_filled;
+	scene->sky_view_filled  = true;
+	if (slices > 0)
+		scene->aerial_filled = true;
+	if (first_sky || first_aerial)
+		rbtrend_lit_scene_commit(scene);
+	return true;
+}
+
+/* LIT_ATMOSPHERE_ENVIRONMENT, outside a pass: the scene's sky-view table
+ * into the environment's radiance cube, face by face, in the frame the
+ * scene's ambient light names, then prefiltered as LIT_SKY's fill is.
+ * Nothing for a scene whose sky-view table holds nothing yet. */
+static bool rbtrend_cmd_lit_atmosphere_environment(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	const auto &p                = command._params._lit_atmosphere_environment;
+	rbtrend_lit_scene scene       = p._scene;
+	rbtrend_lit_environment env   = p._environment;
+	if (!scene->atmosphere.atmosphere || !scene->sky_view_filled)
+		return true;
+	rbtrend_graphics_pipeline fill = rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_ENVIRONMENT);
+	if (!fill)
+		return false;
+	rbtrend_atmosphere_pass_block block{};
+	rbtrend_lit_scene_atmosphere_block(scene, block);
+	rbtrend_atmosphere_write_block(scene->atmosphere_material, block);
+	if (!rbtrend_cmd_use_material(cmd_list, scene->atmosphere_material))
+		return false;
+	rbtrend_binding_set sets[2] = {scene->atmosphere_material->set, rbtrend_texture_view_environment_set(scene->sky_view_view)};
+	if (!sets[1])
+		return false;
+	rbtrend_cmd_transition_range(cmd_list, rbtrend_texture_view_range(scene->sky_view_view), CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY, true);
+	const uint32_t size = env->desc.specular_size;
+	rbtrend_environment_params params{};
+	params.target_size[0] = params.target_size[1] = (float)size;
+	for (uint32_t face = 0; face < 6; ++face) {
+		params.face = face;
+		rbtrend_cmd_own_pass(cmd_list, fill, env->radiance_faces[face], size, size, sets, 2, &params, sizeof(params));
 	}
 	return rbtrend_cmd_prefilter_environment(cmd_list, env);
 }
@@ -5251,6 +5410,26 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 					break;
 				}
 				ok = rbtrend_cmd_lit_environment(cmd_list, command);
+				bound_compute_pipeline = nullptr;
+				break;
+			}
+			case RBTREND_COMMAND_ATMOSPHERE_TABLES:
+			case RBTREND_COMMAND_LIT_ATMOSPHERE:
+			case RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT: {
+				if (in_pass) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s inside a rendering pass",
+					                   command._type == RBTREND_COMMAND_ATMOSPHERE_TABLES ? "ATMOSPHERE_TABLES"
+					                   : command._type == RBTREND_COMMAND_LIT_ATMOSPHERE  ? "LIT_ATMOSPHERE"
+					                                                                     : "LIT_ATMOSPHERE_ENVIRONMENT");
+					ok = false;
+					break;
+				}
+				if (command._type == RBTREND_COMMAND_ATMOSPHERE_TABLES)
+					ok = rbtrend_cmd_atmosphere_tables(cmd_list, command);
+				else if (command._type == RBTREND_COMMAND_LIT_ATMOSPHERE)
+					ok = rbtrend_cmd_lit_atmosphere(cmd_list, command);
+				else
+					ok = rbtrend_cmd_lit_atmosphere_environment(cmd_list, command);
 				bound_compute_pipeline = nullptr;
 				break;
 			}

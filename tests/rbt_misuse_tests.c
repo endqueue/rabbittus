@@ -8,7 +8,7 @@
 //
 // Handle types with no factory, not called with a destroyed handle:
 // - A Rend handle needs a GPU device, which these tests never make; rabbittustests/tests/rbtrend_gpu_tests.c, test_destroyed_handles, calls these.
-//   Not covered: rbtrend_batch, rbtrend_binding_layout, rbtrend_binding_set, rbtrend_blas, rbtrend_buffer, rbtrend_command_list, rbtrend_compute_pass, rbtrend_compute_pipeline, rbtrend_draw_list, rbtrend_exposure, rbtrend_framebuffer, rbtrend_gpu_timer, rbtrend_graphics_pipeline, rbtrend_index_pool, rbtrend_instance, rbtrend_lit_environment, rbtrend_lit_scene, rbtrend_material, rbtrend_render_pass, rbtrend_sampler, rbtrend_shader, rbtrend_swap_chain, rbtrend_texture2d, rbtrend_texture3d, rbtrend_texture_view, rbtrend_tlas, rbtrend_vertex_pool.
+//   Not covered: rbtrend_atmosphere, rbtrend_batch, rbtrend_binding_layout, rbtrend_binding_set, rbtrend_blas, rbtrend_buffer, rbtrend_command_list, rbtrend_compute_pass, rbtrend_compute_pipeline, rbtrend_draw_list, rbtrend_exposure, rbtrend_framebuffer, rbtrend_gpu_timer, rbtrend_graphics_pipeline, rbtrend_index_pool, rbtrend_instance, rbtrend_lit_environment, rbtrend_lit_scene, rbtrend_material, rbtrend_render_pass, rbtrend_sampler, rbtrend_shader, rbtrend_swap_chain, rbtrend_texture2d, rbtrend_texture3d, rbtrend_texture_view, rbtrend_tlas, rbtrend_vertex_pool.
 
 #include "rbtrend.h"
 #include "archive/rbtarchive.h"
@@ -1657,6 +1657,12 @@ int main(void)
     calls++;
     expect_error("rbtmath_shell_medium_compute_transmittance", rbtmath_shell_medium_compute_transmittance((const RBTMATH_SHELL_MEDIUM *){0}, (const float *){0}, (const float *){0}, (uint32_t){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
     calls++;
+    expect_error("rbtrend_atmosphere_create", rbtrend_atmosphere_create((rbtrend_instance){0}, (const RBTREND_ATMOSPHERE_DESC *){0}, (rbtrend_atmosphere *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    rbtrend_atmosphere_destroy((rbtrend_atmosphere){0});
+    calls++;
+    expect_error("rbtrend_atmosphere_set_medium", rbtrend_atmosphere_set_medium((rbtrend_atmosphere){0}, (const RBTMATH_SHELL_MEDIUM *){0}, (RBTREND_ERROR *){0}));
+    calls++;
     expect_error("rbtrend_batch_add_circles", rbtrend_batch_add_circles((rbtrend_batch){0}, (const RBTREND_BATCH_CIRCLE *){0}, (uint32_t){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_batch_add_glyphs", rbtrend_batch_add_glyphs((rbtrend_batch){0}, (const RBTREND_BATCH_GLYPH *){0}, (uint32_t){0}, (RBTREND_ERROR *){0}));
@@ -1878,6 +1884,8 @@ int main(void)
     expect_error("rbtrend_lit_scene_set_ambient", rbtrend_lit_scene_set_ambient((rbtrend_lit_scene){0}, (const RBTREND_LIT_AMBIENT *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_scene_set_ambient_occlusion", rbtrend_lit_scene_set_ambient_occlusion((rbtrend_lit_scene){0}, (rbtrend_texture_view){0}, (float){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_scene_set_atmosphere", rbtrend_lit_scene_set_atmosphere((rbtrend_lit_scene){0}, (const RBTREND_LIT_ATMOSPHERE *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_scene_set_bent_normals", rbtrend_lit_scene_set_bent_normals((rbtrend_lit_scene){0}, (_Bool){0}, (RBTREND_ERROR *){0}));
     calls++;

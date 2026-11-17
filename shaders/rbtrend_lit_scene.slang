@@ -54,6 +54,8 @@ public static const uint RBTREND_LIT_SCENE_TILES            = 8u;  // tile_light
 public static const uint RBTREND_LIT_SCENE_OCCLUSION        = 16u; // ambient_occlusion is this view's
 public static const uint RBTREND_LIT_SCENE_BENT_NORMALS     = 64u; // ambient_occlusion's gba is a bent normal, read for diffuse ambient light
 public static const uint RBTREND_LIT_SCENE_SCENE_COLOR      = 256u; // scene_color holds the opaque picture behind
+public static const uint RBTREND_LIT_SCENE_ATMOSPHERE       = 512u; // the atmosphere_* members and textures hold the scene's atmosphere (rbtrendatmosphere.h)
+public static const uint RBTREND_LIT_SCENE_AERIAL           = 1024u; // atmosphere_aerial holds its aerial volume
 
 // Every matrix is column-major in memory, as the CPU writes it.
 public struct RbtrendLitScene {
@@ -83,6 +85,15 @@ public struct RbtrendLitScene {
     public float occlusion_strength;
     public float scene_color_mips;         // scene_color's mip count
     public RbtrendLitLight lights[RBTREND_LIT_MAX_LIGHTS];
+    // The scene's atmosphere, where RBTREND_LIT_SCENE_ATMOSPHERE is set
+    // (rbtrend_lit_scene_set_atmosphere()).
+    public float4 atmosphere_center;       // xyz its centre; w the bottom's radius
+    public float4 atmosphere_up;           // xyz the eye's up, unit; w the top's radius
+    public float4 atmosphere_x;            // xyz the sky-view's x, towards the first sun's bearing; w the eye's distance from the centre
+    public float4 atmosphere_y;            // xyz; w how many of the directional lights, the first, are its suns
+    public float4 atmosphere_sizes;        // xy the transmittance table; zw the sky-view table, in texels
+    public float4 atmosphere_aerial;       // x the aerial volume's slices; y how far its last is; zw its width and height
+    public float4 atmosphere_array;        // xy the width and height of atmosphere_tables' layers, in texels
 };
 [[vk::binding(0, 0)]] public ConstantBuffer<RbtrendLitScene> u_lit_scene : register(b0, space0);
 

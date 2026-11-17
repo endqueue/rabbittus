@@ -32,6 +32,7 @@ module rbtrend_lit_surface;
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_material;
+import rbtrend_lit_atmosphere;
 
 // The position first, then the five inputs, in the order a vertex shader
 // writes them (rbtrend_lit_vert.slang), so D3D12 matches each by register.
@@ -378,7 +379,8 @@ public LitShaded lit_shade(LitFragmentInput input) {
 
     float3 color = float3(0.0);
     for (uint d = 0u; d < min(u_lit_scene.directional_count, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS)); ++d) {
-        float3 radiance = u_lit_scene.directional[d].radiance_disc.rgb;
+        // Through the scene's atmosphere for its suns (1 otherwise).
+        float3 radiance = u_lit_scene.directional[d].radiance_disc.rgb * lit_atmosphere_sun_transmittance(d, in_position);
         if (any(radiance > float3(0.0)))
             color += shade(s, u_lit_scene.directional[d].direction_versine.xyz,
                            radiance * directional_visibility(d, in_position, s.geometric, input.frag_coord.xy));
@@ -431,6 +433,8 @@ public LitShaded lit_shade(LitFragmentInput input) {
     if (transmission > 0.0)
         color += transmission * albedo * (1.0 - (s.f0 * ab.x + ab.y)) * transmitted(s, in_position, input.frag_coord);
     color += emission;
+    // Distant surfaces fade into the air (the scene's aerial volume).
+    color = lit_atmosphere_aerial(color, in_position, input.frag_coord.xy);
 
     color *= u_lit_scene.exposure;
     if (u_lit_scene.output_encoding == 1u) {

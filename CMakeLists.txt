@@ -59,6 +59,8 @@ add_library(rabbittus STATIC
         src/render/rbtrendrendertargets.cpp
         src/render/rbtrendraytracing_internal.hpp
         src/render/rbtrendraytracing.cpp
+        src/render/rbtrendatmosphere_internal.hpp
+        src/render/rbtrendatmosphere.cpp
         src/archive/rbtarchive_internal.hpp
         src/archive/rbtarchive.cpp
         src/audio/rbtaudio_internal.hpp
@@ -103,6 +105,7 @@ add_library(rabbittus STATIC
         include/render/rbtrendpost.h
         include/render/rbtrendbatch.h
         include/render/rbtrendraytracing.h
+        include/render/rbtrendatmosphere.h
         include/archive/rbtarchive.h
         include/audio/rbtaudio.h
         include/audio/rbtaudiocues.h
@@ -246,6 +249,12 @@ set(RABBITTUS_SHADERS
         rbtrend_rt_instances_row64_comp
         rbtrend_rt_instances_col72_comp
         rbtrend_rt_emitters_comp
+        rbtrend_atmosphere_transmittance_frag
+        rbtrend_atmosphere_multiscatter_frag
+        rbtrend_atmosphere_skyview_frag
+        rbtrend_atmosphere_environment_frag
+        rbtrend_atmosphere_copy_frag
+        rbtrend_atmosphere_aerial_frag
 )
 # The modules the shaders import, from shaders/: every shader is compiled
 # again when one of them changes.
@@ -264,6 +273,9 @@ set(RABBITTUS_SHADER_MODULES
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_rt_trace.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_rt_shadow_mask.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_rt_path_trace.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_model.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_pass.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_atmosphere.slang
 )
 # The shaders that trace (rbtrendraytracing.h): inline ray queries, SPIR-V's
 # ray query capability (SPV_KHR_ray_query) and DXIL's shader model 6.5. Made

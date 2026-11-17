@@ -5167,6 +5167,58 @@ Rend's atmosphere takes that struct and draws it. Stage 4 (the shell
 from space) needs a blended full-screen march of Rend's own, not L7's
 transparency, so it moves before L7 as its own session (B4).
 
+**Stages 2 and 3 built 2026-11-16 on macOS** (Metal, the M5 Pro; D3D12
+and Vulkan never built): `render/rbtrendatmosphere.h` (the atmosphere: its medium,
+its transmittance and multiple-scattering tables, RBTREND_COMMAND_ATMOSPHERE_TABLES),
+`rbtrend_lit_scene_set_atmosphere` (rbtrendlit.h), and
+RBTREND_COMMAND_LIT_ATMOSPHERE (a scene's sky-view table and, where it
+has one, its aerial volume, a frame) and _ENVIRONMENT (the environment
+filled from the sky-view). As built, against the draft:
+- **One binding, an array.** Carrottus GPU holds at most 16 bindings a set
+  (CRGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET) and the lit scene's set 0 had
+  15, so the scene's tables are one 2D array, `atmosphere_tables`
+  (binding 15): layer 0 the sky-view, layer 1 the atmosphere's
+  transmittance table copied texel for texel (`rbtrend_atmosphere_copy_frag`),
+  layers 2 on the aerial volume's slices, each table in its layer's top
+  left (read with its uv scaled and clamped). A set 0 binding added: a
+  break for any caller's own lit shader, listed with the ABI's.
+  7.2 MiB at the defaults (256 x 108 by 34 layers of half floats).
+- **Fragment passes, not compute:** every table is a full-screen pass of
+  Rend's own (no 3D storage image is asked of Carrottus GPU), so nothing is
+  UNSUPPORTED anywhere. The aerial volume is a pass a slice: 32 passes at
+  the defaults, which is its cost (below); a compute pass over a 3D
+  storage image would be one, where Carrottus offers them.
+- **The sky-view's seam** sits opposite the first sun (its bearing the
+  table's middle column), where the sky is smoothest.
+- **A frame's lag:** a scene turns its atmosphere (and its volume) on from
+  the frame after the first fill, its block committed then.
+- **Under the ground sphere:** an eye there is taken just above it; a
+  point of the aerial volume's march under it is read at it (the sky-view's
+  rays end at the ground, so only the volume's reach it). Found by a
+  caller's test under a perspective view: the volume's middle row is half a texel under a level
+  view, its ray met the ground sphere 13 m out from 0.4 m up, and every
+  surface past it read 13 m of air; a surface drawn below that sphere
+  (ground over it, anything on it) is in the densest air, not in none. The
+  volume's march stops only where its ray leaves the shell.
+- **Owed:** the path tracer and the traced reflections take no
+  atmosphere's transmittance (their suns reach surfaces undimmed); the
+  volume keeps the mean of the three channels' transmittance (the
+  paper's), so a bright emissive surface far off is dimmed, not
+  reddened; stage 4 (the shell from space).
+Tests (`rabbittustests`, under Metal's validation with warnings fatal):
+`test_atmosphere_refusals`, `_sun_through_air` (a face's light against
+Rabbittus Math's transmittance: 0.889 / 0.887 at 30 degrees, 0.556 /
+0.550 at 5), `_sky` (the zenith (31, 68, 164), the horizon (43, 53, 59),
+a sunset towards the sun (124, 22, 2), darker as the eye climbs, black
+from 200 km), `_environment` (the fill's zenith within 1/255 of the drawn),
+`_aerial` (a face 8 and 24 km away: the volume's transmittance 0.844 and
+0.621, Rabbittus Math's 0.847 and 0.622; the air's light bluer and
+brighter further off), `_measure`, and `test_frame_allocations` (a frame
+with the sky-view and the volume: 0 of ours). Release, the M5 Pro, submit
+to idle: the tables 1.10 ms; the sky-view and its copy 0.24 to 0.26 ms;
+with the aerial volume (32 x 32 x 32, a step a slice) 0.94 ms; the
+environment's fill from it 4.2 ms (LIT_SKY's own fill's cost).
+
 Found while drafting stage 1 (measured 2026-11-16, M5 Pro, Release,
 `rabbittustests`' `test_lit_sky_measure`): one LIT_SKY fill at 128/32 is
 4.9 to 6.6 ms from submit to idle, Preetham's the same as Hosek and

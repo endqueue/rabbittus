@@ -102,6 +102,7 @@ const RBTREND_BUILD_MODE_NONE = 0
 const RBTREND_BUILD_MODE_REFIT = 2
 const RBTREND_COLOR_ENCODING_LINEAR = 0
 const RBTREND_COLOR_ENCODING_SRGB = 1
+const RBTREND_COMMAND_ATMOSPHERE_TABLES = 48
 const RBTREND_COMMAND_AUTO_EXPOSURE = 34
 const RBTREND_COMMAND_BEGIN_LABEL = 26
 const RBTREND_COMMAND_BEGIN_RENDERING = 10
@@ -126,6 +127,8 @@ const RBTREND_COMMAND_END_LABEL = 27
 const RBTREND_COMMAND_END_RENDERING = 11
 const RBTREND_COMMAND_GENERATE_MIPS = 28
 const RBTREND_COMMAND_LIT_AMBIENT_OCCLUSION = 33
+const RBTREND_COMMAND_LIT_ATMOSPHERE = 49
+const RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT = 50
 const RBTREND_COMMAND_LIT_CULL_LIGHTS = 38
 const RBTREND_COMMAND_LIT_ENVIRONMENT = 31
 const RBTREND_COMMAND_LIT_PATH_TRACE = 44
@@ -340,6 +343,7 @@ const RBT_STRUCT_TYPE_MATH_POLY_BOOLEAN_DESC = 4003
 const RBT_STRUCT_TYPE_MATH_POLY_OFFSET_DESC = 4004
 const RBT_STRUCT_TYPE_MATH_POLY_SKELETON_DESC = 4005
 const RBT_STRUCT_TYPE_MAX_ENUM = 2147483647
+const RBT_STRUCT_TYPE_REND_ATMOSPHERE_DESC = 5036
 const RBT_STRUCT_TYPE_REND_BATCH_DESC = 5026
 const RBT_STRUCT_TYPE_REND_BATCH_FRAME = 5027
 const RBT_STRUCT_TYPE_REND_BATCH_LINE = 5028
@@ -356,6 +360,7 @@ const RBT_STRUCT_TYPE_REND_GRAPHICS_PIPELINE_DESC = 5012
 const RBT_STRUCT_TYPE_REND_INDEX_POOL_DESC = 5002
 const RBT_STRUCT_TYPE_REND_INSTANCE_DESC = 5000
 const RBT_STRUCT_TYPE_REND_LIT_AMBIENT = 5023
+const RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE = 5037
 const RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT = 5022
 const RBT_STRUCT_TYPE_REND_LIT_ENVIRONMENT_DESC = 5017
 const RBT_STRUCT_TYPE_REND_LIT_LIGHT_SHADOW = 5034
@@ -551,6 +556,9 @@ fn rbtmath_ray_clip_aabb _Bool (RBTMATH_RAY *, const RBTMATH_AABB *)
 fn rbtmath_shell_medium_compute_density RBT_RESULT (const RBTMATH_SHELL_MEDIUM *, const float *, uint32_t, float *, RBTMATH_ERROR *)
 fn rbtmath_shell_medium_compute_phase RBT_RESULT (const RBTMATH_SHELL_MEDIUM *, const float *, uint32_t, float *, RBTMATH_ERROR *)
 fn rbtmath_shell_medium_compute_transmittance RBT_RESULT (const RBTMATH_SHELL_MEDIUM *, const float *, const float *, uint32_t, uint32_t, float *, RBTMATH_ERROR *)
+fn rbtrend_atmosphere_create RBT_RESULT (rbtrend_instance, const RBTREND_ATMOSPHERE_DESC *, rbtrend_atmosphere *, RBTREND_ERROR *)
+fn rbtrend_atmosphere_destroy void (rbtrend_atmosphere)
+fn rbtrend_atmosphere_set_medium RBT_RESULT (rbtrend_atmosphere, const RBTMATH_SHELL_MEDIUM *, RBTREND_ERROR *)
 fn rbtrend_batch_add_circles RBT_RESULT (rbtrend_batch, const RBTREND_BATCH_CIRCLE *, uint32_t, RBTREND_ERROR *)
 fn rbtrend_batch_add_glyphs RBT_RESULT (rbtrend_batch, const RBTREND_BATCH_GLYPH *, uint32_t, RBTREND_ERROR *)
 fn rbtrend_batch_add_line RBT_RESULT (rbtrend_batch, const RBTREND_BATCH_LINE *, RBTREND_ERROR *)
@@ -662,6 +670,7 @@ fn rbtrend_lit_scene_get_material rbtrend_material (rbtrend_lit_scene)
 fn rbtrend_lit_scene_get_shadow_pass_material rbtrend_material (rbtrend_lit_scene, uint32_t, uint32_t)
 fn rbtrend_lit_scene_set_ambient RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_AMBIENT *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_ambient_occlusion RBT_RESULT (rbtrend_lit_scene, rbtrend_texture_view, float, RBTREND_ERROR *)
+fn rbtrend_lit_scene_set_atmosphere RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_ATMOSPHERE *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_bent_normals RBT_RESULT (rbtrend_lit_scene, _Bool, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_light_shadow RBT_RESULT (rbtrend_lit_scene, uint32_t, const RBTREND_LIT_LIGHT_SHADOW *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_lights RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_SCENE_LIGHT *, uint32_t, RBTREND_ERROR *)
@@ -815,9 +824,21 @@ macro RBTMATH_ERROR_MESSAGE_SIZE 256
 macro RBTMATH_POLY_COORD_LIMIT ((int64_t)1 << 40)
 macro RBTMATH_POLY_NO_RING UINT32_MAX
 macro RBTMATH_SHELL_MEDIUM_MAX_STEPS 1024u
+macro RBTREND_ATMOSPHERE_MAX_MULTIPLE_SCATTERING_SIZE 128u
+macro RBTREND_ATMOSPHERE_MAX_STEPS 256u
+macro RBTREND_ATMOSPHERE_MAX_TRANSMITTANCE_SIZE 1024u
+macro RBTREND_ATMOSPHERE_MIN_MULTIPLE_SCATTERING_SIZE 8u
+macro RBTREND_ATMOSPHERE_MIN_STEPS 4u
+macro RBTREND_ATMOSPHERE_MIN_TRANSMITTANCE_SIZE 16u
 macro RBTREND_BLUR_MAX_SIGMA 32.0f
 macro RBTREND_DRAW_LIST_NO_MATERIAL UINT32_MAX
 macro RBTREND_ERROR_MESSAGE_SIZE 256
+macro RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_SIZE 128u
+macro RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_STEPS 16u
+macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE 1024u
+macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS 128u
+macro RBTREND_LIT_ATMOSPHERE_MIN_AERIAL_SIZE 8u
+macro RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE 32u
 macro RBTREND_LIT_MATERIAL_SET 1u
 macro RBTREND_LIT_MAX_CASCADES 4u
 macro RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS 4u
@@ -858,6 +879,7 @@ opaque rbtmath_box_bvh_t
 opaque rbtmath_instance_bvh_t
 opaque rbtmath_mesh_bvh_t
 opaque rbtmath_poly_t
+opaque rbtrend_atmosphere_t
 opaque rbtrend_binding_layout_t
 opaque rbtrend_binding_set_t
 opaque rbtrend_blas_t
@@ -1301,6 +1323,14 @@ field RBTMATH_VOLUME.planes @0 const RBTMATH_PLANE *
 field RBTMATH_VOLUME.plane_count @8 uint32_t
 field RBTMATH_VOLUME.clip_planes @16 const RBTMATH_PLANE *
 field RBTMATH_VOLUME.clip_plane_count @24 uint32_t
+struct RBTREND_ATMOSPHERE_DESC size=48 align=8
+field RBTREND_ATMOSPHERE_DESC.base @0 RBT_STRUCT_BASE
+field RBTREND_ATMOSPHERE_DESC.debug_name @16 const char *
+field RBTREND_ATMOSPHERE_DESC.transmittance_width @24 uint32_t
+field RBTREND_ATMOSPHERE_DESC.transmittance_height @28 uint32_t
+field RBTREND_ATMOSPHERE_DESC.multiple_scattering_size @32 uint32_t
+field RBTREND_ATMOSPHERE_DESC.transmittance_steps @36 uint32_t
+field RBTREND_ATMOSPHERE_DESC.multiple_scattering_steps @40 uint32_t
 struct RBTREND_BATCH_CIRCLE size=64 align=4
 field RBTREND_BATCH_CIRCLE.center @0 float[3]
 field RBTREND_BATCH_CIRCLE.radius_x @12 float[3]
@@ -1407,6 +1437,8 @@ field RBTREND_COLOR_TARGET.clear_color @24 float[4]
 struct RBTREND_COMMAND size=128 align=8
 field RBTREND_COMMAND._type @0 RBTREND_COMMAND_TYPE
 field RBTREND_COMMAND._params @8 union {}
+field RBTREND_COMMAND._params._atmosphere_tables @8 struct {}
+field RBTREND_COMMAND._params._atmosphere_tables._atmosphere @8 rbtrend_atmosphere
 field RBTREND_COMMAND._params._auto_exposure @8 struct {}
 field RBTREND_COMMAND._params._auto_exposure._exposure @8 rbtrend_exposure
 field RBTREND_COMMAND._params._begin_label @8 struct {}
@@ -1449,6 +1481,10 @@ field RBTREND_COMMAND._params._generate_mips @8 struct {}
 field RBTREND_COMMAND._params._generate_mips._texture @8 rbtrend_texture2d
 field RBTREND_COMMAND._params._lit_ambient_occlusion @8 struct {}
 field RBTREND_COMMAND._params._lit_ambient_occlusion._scene @8 rbtrend_lit_scene
+field RBTREND_COMMAND._params._lit_atmosphere @8 struct {}
+field RBTREND_COMMAND._params._lit_atmosphere._scene @8 rbtrend_lit_scene
+field RBTREND_COMMAND._params._lit_atmosphere_environment @8 struct {}
+field RBTREND_COMMAND._params._lit_atmosphere_environment._environment @8 rbtrend_lit_environment
 field RBTREND_COMMAND._params._lit_cull_lights @8 struct {}
 field RBTREND_COMMAND._params._lit_cull_lights._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_environment @8 struct {}
@@ -1518,6 +1554,7 @@ field RBTREND_COMMAND._params._draw_list._material_slot @16 uint32_t
 field RBTREND_COMMAND._params._draw_texture._target @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._generate_mips._base_mip @16 uint32_t
 field RBTREND_COMMAND._params._lit_ambient_occlusion._depth @16 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_atmosphere_environment._scene @16 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_cull_lights._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_environment._source @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_path_trace._tlas @16 rbtrend_tlas
@@ -1737,6 +1774,20 @@ field RBTREND_LIT_AMBIENT.ground @40 float[3]
 field RBTREND_LIT_AMBIENT.environment @56 rbtrend_lit_environment
 field RBTREND_LIT_AMBIENT.environment_intensity @64 float
 field RBTREND_LIT_AMBIENT.environment_rotation @68 float[9]
+struct RBTREND_LIT_ATMOSPHERE size=80 align=8
+field RBTREND_LIT_ATMOSPHERE.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_ATMOSPHERE.atmosphere @16 rbtrend_atmosphere
+field RBTREND_LIT_ATMOSPHERE.center @24 float[3]
+field RBTREND_LIT_ATMOSPHERE.sun_count @36 uint32_t
+field RBTREND_LIT_ATMOSPHERE.sky_view_width @40 uint32_t
+field RBTREND_LIT_ATMOSPHERE.sky_view_height @44 uint32_t
+field RBTREND_LIT_ATMOSPHERE.aerial_width @48 uint32_t
+field RBTREND_LIT_ATMOSPHERE.aerial_height @52 uint32_t
+field RBTREND_LIT_ATMOSPHERE.aerial_depth @56 uint32_t
+field RBTREND_LIT_ATMOSPHERE.aerial_distance @60 float
+field RBTREND_LIT_ATMOSPHERE.sky_view_min_steps @64 uint32_t
+field RBTREND_LIT_ATMOSPHERE.sky_view_max_steps @68 uint32_t
+field RBTREND_LIT_ATMOSPHERE.aerial_steps_per_slice @72 uint32_t
 struct RBTREND_LIT_CASCADE_FIT size=112 align=8
 field RBTREND_LIT_CASCADE_FIT.base @0 RBT_STRUCT_BASE
 field RBTREND_LIT_CASCADE_FIT.eye_position @16 float[3]
@@ -2371,6 +2422,7 @@ typedef RBTMATH_SHELL_MEDIUM = struct RBTMATH_SHELL_MEDIUM
 typedef RBTMATH_SWEEP = struct RBTMATH_SWEEP
 typedef RBTMATH_SWEEP_HIT = struct RBTMATH_SWEEP_HIT
 typedef RBTMATH_VOLUME = struct RBTMATH_VOLUME
+typedef RBTREND_ATMOSPHERE_DESC = struct RBTREND_ATMOSPHERE_DESC
 typedef RBTREND_BATCH_CAP = enum RBTREND_BATCH_CAP
 typedef RBTREND_BATCH_CIRCLE = struct RBTREND_BATCH_CIRCLE
 typedef RBTREND_BATCH_DEPTH = enum RBTREND_BATCH_DEPTH
@@ -2411,6 +2463,7 @@ typedef RBTREND_INDEX_RANGE = struct RBTREND_INDEX_RANGE
 typedef RBTREND_INDEX_STRIDE = enum RBTREND_INDEX_STRIDE
 typedef RBTREND_INSTANCE_DESC = struct RBTREND_INSTANCE_DESC
 typedef RBTREND_LIT_AMBIENT = struct RBTREND_LIT_AMBIENT
+typedef RBTREND_LIT_ATMOSPHERE = struct RBTREND_LIT_ATMOSPHERE
 typedef RBTREND_LIT_CASCADE_FIT = struct RBTREND_LIT_CASCADE_FIT
 typedef RBTREND_LIT_ENVIRONMENT_DESC = struct RBTREND_LIT_ENVIRONMENT_DESC
 typedef RBTREND_LIT_INSTANCE = struct RBTREND_LIT_INSTANCE
@@ -2526,6 +2579,7 @@ typedef rbtmath_box_bvh = struct rbtmath_box_bvh_t *
 typedef rbtmath_instance_bvh = struct rbtmath_instance_bvh_t *
 typedef rbtmath_mesh_bvh = struct rbtmath_mesh_bvh_t *
 typedef rbtmath_poly = struct rbtmath_poly_t *
+typedef rbtrend_atmosphere = struct rbtrend_atmosphere_t *
 typedef rbtrend_batch = struct rbtrend_batch_t *
 typedef rbtrend_binding_layout = struct rbtrend_binding_layout_t *
 typedef rbtrend_binding_set = struct rbtrend_binding_set_t *

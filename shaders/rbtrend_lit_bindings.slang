@@ -36,6 +36,15 @@ module rbtrend_lit_bindings;
 [[vk::binding(12, 0)]] public Texture2D<float4> directional_mask_1 : register(t12, space0);
 [[vk::binding(13, 0)]] public Texture2D<float4> directional_mask_2 : register(t13, space0);
 [[vk::binding(14, 0)]] public Texture2D<float4> directional_mask_3 : register(t14, space0);
+// The scene's atmosphere (rbtrendatmosphere.h), where the block's
+// RBTREND_LIT_SCENE_ATMOSPHERE is set, in one binding (a set holds at most
+// sixteen, Carrottus GPU's CRGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET, and this is
+// the sixteenth): layer 0 the scene's sky-view table, layer 1 its
+// atmosphere's transmittance table, layers 2 on its aerial volume's slices
+// where RBTREND_LIT_SCENE_AERIAL is set, each in the top left of its layer
+// at its own size (the block's atmosphere_sizes and atmosphere_aerial; the
+// array's in atmosphere_array). Read through environment_sampler.
+[[vk::binding(15, 0)]] public Texture2DArray<float4> atmosphere_tables : register(t15, space0);
 
 // Element [i] of the tiles' lists.
 public uint tile_lights(uint i) {
