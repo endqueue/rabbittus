@@ -13,7 +13,9 @@ built, and `tests/rbttext_tests.c`'s 41 tests pass, none pending.
 against values recorded on macOS, and `tests/fuzz/rbttext_fuzz.cpp` fuzzes
 the readers of outside bytes. Builds and runs on macOS (Debug and Release,
 AddressSanitizer with UndefinedBehaviorSanitizer, ThreadSanitizer,
-2026-10-29); Windows and Linux never built.
+2026-10-29); Windows on 2026-10-29 and 30 (below), and Linux on
+2026-11-04 (the workspace's `ROADMAP.md`, section 2: every ctest, Debug
+and Release, this one's bits test among them, passing).
 
 Header `include/text/rbttext.h`, prefix `rbttext_` / `RBTTEXT_`, newer
 generation (see `CLAUDE.md`, "Writing a new module"): `RBT_RESULT` returns,
@@ -207,12 +209,16 @@ argument checks, unchanged. Containers are eqstd's (`eq::array`,
       had no range check at all. Kept as
       `regressions/rbttext_fuzz/lff_word_spacing_past_float.bin`; 15
       minutes more after the fix.
-- [ ] Run on Windows and Linux: `rbttext_bits_tests` there is the
+- [x] Run on Windows and Linux: `rbttext_bits_tests` there is the
       comparison of a layout's and an atlas's bytes with macOS's (item 5).
       Floating-point contraction is off for MSVC by default; msdfgen's cubic
       solver calls the C library's `acos`, `cos` and `pow`, which can differ
       in the last bit between platforms, and would show here first.
-      **Windows: done 2026-10-29** (below). **Linux: not run.**
+      **Windows: done 2026-10-29** (below). **Linux: done 2026-11-04**
+      (Fedora 44, GCC 16.2.1, `-linux-vulkan`, Debug and Release: every
+      ctest passed, `rbttext_bits_tests` then `aptext_bits_tests`
+      among them, so macOS's CRCs; the workspace's `ROADMAP.md`, section
+      2). Its CRCs weren't written out in that record, only the pass.
 
 ### On Windows (2026-10-29)
 
@@ -471,6 +477,7 @@ variable faces, the CAD arcs, the left-to-right fast path), MSVC 14.51.
       glyph ids and advances, fallback, `.notdef`, wrapping, a ligature.
 - [x] Atlas: a glyph's distance field sampled at known points, packing
       without overlap, dirty rectangles.
-- [ ] The same layout bits on all three platforms: `rbttext_bits_tests`,
+- [x] The same layout bits on all three platforms: `rbttext_bits_tests`,
       passing on macOS and on Windows (2026-10-29, MSVC, Debug and
-      Release: the same CRCs); Linux not run.
+      Release: the same CRCs) and on Linux (2026-11-04, GCC 16, Debug
+      and Release, passing).
