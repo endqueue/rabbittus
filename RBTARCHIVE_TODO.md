@@ -326,12 +326,10 @@ archive is damaged when memory ran out.
       minutes from a scratch corpus under `rabbittus-linux-vulkan-fuzz`
       (clang 22.1.8, ASan and UBSan): 14,524,743 inputs, nothing found; its
       replay passing in all eight builds. The fuzz build gives no warning.
-    - What builds on Rabbittus was rebuilt and tested on it: latran (144
-      ctests, Debug and Release; `latranallocfail_tests` counts "a pack
-      opened", 28 allocations, and "a pack written", 201, with every other
-      stage, 0 wrong, 0 leaked), linxerworks (45, Debug and Release), the
-      Endqueue client (7, Debug and Release), trellislib (55, Debug).
-      Nothing broke.
+    - What builds on Rabbittus was rebuilt and tested on it: the
+      workspace's record, the prompt's Progress. A caller's
+      allocation-failure test counted every stage with none wrong and
+      none leaked. Nothing broke.
   - **For you (2026-11-15, from the build):**
     - **`rbtarchive_codecs_add()` has nowhere to put Q2 b's message.** It
       takes no `RBTARCHIVE_ERROR`, and the draft changes no call: an old
