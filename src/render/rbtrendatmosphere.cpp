@@ -95,7 +95,8 @@ rbtrend_graphics_pipeline rbtrend_atmosphere_pipeline(rbtrend_instance instance,
 	// texture and a sampler): none for the transmittance, the transmittance
 	// for the multiple scattering, both for the sky-view, the sky-view for
 	// the environment (whose face and size are push constants), both for an
-	// aerial slice (whose slice and size are push constants).
+	// aerial slice (whose slice and size are push constants), which renders
+	// two targets: the slice's light and its transmittance.
 	rbtrend_binding_layout layouts[3] = {lit.atmosphere_layout, lit.pass_layout, lit.pass_layout};
 	uint32_t count                   = 1;
 	uint32_t push                    = 0;
@@ -109,8 +110,9 @@ rbtrend_graphics_pipeline rbtrend_atmosphere_pipeline(rbtrend_instance instance,
 		push = (uint32_t)sizeof(rbtrend_aerial_params);
 	if (pass == RBTREND_ATMOSPHERE_PASS_COPY)
 		layouts[0] = lit.pass_layout;
+	const uint32_t targets         = pass == RBTREND_ATMOSPHERE_PASS_AERIAL ? 2 : 1;
 	lit.atmosphere_pipelines[pass] = rbtrend_lit_fullscreen_pipeline_for(instance, lit.atmosphere_frags[pass], layouts, count, RBTREND_ATMOSPHERE_FORMAT,
-	                                                                     push, s_atmosphere_passes[pass].name);
+	                                                                     targets, push, s_atmosphere_passes[pass].name);
 	return lit.atmosphere_pipelines[pass];
 }
 
@@ -222,14 +224,18 @@ void rbtrend_lit_atmosphere_array_size(const RBTREND_LIT_ATMOSPHERE &a, uint32_t
 	height      = a.aerial_height > height ? a.aerial_height : height;
 	out_size[0] = width;
 	out_size[1] = height;
-	out_size[2] = 2 + a.aerial_depth;
+	// Two layers, then the volume's light a slice, then its transmittance a
+	// slice.
+	out_size[2] = 2 + 2 * a.aerial_depth;
 }
 
 void rbtrend_lit_scene_resolve_atmosphere(rbtrend_lit_scene scene) {
 	rbtrend_lit_scene_block &b = scene->block;
-	b.flags &= ~(uint32_t)(RBTREND_LIT_SCENE_FLAG_ATMOSPHERE | RBTREND_LIT_SCENE_FLAG_AERIAL);
+	b.flags &= ~(uint32_t)(RBTREND_LIT_SCENE_FLAG_ATMOSPHERE | RBTREND_LIT_SCENE_FLAG_AERIAL | RBTREND_LIT_SCENE_FLAG_SKY);
 	rbtrend_atmosphere atmosphere = scene->atmosphere.atmosphere;
-	if (!atmosphere || !rbtrend_atmosphere_drawable(*atmosphere) || !scene->sky_view_filled)
+	// On once LIT_ATMOSPHERE has copied the transmittance, with or without
+	// a sky; the sky once its sky-view is filled.
+	if (!atmosphere || !rbtrend_atmosphere_drawable(*atmosphere) || !scene->transmittance_copied)
 		return;
 	float up[3], x[3], y[3], distance = 0.0f;
 	atmosphere_frame(scene, up, x, y, &distance);
@@ -256,6 +262,8 @@ void rbtrend_lit_scene_resolve_atmosphere(rbtrend_lit_scene scene) {
 	b.atmosphere_array[2]  = (float)scene->atmosphere_array_size[2];
 	b.atmosphere_array[3]  = 0.0f;
 	b.flags |= RBTREND_LIT_SCENE_FLAG_ATMOSPHERE;
+	if (scene->atmosphere.sky_view_width > 0 && scene->sky_view_filled)
+		b.flags |= RBTREND_LIT_SCENE_FLAG_SKY;
 	if (scene->atmosphere.aerial_depth > 0 && scene->aerial_filled)
 		b.flags |= RBTREND_LIT_SCENE_FLAG_AERIAL;
 }

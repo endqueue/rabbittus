@@ -19,13 +19,14 @@ static const char *current_test = "";
         }                                                                                                              \
     } while (0)
 
-// The features only Rend's own code uses, and none that one of its calls
-// needs: those the caller asks for itself.
+// The features only Rend's own code uses, and dual-source blending, which
+// Rend's own pass for the atmosphere's shells needs (card A55); none other
+// that one of its calls needs: those the caller asks for itself.
 static void test_optional_features(void)
 {
     current_test = "optional_features";
     const CRGPU_FEATURES features = rbtrend_get_optional_gpu_features();
-    CHECK(features == (CRGPU_FEATURE_MULTI_DRAW_INDIRECT | CRGPU_FEATURE_DEVICE_MAPPABLE_MEMORY));
+    CHECK(features == (CRGPU_FEATURE_MULTI_DRAW_INDIRECT | CRGPU_FEATURE_DEVICE_MAPPABLE_MEMORY | CRGPU_FEATURE_DUAL_SOURCE_BLEND));
     CHECK(!(features & CRGPU_FEATURE_PRESENT));
     CHECK(!(features & CRGPU_FEATURE_PASS_TIMESTAMPS));
     CHECK(!(features & CRGPU_FEATURE_MESH_SHADING));

@@ -355,6 +355,83 @@ static bool rbtrend_cmd_list_uses(rbtrend_command_list cmd_list, const void *use
 	return cmd_list->used_handles.find((uint64_t)(uintptr_t)used, [](uint32_t) { return true; }) != nullptr;
 }
 
+/* Whether [set] is held (rbtrendviewsets_internal.hpp): bound by the
+ * compile in progress, [user]'s list, or by a list compiled and not yet
+ * submitted, on its instance's compiled lists. Under release_mutex. */
+static bool rbtrend_view_set_held_by_lists(const void *user, rbtrend_binding_set set) {
+	const rbtrend_command_list compiling = (rbtrend_command_list)user;
+	const uint64_t key                   = (uint64_t)(uintptr_t)set;
+	if (compiling->used_handles.find(key, [](uint32_t) { return true; }))
+		return true;
+	for (rbtrend_command_list listed : compiling->instance->compiled_lists)
+		if (listed != compiling && listed->used_handles.find(key, [](uint32_t) { return true; }))
+			return true;
+	return false;
+}
+
+/* The set of [layout] holding [entries] over [views] (at most
+ * RBTREND_VIEW_SET_VIEWS) from [scene]'s view-set records (card A67): a
+ * record over the same layout and views hands its set out; else a record
+ * not held takes a new set (an empty one, else the least recently handed
+ * out), its old set destroyed. Either way the set goes into the compile's
+ * used_handles. NULL, reported, if every record holds a held set
+ * (RBT_RESULT_LIMIT, naming [who], the command and what of it needs the
+ * set) or the set can't be made. Throws std::bad_alloc (used_handles). */
+static rbtrend_binding_set rbtrend_view_set_get(rbtrend_command_list cmd_list, rbtrend_lit_scene scene, rbtrend_binding_layout layout,
+                                              const rbtrend_texture_view *views, uint32_t view_count, const RBTREND_BINDING_SET_ENTRY *entries,
+                                              uint32_t entry_count, const char *who) {
+	rbtrend_view_set *records = scene->view_sets;
+	const uint32_t count      = scene->view_set_count;
+	for (uint32_t r = 0; r < count; ++r) {
+		rbtrend_view_set &kept = records[r];
+		bool same             = kept.set != nullptr && kept.layout == layout;
+		for (uint32_t i = 0; i < view_count && same; ++i)
+			same = kept.views[i] == views[i] && kept.serials[i] == views[i]->serial;
+		if (!same)
+			continue;
+		kept.used = ++scene->view_set_handouts;
+		rbtrend_cmd_use_handle(cmd_list, kept.set);
+		return kept.set;
+	}
+	if (count == 0) {
+		rbtrend_cmd_report(cmd_list, RBT_RESULT_LIMIT,
+		                   "%s needs a view set, and its scene keeps none (its max_view_sets, RBTREND_LIT_SCENE_DESC, is 0)", who);
+		return nullptr;
+	}
+	uint32_t chosen = UINT32_MAX;
+	{
+		// What the compiled lists hold is read under the lock a list's
+		// destroy or reset on another thread takes.
+		std::lock_guard<std::mutex> lock(cmd_list->instance->release_mutex);
+		chosen = rbtrend_view_set_choose(records, count, rbtrend_view_set_held_by_lists, cmd_list);
+	}
+	if (chosen == UINT32_MAX) {
+		rbtrend_cmd_report(cmd_list, RBT_RESULT_LIMIT,
+		                   "%s needs a view set, and the scene's %u (max_view_sets, RBTREND_LIT_SCENE_DESC) are all held by this compile and lists "
+		                   "compiled and not yet submitted",
+		                   who, count);
+		return nullptr;
+	}
+	rbtrend_binding_set made = nullptr;
+	RBTREND_ERROR error;
+	if (rbtrend_binding_set_create(layout, entries, entry_count, &made, &error) != RBT_RESULT_OK) {
+		rbtrend_cmd_report(cmd_list, RBT_RESULT_REND_GPU_FAILURE, "%s: its view set can't be made: %s", who, error.message);
+		return nullptr;
+	}
+	rbtrend_view_set &record = records[chosen];
+	rbtrend_binding_set_destroy(record.set);
+	record        = rbtrend_view_set{};
+	record.set    = made;
+	record.layout = layout;
+	for (uint32_t i = 0; i < view_count; ++i) {
+		record.views[i]   = views[i];
+		record.serials[i] = views[i]->serial;
+	}
+	record.used = ++scene->view_set_handouts;
+	rbtrend_cmd_use_handle(cmd_list, made);
+	return made;
+}
+
 void rbtrend_instance_forget(
     rbtrend_instance instance,
     const void *used) {
@@ -481,6 +558,9 @@ static void rbtrend_cmd_point_at_copies(rbtrend_command_list cmd_list) {
 			break;
 		case RBTREND_COMMAND_PUSH_CONSTANTS:
 			cmd._params._push_constants._data = copy;
+			break;
+		case RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS:
+			cmd._params._lit_atmosphere_shells._shells = (const RBTREND_LIT_ATMOSPHERE_SHELL *)copy;
 			break;
 		default:
 			break;
@@ -645,6 +725,94 @@ static bool rbtrend_reflect_send_checks(rbtrend_command_list cmd_list, const RBT
 	rbtrend_reflect_view_size(p._target, &w, &h);
 	if (w != width || h != height)
 		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target of %ux%u, and the depth %ux%u", who, w, h, width, height);
+	return true;
+}
+
+/* Shell [index]'s lights against [scene]'s list as it is now
+ * (LIT_ATMOSPHERE_SHELLS, at the send and again at the compile, the lights
+ * changing between): each one's place in the list, and its type, a
+ * directional light; each its own refusal, in the array's order. Its
+ * `_light_count` has been checked. False, reported, at the first that
+ * fails. */
+static bool rbtrend_shell_lights_ok(rbtrend_command_list cmd_list, rbtrend_lit_scene scene, uint32_t index, const RBTREND_LIT_ATMOSPHERE_SHELL &shell) {
+	const char *who = "LIT_ATMOSPHERE_SHELLS";
+	for (uint32_t j = 0; j < shell._light_count; ++j) {
+		const uint32_t light = shell._lights[j];
+		if (light >= scene->light_count)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: shell %u's _lights[%u] is %u, past the scene's %u lights", who, index, j,
+			                          light, scene->light_count);
+		if (scene->lights[light].type == RBTREND_LIT_LIGHT_TYPE_POINT)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: shell %u's _lights[%u] names light %u, a point light: a shell is lit by directional lights only", who, index, j,
+			                          light);
+		if (scene->lights[light].type == RBTREND_LIT_LIGHT_TYPE_SPOT)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: shell %u's _lights[%u] names light %u, a spot light: a shell is lit by directional lights only", who, index, j,
+			                          light);
+	}
+	return true;
+}
+
+/* The checks LIT_ATMOSPHERE_SHELLS makes at the send (rbtrendcommands.h),
+ * in its members' order and then each shell's, each its own refusal. False,
+ * reported, at the first that fails. */
+static bool rbtrend_shell_send_checks(rbtrend_command_list cmd_list, const RBTREND_COMMAND &cmd) {
+	rbtrend_instance instance = cmd_list->instance;
+	const auto &p            = cmd._params._lit_atmosphere_shells;
+	const char *who          = "LIT_ATMOSPHERE_SHELLS";
+	const CRGPU_FORMAT any   = CRGPU_FORMAT_UNKNOWN;
+	if (!p._scene)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a NULL scene", who);
+	if (RBT_STALE(p._scene, "rbtrend_command_list_send", "_lit_atmosphere_shells._scene"))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a destroyed scene", who);
+	if (p._scene->instance != instance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a scene of another instance", who);
+	if (p._shell_count > 0 && !p._shells)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _shell_count of %u and NULL _shells", who, p._shell_count);
+	if (p._min_steps == 0)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _min_steps of 0", who);
+	if (p._max_steps < p._min_steps)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _max_steps of %u, below _min_steps %u", who, p._max_steps, p._min_steps);
+	if (p._max_steps > RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _max_steps of %u, past %u", who, p._max_steps,
+		                          RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS);
+	if (!rbtrend_reflect_view_ok(cmd_list, who, "_depth", p._depth, RBTREND_TEXTURE_VIEW_TYPE_SHADER_RESOURCE, "SHADER_RESOURCE",
+	                            RBTREND_TEXTURE_VIEW_ASPECT_DEPTH, true, any, nullptr))
+		return false;
+	if (p._depth->texture._t2d->desc.sample_count != 1)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _depth of %u samples, not single-sampled", who,
+		                          p._depth->texture._t2d->desc.sample_count);
+	uint32_t width = 0, height = 0, w = 0, h = 0;
+	rbtrend_reflect_view_size(p._depth, &width, &height);
+	if ((float)width != p._scene->block.target_size[0] || (float)height != p._scene->block.target_size[1])
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _depth of %ux%u, and the scene's view's target %gx%g", who, width, height,
+		                          (double)p._scene->block.target_size[0], (double)p._scene->block.target_size[1]);
+	if (!rbtrend_reflect_view_ok(cmd_list, who, "_target", p._target, RBTREND_TEXTURE_VIEW_TYPE_RENDER_TARGET, "RENDER_TARGET",
+	                            RBTREND_TEXTURE_VIEW_ASPECT_COLOR, true, any, nullptr))
+		return false;
+	if (!rbtrend_reflect_target_format(p._target->texture._t2d->desc.format))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target not of R16G16B16A16_FLOAT, R32G32B32A32_FLOAT or R11G11B10_FLOAT", who);
+	rbtrend_reflect_view_size(p._target, &w, &h);
+	if (w != width || h != height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target of %ux%u, and the depth %ux%u", who, w, h, width, height);
+	for (uint32_t i = 0; i < p._shell_count; ++i) {
+		const RBTREND_LIT_ATMOSPHERE_SHELL &shell = p._shells[i];
+		if (!shell._atmosphere)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: shell %u has a NULL _atmosphere", who, i);
+		if (RBT_STALE(shell._atmosphere, "rbtrend_command_list_send", "_lit_atmosphere_shells._shells[]._atmosphere"))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: shell %u's _atmosphere is destroyed", who, i);
+		if (shell._atmosphere->instance != instance)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: shell %u's _atmosphere is of another instance", who, i);
+		for (uint32_t k = 0; k < 3; ++k) {
+			if (!std::isfinite(shell._center[k]))
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: shell %u's _center[%u] is not finite", who, i, k);
+		}
+		if (shell._light_count > RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: shell %u's _light_count %u is above %u", who, i, shell._light_count,
+			                          RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS);
+		if (!rbtrend_shell_lights_ok(cmd_list, p._scene, i, shell))
+			return false;
+	}
 	return true;
 }
 
@@ -1630,6 +1798,19 @@ static void rbtrend_send_command_recorded(
 			cmd_list->recording_error = true;
 			return;
 		}
+	}
+	if (cmd._type == RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS) {
+		if (!rbtrend_shell_send_checks(cmd_list, cmd)) {
+			cmd_list->recording_error = true;
+			return;
+		}
+		// The shells into the list's own storage, as viewports are: the
+		// compile sorts this copy.
+		auto &p = cmd._params._lit_atmosphere_shells;
+		if (p._shell_count > 0)
+			p._shells = (const RBTREND_LIT_ATMOSPHERE_SHELL *)keep(p._shells, sizeof(RBTREND_LIT_ATMOSPHERE_SHELL) * p._shell_count);
+		else
+			p._shells = nullptr;
 	}
 	if (cmd._type == RBTREND_COMMAND_LIT_AMBIENT_OCCLUSION) {
 		const auto &p = cmd._params._lit_ambient_occlusion;
@@ -2961,6 +3142,20 @@ static void rbtrend_cmd_own_pass(rbtrend_command_list cmd_list, rbtrend_graphics
 	rbtrend_cmd_transition_view(cmd_list, target, CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY);
 }
 
+/* As rbtrend_cmd_own_pass, into two targets at once (the pipeline renders
+ * two), each moved the same way. */
+static void rbtrend_cmd_own_pass_two(rbtrend_command_list cmd_list, rbtrend_graphics_pipeline pipeline, rbtrend_texture_view first,
+                                    rbtrend_texture_view second, uint32_t width, uint32_t height, const rbtrend_binding_set *sets, uint32_t set_count,
+                                    const void *push, uint32_t push_size) {
+	rbtrend_cmd_transition_view(cmd_list, first, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+	rbtrend_cmd_transition_view(cmd_list, second, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+	const crgpu_image_view targets[2] = {first->image_view, second->image_view};
+	rbtrend_record_fullscreen_pass_targets(cmd_list->cmd_list, pipeline, targets, 2, width, height, CRGPU_LOAD_OP_DONT_CARE, sets, set_count,
+	                                      cmd_list->compiled_frame, push, push_size);
+	rbtrend_cmd_transition_view(cmd_list, first, CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY);
+	rbtrend_cmd_transition_view(cmd_list, second, CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY);
+}
+
 /* BLUR, outside a pass: the source into SHADER_READ_ONLY; a pooled texture
  * of the target's size rendered from it across, moved to SHADER_READ_ONLY;
  * the target rendered from that down, left in COLOR_ATTACHMENT_OPTIMAL.
@@ -3295,17 +3490,21 @@ static bool rbtrend_cmd_atmosphere_tables(rbtrend_command_list cmd_list, const R
 
 /* LIT_ATMOSPHERE, outside a pass: the scene's sky-view table from its
  * atmosphere's tables, for its eye and suns as the scene holds them now,
- * into layer 0 of its array, and the transmittance table copied into layer
- * 1 (rbtrend_lit_scene_t::atmosphere_tables), left in SHADER_READ_ONLY. Nothing for a scene with no atmosphere, or one
- * whose tables have never been built. The first fill turns the scene's
- * atmosphere on (its block's flag, from the next frame's binding). */
+ * into layer 0 of its array (none for an atmosphere with no sky: no pass
+ * at 0 x 0), and the transmittance table copied into layer 1
+ * (rbtrend_lit_scene_t::atmosphere_tables), left in SHADER_READ_ONLY.
+ * Nothing for a scene with no atmosphere, or one whose tables have never
+ * been built. The first copy turns the scene's atmosphere on, the first
+ * sky-view fill its sky (its block's flags, from the next frame's
+ * binding). */
 static bool rbtrend_cmd_lit_atmosphere(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
 	rbtrend_lit_scene scene = command._params._lit_atmosphere._scene;
 	rbtrend_atmosphere a     = scene->atmosphere.atmosphere;
 	if (!a || !rbtrend_atmosphere_drawable(*a))
 		return true;
-	rbtrend_graphics_pipeline sky_view = rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_SKY_VIEW);
-	if (!sky_view)
+	const bool sky = scene->atmosphere.sky_view_width > 0;
+	rbtrend_graphics_pipeline sky_view = sky ? rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_SKY_VIEW) : nullptr;
+	if (sky && !sky_view)
 		return false;
 	rbtrend_atmosphere_pass_block block{};
 	rbtrend_lit_scene_atmosphere_block(scene, block);
@@ -3323,11 +3522,13 @@ static bool rbtrend_cmd_lit_atmosphere(rbtrend_command_list cmd_list, const RBTR
 		return false;
 	// Layer 0 of the scene's array the sky-view table, layer 1 the
 	// transmittance table copied texel for texel, each in its top left.
-	rbtrend_cmd_own_pass(cmd_list, sky_view, scene->atmosphere_targets[0], scene->atmosphere.sky_view_width, scene->atmosphere.sky_view_height, sets, 3,
-	                    nullptr, 0);
+	if (sky)
+		rbtrend_cmd_own_pass(cmd_list, sky_view, scene->atmosphere_targets[0], scene->atmosphere.sky_view_width, scene->atmosphere.sky_view_height, sets,
+		                    3, nullptr, 0);
 	rbtrend_cmd_own_pass(cmd_list, copy, scene->atmosphere_targets[1], a->desc.transmittance_width, a->desc.transmittance_height, &sets[1], 1, nullptr, 0);
-	// Layers 2 on the aerial volume's slices, each in its top left, where
-	// the scene has a volume.
+	// Layers 2 to 2 + D - 1 the aerial volume's light a slice, 2 + D on its
+	// transmittance a slice, each in its top left, where the scene has a
+	// volume of D slices: one pass a slice writes both.
 	const uint32_t slices = scene->atmosphere.aerial_depth;
 	if (slices > 0) {
 		rbtrend_graphics_pipeline aerial = rbtrend_atmosphere_pipeline(cmd_list->instance, RBTREND_ATMOSPHERE_PASS_AERIAL);
@@ -3335,16 +3536,19 @@ static bool rbtrend_cmd_lit_atmosphere(rbtrend_command_list cmd_list, const RBTR
 			return false;
 		for (uint32_t slice = 0; slice < slices; ++slice) {
 			const rbtrend_aerial_params params = {slice, 0, {(float)scene->atmosphere.aerial_width, (float)scene->atmosphere.aerial_height}};
-			rbtrend_cmd_own_pass(cmd_list, aerial, scene->atmosphere_targets[2 + slice], scene->atmosphere.aerial_width, scene->atmosphere.aerial_height,
-			                    sets, 3, &params, (uint32_t)sizeof(params));
+			rbtrend_cmd_own_pass_two(cmd_list, aerial, scene->atmosphere_targets[2 + slice], scene->atmosphere_targets[2 + slices + slice],
+			                        scene->atmosphere.aerial_width, scene->atmosphere.aerial_height, sets, 3, &params, (uint32_t)sizeof(params));
 		}
 	}
-	const bool first_sky    = !scene->sky_view_filled;
-	const bool first_aerial = slices > 0 && !scene->aerial_filled;
-	scene->sky_view_filled  = true;
+	const bool first_copy        = !scene->transmittance_copied;
+	const bool first_sky         = sky && !scene->sky_view_filled;
+	const bool first_aerial      = slices > 0 && !scene->aerial_filled;
+	scene->transmittance_copied = true;
+	if (sky)
+		scene->sky_view_filled = true;
 	if (slices > 0)
 		scene->aerial_filled = true;
-	if (first_sky || first_aerial)
+	if (first_copy || first_sky || first_aerial)
 		rbtrend_lit_scene_commit(scene);
 	return true;
 }
@@ -4416,7 +4620,7 @@ static bool rbtrend_cmd_lit_ssr(rbtrend_command_list cmd_list, const RBTREND_COM
 	                                             rbtrend_reflect_entry(3, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, whole),
 	                                             rbtrend_reflect_sampler_entry(4, lit.environment_sampler),
 	                                             rbtrend_reflect_entry(5, CRGPU_DESCRIPTOR_TYPE_STORAGE_IMAGE, p._reflection)};
-	rbtrend_binding_set inputs = rbtrend_view_set_get(instance, lit.view_sets, lit.ssr_input_layout, views, 5, entries, 6, "screen-space reflections");
+	rbtrend_binding_set inputs = rbtrend_view_set_get(cmd_list, p._scene, lit.ssr_input_layout, views, 5, entries, 6, "LIT_SSR");
 	if (!inputs)
 		return false;
 	rbtrend_ssr_params params{};
@@ -4473,7 +4677,7 @@ static bool rbtrend_cmd_rt_reflections(rbtrend_command_list cmd_list, const RBTR
 	                                             rbtrend_reflect_entry(5, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, lit.brdf_lut_view),
 	                                             rbtrend_reflect_sampler_entry(6, lit.environment_sampler)};
 	rbtrend_binding_set sets[3] = {rbtrend_lit_scene_rt_set(p._scene, rt->scene_layout), rbtrend_rt_tlas_trace_set(p._tlas),
-	                              rbtrend_view_set_get(instance, rt->reflection_sets, rt->reflection_output_layout, views, 6, entries, 7, "the traced reflections")};
+	                              rbtrend_view_set_get(cmd_list, p._scene, rt->reflection_output_layout, views, 6, entries, 7, "LIT_TRACE_REFLECTIONS")};
 	if (!sets[0] || !sets[1] || !sets[2])
 		return false;
 	rbtrend_rt_reflection_params params{};
@@ -4519,7 +4723,7 @@ static bool rbtrend_cmd_lit_reflect(rbtrend_command_list cmd_list, const RBTREND
 	                                             rbtrend_reflect_entry(1, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, p._normal_roughness),
 	                                             rbtrend_reflect_entry(2, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, p._specular),
 	                                             rbtrend_reflect_entry(3, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, p._reflection)};
-	rbtrend_binding_set inputs = rbtrend_view_set_get(instance, lit.view_sets, lit.reflect_input_layout, views, 4, entries, 4, "the reflection composite");
+	rbtrend_binding_set inputs = rbtrend_view_set_get(cmd_list, p._scene, lit.reflect_input_layout, views, 4, entries, 4, "LIT_REFLECT");
 	if (!inputs)
 		return false;
 	// What both sets hold made ready to be read, as a pass's are: the
@@ -4545,6 +4749,277 @@ static bool rbtrend_cmd_lit_reflect(rbtrend_command_list cmd_list, const RBTREND
 	rbtrend_cmd_transition_view(cmd_list, p._target, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 	rbtrend_record_fullscreen_pass_sets(cmd_list->cmd_list, pipeline, p._target->image_view, width, height, CRGPU_LOAD_OP_LOAD, sets, 2,
 	                                   cmd_list->compiled_frame, &params, sizeof(params));
+	return true;
+}
+
+/* The texels of a [width] x [height] target that a sphere of [radius]
+ * round [center] can cover through the column-major view-projection [vp],
+ * into [out] as a scissor rectangle (x, y, width, height): the bounds of
+ * the conic its dual quadric projects to (a plane tangent to the sphere is
+ * one whose distance from the centre is the radius), worked out in double
+ * from the matrix alone; the whole target where the sphere crosses the
+ * plane of the eye (w 0), the eye inside it or it beside the eye. False if
+ * it covers none: the whole sphere behind the eye, or off the target. */
+static bool rbtrend_shell_bounds(const float vp[16], const float center[3], double radius, uint32_t width, uint32_t height, uint32_t out[4]) {
+	// The rows of x, y and w (column-major: element (row, column) at
+	// column * 4 + row).
+	double rows[3][4];
+	const int which[3] = {0, 1, 3};
+	for (int r = 0; r < 3; ++r)
+		for (int c = 0; c < 4; ++c)
+			rows[r][c] = (double)vp[c * 4 + which[r]];
+	const double ch[4] = {(double)center[0], (double)center[1], (double)center[2], 1.0};
+	// The dual quadric [C C^T - r^2 I, C; C^T, 1] and its projection
+	// M Q* M^T, for M the three rows: (row_i . C_h)(row_j . C_h) - r^2
+	// (row_i.xyz . row_j.xyz).
+	double along[3];
+	for (int r = 0; r < 3; ++r)
+		along[r] = rows[r][0] * ch[0] + rows[r][1] * ch[1] + rows[r][2] * ch[2] + rows[r][3];
+	double q[3][3];
+	for (int i = 0; i < 3; ++i)
+		for (int j = 0; j < 3; ++j)
+			q[i][j] = along[i] * along[j] - radius * radius * (rows[i][0] * rows[j][0] + rows[i][1] * rows[j][1] + rows[i][2] * rows[j][2]);
+	out[0] = 0;
+	out[1] = 0;
+	out[2] = width;
+	out[3] = height;
+	// q[2][2] above 0: the sphere wholly on one side of the eye's plane.
+	if (!(q[2][2] > 0.0))
+		return true;
+	if (along[2] < 0.0)
+		return false;
+	const double disc_x = q[0][2] * q[0][2] - q[0][0] * q[2][2];
+	const double disc_y = q[1][2] * q[1][2] - q[1][1] * q[2][2];
+	if (disc_x < 0.0 || disc_y < 0.0)
+		return true;
+	const double x0 = (q[0][2] - std::sqrt(disc_x)) / q[2][2], x1 = (q[0][2] + std::sqrt(disc_x)) / q[2][2];
+	const double y0 = (q[1][2] - std::sqrt(disc_y)) / q[2][2], y1 = (q[1][2] + std::sqrt(disc_y)) / q[2][2];
+	// Clip x and y to texels, the first row at the top; a texel's margin
+	// each side for the rasteriser's rounding.
+	const double left   = std::floor((x0 + 1.0) * 0.5 * width) - 1.0;
+	const double right  = std::ceil((x1 + 1.0) * 0.5 * width) + 1.0;
+	const double top    = std::floor((1.0 - y1) * 0.5 * height) - 1.0;
+	const double bottom = std::ceil((1.0 - y0) * 0.5 * height) + 1.0;
+	const double l = left < 0.0 ? 0.0 : left, t = top < 0.0 ? 0.0 : top;
+	const double rr = right > (double)width ? (double)width : right, b = bottom > (double)height ? (double)height : bottom;
+	if (!(rr > l) || !(b > t))
+		return false;
+	out[0] = (uint32_t)l;
+	out[1] = (uint32_t)t;
+	out[2] = (uint32_t)(rr - l);
+	out[3] = (uint32_t)(b - t);
+	return true;
+}
+
+/* LIT_ATMOSPHERE_SHELLS, outside a pass: on a device with dual-source
+ * blending, the views and the scene's view checked again as LIT_REFLECT's
+ * are, then each shell's lights and atmosphere; the list's copy of the
+ * shells sorted by the eye's power against each top sphere, greatest
+ * first (insertion, stable: a function of the copy and the eye alone);
+ * then one pass over the target, a draw a shell inside the scissor of its
+ * bounds, blended over it, the target left in COLOR_ATTACHMENT_OPTIMAL. A
+ * shell whose atmosphere has no medium or no tables built, or whose
+ * bounds cover no texel, is skipped. False, reported, at the first
+ * refusal or if a pipeline or set can't be made. */
+static bool rbtrend_cmd_lit_atmosphere_shells(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	const auto &p            = command._params._lit_atmosphere_shells;
+	const char *who          = "LIT_ATMOSPHERE_SHELLS";
+	rbtrend_instance instance = cmd_list->instance;
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	rbtrend_lit_scene scene   = p._scene;
+	if (!(instance->features & CRGPU_FEATURE_DUAL_SOURCE_BLEND))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_UNSUPPORTED,
+		                          "%s: the device was not created with CRGPU_FEATURE_DUAL_SOURCE_BLEND, which its blend needs (rbtrend_get_optional_gpu_features())",
+		                          who);
+	if (!rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._depth)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the depth has nothing in it, from before the list or earlier in it", who);
+	if (!rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._target)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the target has nothing in it, from before the list or earlier in it", who);
+	uint32_t width = 0, height = 0, w = 0, h = 0;
+	rbtrend_reflect_view_size(p._depth, &width, &height);
+	if ((float)width != scene->block.target_size[0] || (float)height != scene->block.target_size[1])
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the depth is %ux%u, and the scene's view's target %gx%g", who, width, height,
+		                          (double)scene->block.target_size[0], (double)scene->block.target_size[1]);
+	rbtrend_reflect_view_size(p._target, &w, &h);
+	if (w != width || h != height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the target is %ux%u, no longer the depth's %ux%u", who, w, h, width, height);
+	// rbtrend_lit_scene_set_view() leaves the inverse 0 where the matrix has
+	// none.
+	bool inverse = false;
+	for (float v : scene->block.inverse_view_projection)
+		inverse = inverse || v != 0.0f;
+	if (!inverse)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene's view_projection can't be inverted", who);
+	if (scene->block.output_encoding != RBTREND_COLOR_ENCODING_LINEAR)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene writes its color encoded, and the picture the shells are drawn over is linear",
+		                          who);
+	// The lights may have changed since the send; the scene's own
+	// atmosphere, drawing a sky, would be drawn twice.
+	for (uint32_t i = 0; i < p._shell_count; ++i) {
+		const RBTREND_LIT_ATMOSPHERE_SHELL &shell = p._shells[i];
+		if (!rbtrend_shell_lights_ok(cmd_list, scene, i, shell))
+			return false;
+		if (shell._atmosphere == scene->atmosphere.atmosphere && scene->atmosphere.sky_view_width > 0)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: shell %u names the scene's own atmosphere, which draws a sky: its air would be drawn twice (give the scene's "
+			                          "atmosphere no sky to draw it as a shell)",
+			                          who, i);
+	}
+	if (p._shell_count == 0)
+		return true;
+	// The farthest first: the greatest power of the eye, |eye - centre|^2 -
+	// top^2, an order every ray agrees with for shells that don't
+	// intersect; a shell holding the eye, negative, last.
+	RBTREND_LIT_ATMOSPHERE_SHELL *shells = const_cast<RBTREND_LIT_ATMOSPHERE_SHELL *>(p._shells);
+	const float *eye                     = scene->block.eye_position;
+	auto power = [&](const RBTREND_LIT_ATMOSPHERE_SHELL &shell) {
+		double sum = 0.0;
+		for (int k = 0; k < 3; ++k) {
+			const double d = (double)eye[k] - (double)shell._center[k];
+			sum += d * d;
+		}
+		const double top = (double)shell._atmosphere->medium.top_radius;
+		return sum - top * top;
+	};
+	for (uint32_t i = 1; i < p._shell_count; ++i) {
+		const RBTREND_LIT_ATMOSPHERE_SHELL moving = shells[i];
+		const double key                          = power(moving);
+		uint32_t j                                = i;
+		while (j > 0 && power(shells[j - 1]) < key) {
+			shells[j] = shells[j - 1];
+			--j;
+		}
+		shells[j] = moving;
+	}
+
+	rbtrend_graphics_pipeline pipeline = rbtrend_lit_shell_pipeline(instance, p._target->texture._t2d->desc.format);
+	if (!pipeline)
+		return false;
+	if (!rbtrend_cmd_use_material(cmd_list, scene->material))
+		return false;
+	rbtrend_shell_params params{};
+	params.steps[0] = p._min_steps;
+	params.steps[1] = p._max_steps;
+	params.steps[2] = (scene->block.flags & RBTREND_LIT_SCENE_FLAG_SKY) ? 1u : 0u;
+	params.steps[3] = rbtrend_lit_scene_depth_reversed(scene) ? 1u : 0u;
+	// Shell [i]'s scissor into [region], and its centre and lights into
+	// params: each light's direction and illuminance at the centre, a
+	// directional light's as it is. False for a shell that draws nothing.
+	auto prepare = [&](uint32_t i, uint32_t region[4]) {
+		const RBTREND_LIT_ATMOSPHERE_SHELL &shell = shells[i];
+		rbtrend_atmosphere a                     = shell._atmosphere;
+		if (!rbtrend_atmosphere_drawable(*a))
+			return false;
+		if (!rbtrend_shell_bounds(scene->block.view_projection, shell._center, (double)a->medium.top_radius, width, height, region))
+			return false;
+		for (int k = 0; k < 3; ++k)
+			params.center_lights[k] = shell._center[k];
+		params.center_lights[3] = (float)shell._light_count;
+		for (uint32_t j = 0; j < RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS; ++j) {
+			const uint32_t slot = j < shell._light_count ? rbtrend_lit_scene_directional_slot(scene, shell._lights[j]) : UINT32_MAX;
+			for (int k = 0; k < 4; ++k) {
+				params.light_direction[j][k]   = 0.0f;
+				params.light_illuminance[j][k] = 0.0f;
+			}
+			if (slot == UINT32_MAX)
+				continue;
+			for (int k = 0; k < 3; ++k) {
+				params.light_direction[j][k]   = scene->block.directional[slot].direction_versine[k];
+				params.light_illuminance[j][k] = 3.14159265358979f * scene->block.directional[slot].radiance_disc[k];
+			}
+			params.light_direction[j][3] = 1.0f;
+		}
+		return true;
+	};
+	// Shell [i]'s set 2: the depth and its atmosphere's two tables, from the
+	// scene's view-set records, taken once a shell (card A67) and kept in
+	// shell_sets for the draws.
+	auto inputs_of = [&](uint32_t i) {
+		rbtrend_atmosphere a                        = shells[i]._atmosphere;
+		const rbtrend_texture_view views[3]         = {p._depth, a->transmittance_view, a->multiple_scattering_view};
+		const RBTREND_BINDING_SET_ENTRY entries[3] = {rbtrend_reflect_entry(0, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, p._depth),
+		                                             rbtrend_reflect_entry(1, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, a->transmittance_view),
+		                                             rbtrend_reflect_entry(2, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, a->multiple_scattering_view)};
+		char who[64];
+		snprintf(who, sizeof(who), "LIT_ATMOSPHERE_SHELLS: shell %u", i);
+		return rbtrend_view_set_get(cmd_list, scene, lit.shell_input_layout, views, 3, entries, 3, who);
+	};
+	eq::array<rbtrend_binding_set> &shell_sets = cmd_list->shell_sets;
+	shell_sets.clear();
+	if (shell_sets.resize(p._shell_count) != EQ_SUCCESS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_OUT_OF_MEMORY, "compile: out of memory");
+	// Every shell's sets made ready to be read first, as a pass's are: no
+	// barrier is recorded inside a pass.
+	uint32_t region[4];
+	bool any = false;
+	for (uint32_t i = 0; i < p._shell_count; ++i) {
+		shell_sets[i] = nullptr;
+		if (!prepare(i, region))
+			continue;
+		rbtrend_atmosphere a = shells[i]._atmosphere;
+		if (!rbtrend_cmd_use_material(cmd_list, a->material))
+			return false;
+		rbtrend_binding_set inputs = inputs_of(i);
+		if (!inputs)
+			return false;
+		shell_sets[i] = inputs;
+		const rbtrend_binding_set sets[3]     = {scene->material->set, a->material->set, inputs};
+		eq::array<rbtrend_pass_image> &images = cmd_list->pass_images;
+		eq::array<rbtrend_pass_store> &stores = cmd_list->pass_stores;
+		images.clear();
+		stores.clear();
+		for (uint32_t slot = 0; slot < 3; ++slot) {
+			if (!rbtrend_pass_images_add_set(cmd_list, images, sets[slot], slot, pipeline->storage_writes))
+				return false;
+			rbtrend_storage_stores_add_set(stores, sets[slot], cmd_list->compiled_frame, slot, pipeline->storage_writes);
+			rbtrend_cmd_use_handle(cmd_list, sets[slot]);
+		}
+		for (const rbtrend_pass_store &store : stores)
+			rbtrend_cmd_use_store(cmd_list, store.store);
+		rbtrend_cmd_ready_set_resources(cmd_list, images, stores);
+		any = true;
+	}
+	if (!any)
+		return true;
+	// One pass over the target, loaded and stored once: a draw a shell,
+	// each inside the scissor of its bounds.
+	rbtrend_cmd_transition_view(cmd_list, p._target, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+	crgpu_command_list cmd = cmd_list->cmd_list;
+	const uint32_t frame   = cmd_list->compiled_frame;
+	crgpu_rendering_begin_desc pass{};
+	pass.base.type                       = CR_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
+	pass.color_attachments[0].image_view = p._target->image_view;
+	pass.color_attachments[0].load_op    = CRGPU_LOAD_OP_LOAD;
+	pass.color_attachments[0].store_op   = CRGPU_STORE_OP_STORE;
+	pass.color_attachment_count          = 1;
+	pass.width                           = width;
+	pass.height                          = height;
+	crgpu_command_list_begin_rendering(cmd, &pass);
+	CRGPU_VIEWPORT viewport{};
+	viewport.width    = (float)width;
+	viewport.height   = (float)height;
+	viewport.maxDepth = 1.0f;
+	crgpu_command_list_set_viewports(cmd, 0, 1, &viewport);
+	crgpu_command_list_bind_graphics_pipeline(cmd, pipeline->pipeline);
+	rbtrend_binding_set scene_set = scene->material->set;
+	crgpu_command_list_bind_graphics_descriptor_sets(cmd, pipeline->pipeline, 0, &scene_set->sets[rbtrend_binding_set_frame_slot(scene_set, frame)], 1);
+	for (uint32_t i = 0; i < p._shell_count; ++i) {
+		if (!prepare(i, region))
+			continue;
+		const rbtrend_binding_set sets[2] = {shells[i]._atmosphere->material->set, shell_sets[i]};
+		for (uint32_t slot = 0; slot < 2; ++slot)
+			crgpu_command_list_bind_graphics_descriptor_sets(cmd, pipeline->pipeline, slot + 1, &sets[slot]->sets[rbtrend_binding_set_frame_slot(sets[slot], frame)],
+			                                          1);
+		CRGPU_SCISSOR_RECT scissor{};
+		scissor.x      = (float)region[0];
+		scissor.y      = (float)region[1];
+		scissor.width  = (float)region[2];
+		scissor.height = (float)region[3];
+		crgpu_command_list_set_scissor_rects(cmd, 0, 1, &scissor);
+		crgpu_command_list_push_graphics_constants(cmd, pipeline->pipeline, 0, sizeof(params), &params);
+		crgpu_command_list_draw(cmd, 3, 0);
+	}
+	crgpu_command_list_end_rendering(cmd);
 	return true;
 }
 
@@ -4850,6 +5325,10 @@ static void rbtrend_cmd_use_command_views(rbtrend_command_list cmd_list, const R
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_trace_reflections._normal_roughness);
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_trace_reflections._reflection);
 		break;
+	case RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS:
+		rbtrend_cmd_use_handle(cmd_list, command._params._lit_atmosphere_shells._depth);
+		rbtrend_cmd_use_handle(cmd_list, command._params._lit_atmosphere_shells._target);
+		break;
 	case RBTREND_COMMAND_LIT_REFLECT:
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_reflect._depth);
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_reflect._normal_roughness);
@@ -4926,6 +5405,8 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 				material = command._params._lit_trace_reflections._scene->material;
 			else if (command._type == RBTREND_COMMAND_LIT_REFLECT)
 				material = command._params._lit_reflect._scene->material;
+			else if (command._type == RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS)
+				material = command._params._lit_atmosphere_shells._scene->material;
 			if (!material)
 				continue;
 			bool known               = false;
@@ -5524,6 +6005,16 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 					ok = rbtrend_cmd_lit_ssr(cmd_list, command);
 				else
 					ok = rbtrend_cmd_lit_reflect(cmd_list, command);
+				bound_compute_pipeline = nullptr;
+				break;
+			}
+			case RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS: {
+				if (in_pass) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_ATMOSPHERE_SHELLS inside a rendering pass");
+					ok = false;
+					break;
+				}
+				ok                     = rbtrend_cmd_lit_atmosphere_shells(cmd_list, command);
 				bound_compute_pipeline = nullptr;
 				break;
 			}

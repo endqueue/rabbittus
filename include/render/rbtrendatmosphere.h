@@ -56,15 +56,23 @@
  * from the eye, above it from where the view enters the shell, so a camera
  * climbing out keeps a sky with no step at the top (thin, then black but
  * for the sun's disc). An eye under the ground is taken at the ground. A
- * camera far outside, where the shell is a thin ring, is not drawn here:
- * that is the shell seen from space, a pass of its own not yet built.
+ * camera far outside, where the shell is a thin ring, is drawn otherwise:
+ * RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS (rbtrendcommands.h) marches each
+ * shell it is given at every texel it covers, against depth, and blends its
+ * light and transmittance over the picture, per channel; several worlds'
+ * shells in one frame, each lit by the scene's directional lights it names.
+ * A scene's atmosphere may have no sky (rbtrendlit.h,
+ * RBTREND_LIT_ATMOSPHERE: sky-view sizes 0): its suns still reach the
+ * surfaces through its transmittance and it draws nothing behind them, so
+ * a world seen from outside its shell keeps its ground lit through its air
+ * while the shell pass draws the air.
  *
  * @par Several media
  * As many atmospheres as the caller makes, each with its own tables; which
  * one a scene draws is the caller's choice, set each frame.
  *
  * Out of scope: water, fog in a box or under a plane (a shell has no flat
- * boundary); the shell seen from outside; clouds.
+ * boundary); clouds.
  *
  * @par Threads
  * An atmosphere is one object for the library's rule (rbtcore.h,

@@ -80,6 +80,29 @@ public float3 sphere_hits(float3 o, float3 d, float radius) {
     return float3(-b - root, -b + root, 1.0);
 }
 
+// The same crossing in the stable form (Haines, Guenther and
+// Akenine-Moller, "Precision Improvements for Ray/Sphere Intersection",
+// Ray Tracing Gems, 2019, chapter 7), for an origin far from the sphere
+// against its radius: the discriminant as radius^2 - |o - b d|^2, |o - b d|
+// the ray's least distance from the centre, where b^2 - (|o|^2 - radius^2)
+// would cancel two terms of |o|^2; the roots q = -b - sign(b) sqrt(disc)
+// and c / q, c = |o|^2 - radius^2, x the lesser and y the greater (c / q is
+// the nearer only for b < 0, the sphere ahead). A miss leaves z below 0.
+public float3 sphere_hits_stable(float3 o, float3 d, float radius) {
+    float b    = dot(o, d);
+    float3 h   = o - b * d;
+    float disc = radius * radius - dot(h, h);
+    if (disc < 0.0)
+        return float3(0.0, 0.0, -1.0);
+    float q = -b - (b >= 0.0 ? 1.0 : -1.0) * sqrt(disc);
+    // A ray from a point on the sphere, square to its radius: both roots 0.
+    if (q == 0.0)
+        return float3(0.0, 0.0, 1.0);
+    float c     = dot(o, o) - radius * radius;
+    float other = c / q;
+    return float3(min(q, other), max(q, other), 1.0);
+}
+
 // Whether a ray from [o] along [d] meets the ground ahead of it.
 public bool hits_ground(AtmosphereMedium m, float3 o, float3 d) {
     float3 g = sphere_hits(o, d, m.bottom_radius);
@@ -230,16 +253,52 @@ public uint transmittance_ray(AtmosphereMedium m, float3 p, float3 dir, out floa
     return 2u;
 }
 
+// transmittance_ray's cases for a point a surface stands on, or an eye:
+// inside the shell, its radius taken no lower than the ground's, and
+// [dir] tested against that radius's horizon by the ground's own rule
+// (ground_transmittance's): under the ground's horizon (its cosine with
+// the vertical at most -sqrt(r^2 - R^2) / r, 0 on the ground) none of the
+// light gets through. No ray-sphere test, whose roots for a point within
+// a few ulps of the ground turn on their rounding alone, so a surface on
+// the ground was speckled with points the sun never reached. Above the
+// shell, transmittance_ray's.
+public uint surface_transmittance_ray(AtmosphereMedium m, float3 p, float3 dir, out float out_r, out float out_mu) {
+    float r = length(p);
+    if (r > m.top_radius)
+        return transmittance_ray(m, p, dir, out_r, out_mu);
+    out_r          = max(r, m.bottom_radius);
+    out_mu         = clamp(dot(p, dir) / max(r, 1e-12), -1.0, 1.0);
+    float horizon  = sqrt(max((out_r - m.bottom_radius) * (out_r + m.bottom_radius), 0.0)) / out_r;
+    if (out_mu <= -horizon)
+        return 0u;
+    return 2u;
+}
+
 // The transmittance from a point [p] (relative to the centre) towards
-// [dir], read from [table] (transmittance_ray's cases).
+// [dir], read from [table]: surface_transmittance_ray's cases (card A68),
+// so a march's point under the ground, put on it, reads its sun by the
+// ground's rule and not by a ray-sphere test that turns on rounding there.
 public float3 transmittance_towards(AtmosphereMedium m, Texture2D<float4> table, SamplerState s, float2 size, float3 p, float3 dir) {
     float r, mu;
-    uint kind = transmittance_ray(m, p, dir, r, mu);
+    uint kind = surface_transmittance_ray(m, p, dir, r, mu);
     if (kind == 0u)
         return float3(0.0);
     if (kind == 1u)
         return float3(1.0);
     return table.SampleLevel(s, transmittance_lookup_uv(m, r, mu, size), 0.0).rgb;
+}
+
+// The transmittance towards [sun] from a point of the ground whose up is
+// [n], read from [table] at the ground's radius: a light above a point of
+// a sphere's surface is never hidden by that sphere, and one at or below
+// its horizon reaches it with nothing (0). No ground test of the point,
+// which lies on the ground only to within its rounding: transmittance_ray's
+// would find it under the ground or above it by that rounding alone.
+public float3 ground_transmittance(AtmosphereMedium m, Texture2D<float4> table, SamplerState s, float2 size, float3 n, float3 sun) {
+    float mu = dot(n, sun);
+    if (mu <= 0.0)
+        return float3(0.0);
+    return table.SampleLevel(s, transmittance_lookup_uv(m, m.bottom_radius, mu, size), 0.0).rgb;
 }
 
 // Where the eye is taken for the sky-view, as a radius from the centre:

@@ -66,9 +66,14 @@ float4 rbtrend_lit_occlusion_frag(float4 frag_coord : SV_Position) : SV_Target0 
     float2 frag  = frag_coord.xy;
     float depth  = depth_at(int2(frag));
     float3 p     = unproject(frag, depth);
-    // The texel's own ray, towards the eye: the far end of its depth range
-    // minus the near, turned to the eye's side of the surface.
-    float3 v     = normalize(unproject(frag, 0.0) - unproject(frag, 1.0));
+    // The texel's own ray, towards the eye: between the ends of its depth
+    // range, taken homogeneously (card A69, as the atmosphere's shaders
+    // take it), so a far plane at infinity (one end's w 0) gives a
+    // direction; turned to the eye's side of the surface.
+    float2 ndc   = frag * u_occlusion.target_size.zw * 2.0 - 1.0;
+    float4 ha    = mul(u_occlusion.inverse_view_projection, float4(ndc.x, -ndc.y, 0.0, 1.0));
+    float4 hb    = mul(u_occlusion.inverse_view_projection, float4(ndc.x, -ndc.y, 1.0, 1.0));
+    float3 v     = normalize(ha.xyz * hb.w - hb.xyz * ha.w);
     if (dot(v, u_occlusion.eye_position.xyz - p) < 0.0)
         v = -v;
     float3 n     = normalize(cross(position_at(frag + float2(1.0, 0.0)) - p, position_at(frag + float2(0.0, 1.0)) - p));

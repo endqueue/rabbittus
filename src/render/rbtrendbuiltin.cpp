@@ -498,10 +498,14 @@ void rbtrend_record_fullscreen_pass_sets(
 	rbtrend_record_fullscreen_pass_region(cmd, pipeline, target, width, height, whole, load_op, sets, set_count, frame, push, push_size);
 }
 
-void rbtrend_record_fullscreen_pass_region(
+// The pass of rbtrend_record_fullscreen_pass_region and
+// rbtrend_record_fullscreen_pass_targets: [target_count] targets, drawn
+// inside [region].
+static void rbtrend_record_fullscreen_pass_into(
     crgpu_command_list cmd,
     rbtrend_graphics_pipeline pipeline,
-    crgpu_image_view target,
+    const crgpu_image_view *targets,
+    uint32_t target_count,
     uint32_t width,
     uint32_t height,
     const uint32_t region[4],
@@ -513,12 +517,14 @@ void rbtrend_record_fullscreen_pass_region(
     uint32_t push_size) {
 	crgpu_rendering_begin_desc pass{};
 	pass.base.type = CR_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
-	pass.color_attachments[0].image_view = target;
-	pass.color_attachments[0].load_op    = load_op;
-	pass.color_attachments[0].store_op   = CRGPU_STORE_OP_STORE;
-	pass.color_attachment_count          = 1;
-	pass.width                           = width;
-	pass.height                          = height;
+	for (uint32_t i = 0; i < target_count; ++i) {
+		pass.color_attachments[i].image_view = targets[i];
+		pass.color_attachments[i].load_op    = load_op;
+		pass.color_attachments[i].store_op   = CRGPU_STORE_OP_STORE;
+	}
+	pass.color_attachment_count = target_count;
+	pass.width                  = width;
+	pass.height                 = height;
 	crgpu_command_list_begin_rendering(cmd, &pass);
 	CRGPU_VIEWPORT viewport{};
 	viewport.width    = (float)width;
@@ -539,6 +545,39 @@ void rbtrend_record_fullscreen_pass_region(
 		crgpu_command_list_push_graphics_constants(cmd, pipeline->pipeline, 0, push_size, push);
 	crgpu_command_list_draw(cmd, 3, 0);
 	crgpu_command_list_end_rendering(cmd);
+}
+
+void rbtrend_record_fullscreen_pass_region(
+    crgpu_command_list cmd,
+    rbtrend_graphics_pipeline pipeline,
+    crgpu_image_view target,
+    uint32_t width,
+    uint32_t height,
+    const uint32_t region[4],
+    CRGPU_LOAD_OP load_op,
+    const rbtrend_binding_set *sets,
+    uint32_t set_count,
+    uint32_t frame,
+    const void *push,
+    uint32_t push_size) {
+	rbtrend_record_fullscreen_pass_into(cmd, pipeline, &target, 1, width, height, region, load_op, sets, set_count, frame, push, push_size);
+}
+
+void rbtrend_record_fullscreen_pass_targets(
+    crgpu_command_list cmd,
+    rbtrend_graphics_pipeline pipeline,
+    const crgpu_image_view *targets,
+    uint32_t target_count,
+    uint32_t width,
+    uint32_t height,
+    CRGPU_LOAD_OP load_op,
+    const rbtrend_binding_set *sets,
+    uint32_t set_count,
+    uint32_t frame,
+    const void *push,
+    uint32_t push_size) {
+	const uint32_t whole[4] = {0, 0, width, height};
+	rbtrend_record_fullscreen_pass_into(cmd, pipeline, targets, target_count, width, height, whole, load_op, sets, set_count, frame, push, push_size);
 }
 
 void rbtrend_record_fullscreen_pass(

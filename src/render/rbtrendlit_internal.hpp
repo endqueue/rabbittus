@@ -10,6 +10,7 @@
 #include "render/rbtrendlit.h"
 #include "render/rbtrendpost.h"
 #include "../rbtplaindata.hpp"
+#include "rbtrendviewsets_internal.hpp"
 #include "../rbtstale.hpp"
 
 #include <cstdint>
@@ -115,6 +116,7 @@ enum : uint32_t {
 	RBTREND_LIT_SCENE_FLAG_SCENE_COLOR     = 256u,
 	RBTREND_LIT_SCENE_FLAG_ATMOSPHERE      = 512u,
 	RBTREND_LIT_SCENE_FLAG_AERIAL          = 1024u,
+	RBTREND_LIT_SCENE_FLAG_SKY             = 2048u,
 };
 
 /* RbtrendLitShadowPass in shaders/rbtrend_lit_shadow_pass.slang. */
@@ -285,10 +287,12 @@ bool rbtrend_lit_scene_depth_reversed(rbtrend_lit_scene scene);
 bool rbtrend_lit_prepare_passes_for(rbtrend_instance instance);
 
 /* A pipeline over the full-screen vertex shader with [fragment], rendering
- * to [format], [layouts] at its first slots, [push_size] bytes of fragment
- * push constants (none if 0). NULL, reported, if it can't be made. */
+ * to [color_count] targets each of [format], [layouts] at its first slots,
+ * [push_size] bytes of fragment push constants (none if 0). NULL,
+ * reported, if it can't be made. */
 rbtrend_graphics_pipeline rbtrend_lit_fullscreen_pipeline_for(rbtrend_instance instance, rbtrend_shader fragment, const rbtrend_binding_layout *layouts,
-                                                            uint32_t layout_count, CRGPU_FORMAT format, uint32_t push_size, const char *name);
+                                                            uint32_t layout_count, CRGPU_FORMAT format, uint32_t color_count, uint32_t push_size,
+                                                            const char *name);
 
 /* The scene's block, resolved, into the materials that read it, for the
  * next compile that binds them (every setter's last step). */
@@ -348,35 +352,6 @@ enum {
  * and its specular weight (rbtrendlit.h, rbtrendcommands.h). */
 #define RBTREND_REFLECTION_FORMAT CRGPU_FORMAT_R16G16B16A16_FLOAT
 #define RBTREND_SPECULAR_FORMAT CRGPU_FORMAT_R8G8B8A8_UNORM
-
-/* A binding set Rend makes over views a command names, kept for the next
- * compile that names the same ones: the layout it is of, and the views and
- * their serials it holds (a view destroyed and another made at its address
- * has another serial). One of a fixed number, the least recently handed
- * out made again when none matches, so a frame that names the views it
- * named before makes none. */
-#define RBTREND_VIEW_SET_VIEWS 6u
-#define RBTREND_VIEW_SETS 16u
-struct rbtrend_view_set {
-	rbtrend_binding_set set;
-	const void *layout;
-	const void *views[RBTREND_VIEW_SET_VIEWS];
-	uint64_t serials[RBTREND_VIEW_SET_VIEWS];
-	/* The instance's frame_number when last handed out. */
-	uint64_t used;
-};
-RBT_PLAIN_DATA(rbtrend_view_set);
-
-/* The set of [layout] holding [entries] over [views] (at most
- * RBTREND_VIEW_SET_VIEWS, which the entries name), from [sets] if one
- * matches, else made into the least recently used. NULL, reported naming
- * [what], if it can't be made. */
-rbtrend_binding_set rbtrend_view_set_get(rbtrend_instance instance, rbtrend_view_set (&sets)[RBTREND_VIEW_SETS], rbtrend_binding_layout layout,
-                                       const rbtrend_texture_view *views, uint32_t view_count, const RBTREND_BINDING_SET_ENTRY *entries,
-                                       uint32_t entry_count, const char *what);
-
-/* Destroys every set of [sets]. */
-void rbtrend_view_sets_destroy(rbtrend_view_set (&sets)[RBTREND_VIEW_SETS]);
 
 /* What an instance makes for lit surfaces, each NULL until first needed
  * (rbtrend_builtins::lit). */
@@ -475,8 +450,13 @@ struct rbtrend_lit_builtins {
 	rbtrend_shader reflect_frag{nullptr};
 	rbtrend_binding_layout reflect_input_layout{nullptr};
 	std::vector<format_pipeline> reflect_pipelines{};
-	/* The sets of the two layouts over the commands' views. */
-	rbtrend_view_set view_sets[RBTREND_VIEW_SETS]{};
+	/* RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS's march: its shader, the layout
+	 * of its set 2 (the depth and an atmosphere's two tables; set 0 is the
+	 * scene's own, set 1 the atmosphere passes' layout, an atmosphere's
+	 * block), and a pipeline for each target format, blending dual-source. */
+	rbtrend_shader shell_frag{nullptr};
+	rbtrend_binding_layout shell_input_layout{nullptr};
+	std::vector<format_pipeline> shell_pipelines{};
 };
 
 /* Destroys what rbtrend_lit_builtins holds, pipelines before layouts, from
@@ -509,6 +489,12 @@ rbtrend_binding_set rbtrend_lit_scene_ssr_set(rbtrend_lit_scene scene);
 /* LIT_REFLECT's pipeline rendering onto [format], made if it isn't (its
  * layout with it). NULL, reported, if it can't be. */
 rbtrend_graphics_pipeline rbtrend_lit_reflect_pipeline(rbtrend_instance instance, CRGPU_FORMAT format);
+
+/* LIT_ATMOSPHERE_SHELLS's pipeline rendering onto [format], made if it
+ * isn't (its layout with it): colour X ONE + destination SRC1_COLOR, alpha
+ * ONE + destination SRC1_ALPHA. The device has CRGPU_FEATURE_DUAL_SOURCE_
+ * BLEND. NULL, reported, if it can't be made. */
+rbtrend_graphics_pipeline rbtrend_lit_shell_pipeline(rbtrend_instance instance, CRGPU_FORMAT format);
 
 /* The exposure histogram's compute pipeline, made if it isn't (the passes
  * prepared). NULL, reported, if it can't be. */
@@ -647,7 +633,8 @@ typedef struct rbtrend_lit_scene_t {
 	 * `atmosphere` NULL for none), and its tables as the lit shaders read
 	 * them, in one binding (set 0 holds at most sixteen): a 2D array whose
 	 * layer 0 holds the sky-view table, 1 a copy of the atmosphere's
-	 * transmittance table, 2 on the aerial volume's slices, each in the top
+	 * transmittance table, 2 on the aerial volume's slices (its light a
+	 * slice, then its transmittance a slice, RGB each), each in the top
 	 * left of its layer; a render target view per layer, the whole as an
 	 * array, and layer 0 alone (the environment fill's), kept while their
 	 * sizes hold; and the material of the atmosphere pass layout its
@@ -658,12 +645,26 @@ typedef struct rbtrend_lit_scene_t {
 	rbtrend_texture_view atmosphere_tables_view{nullptr};
 	rbtrend_texture_view sky_view_view{nullptr};
 	rbtrend_material atmosphere_material{nullptr};
-	/* Whether a LIT_ATMOSPHERE has filled the sky-view table (and volume)
-	 * since they were made: until then the scene draws no atmosphere. */
+	/* Whether a LIT_ATMOSPHERE has copied the atmosphere's transmittance
+	 * table into layer 1 since the array was made or the atmosphere set:
+	 * until then the scene draws no atmosphere (the block's
+	 * RBTREND_LIT_SCENE_FLAG_ATMOSPHERE). Whether one has filled the
+	 * sky-view table, a sky's (RBTREND_LIT_SCENE_FLAG_SKY: the sky shader
+	 * draws it and dims the suns' discs; and what LIT_ATMOSPHERE_ENVIRONMENT
+	 * reads), and the aerial volume (RBTREND_LIT_SCENE_FLAG_AERIAL). */
+	bool transmittance_copied{false};
 	bool sky_view_filled{false};
 	bool aerial_filled{false};
 	/* The width, height and layers the array was made at. */
 	uint32_t atmosphere_array_size[3]{};
+	/* The view-set records (rbtrendviewsets_internal.hpp; the desc's
+	 * max_view_sets, card A67): calloc'd at creation, `view_set_count` of
+	 * them, NULL for 0; read and written only by a compile (which enters
+	 * the instance) and by the scene's create and destroy. The hand-out
+	 * counter, raised at each hand-out, is each record's `used`. */
+	rbtrend_view_set *view_sets{nullptr};
+	uint32_t view_set_count{0};
+	uint64_t view_set_handouts{0};
 	RBT_STALE_TAG
 } rbtrend_lit_scene_t;
 

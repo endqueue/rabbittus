@@ -11,6 +11,7 @@
 
 import rbtrend_atmosphere_model;
 import rbtrend_atmosphere_pass;
+import rbtrend_atmosphere_pass_block;
 
 // The technique's sphere of directions: 8 by 8 (the paper's), a constant
 // of the method, not a cost the caller trades.
@@ -69,7 +70,7 @@ float4 rbtrend_atmosphere_multiscatter_frag(float4 frag_coord : SV_Position) : S
         if (ground) {
             float3 pg   = o + d * end;
             float3 n    = normalize(pg);
-            float3 lit  = transmittance_towards(m, transmittance_table, table_sampler, tsize, pg, sun);
+            float3 lit  = ground_transmittance(m, transmittance_table, table_sampler, tsize, n, sun);
             light += throughput * lit * saturate(dot(n, sun)) * m.ground_albedo / PI;
         }
         second += light;

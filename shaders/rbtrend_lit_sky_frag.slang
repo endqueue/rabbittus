@@ -9,17 +9,13 @@
 // solid angle, so it carries the light it lights surfaces with (pi times
 // radiance, as the surface scales light), its edge softened over the change
 // in angle across a texel. A scene with an atmosphere (rbtrendatmosphere.h)
-// draws its sky-view table in the environment's place, and each of its
-// suns' discs through the medium's transmittance from the eye.
+// that draws a sky draws its sky-view table in the environment's place, and
+// each of its suns' discs through the medium's transmittance from the eye;
+// one with no sky draws as a scene with no atmosphere.
 
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_atmosphere;
-
-float3 unproject(float2 ndc, float depth) {
-    float4 p = mul(u_lit_scene.inverse_view_projection, float4(ndc, depth, 1.0));
-    return p.xyz / p.w;
-}
 
 [shader("fragment")]
 float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
@@ -27,12 +23,18 @@ float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
     // the target: y negated.
     float2 ndc       = frag_coord.xy * u_lit_scene.target_size.zw * 2.0 - 1.0;
     ndc.y            = -ndc.y;
-    float3 direction = normalize(unproject(ndc, 1.0) - unproject(ndc, 0.0));
+    // The ray between the texel's points at depths 1 and 0, taken
+    // homogeneously (as the shell pass takes it), so a projection whose far
+    // plane is at infinity, one point then at infinity (its w 0), gives a
+    // direction, not a division by 0.
+    float4 a         = mul(u_lit_scene.inverse_view_projection, float4(ndc, 1.0, 1.0));
+    float4 b         = mul(u_lit_scene.inverse_view_projection, float4(ndc, 0.0, 1.0));
+    float3 direction = normalize(b.xyz * a.w - a.xyz * b.w);
     // Near at 0 or at 1: either way the ray runs away from the eye.
     if (dot(direction, u_lit_scene.view_direction.xyz) < 0.0)
         direction = -direction;
     float3 color = float3(0.0);
-    if (lit_atmosphere()) {
+    if (lit_atmosphere_sky_drawn()) {
         color = lit_atmosphere_sky(direction);
     } else if ((u_lit_scene.flags & RBTREND_LIT_SCENE_ENVIRONMENT) != 0u) {
         float3 d = float3(dot(u_lit_scene.environment_rotation[0].xyz, direction), dot(u_lit_scene.environment_rotation[1].xyz, direction),
@@ -52,7 +54,8 @@ float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
         if (d.radiance_disc.w > 0.5 && versine > 0.0) {
             float inside = clamp((versine - away) / texel + 0.5, 0.0, 1.0);
             float solid  = 2.0 * 3.14159265359 * versine;
-            color += inside * 3.14159265359 / solid * d.radiance_disc.rgb * lit_atmosphere_sun_transmittance(i, u_lit_scene.eye_position.xyz);
+            float3 through = lit_atmosphere_sky_drawn() ? lit_atmosphere_sun_transmittance(i, u_lit_scene.eye_position.xyz) : float3(1.0);
+            color += inside * 3.14159265359 / solid * d.radiance_disc.rgb * through;
         }
     }
     color *= u_lit_scene.exposure;

@@ -286,12 +286,12 @@ struct rbtrend_rt_state {
 	rbtrend_binding_layout path_output_layout{nullptr};
 	rbtrend_compute_pipeline path_pipelines[4]{};
 	/* The traced reflections (RBTREND_COMMAND_LIT_TRACE_REFLECTIONS): the
-	 * shader, the layout of its set 2, its pipeline, and the sets of that
-	 * layout over the commands' views. */
+	 * shader, the layout of its set 2 and its pipeline. The sets of that
+	 * layout over the commands' views are the scene's view-set records
+	 * (card A67). */
 	rbtrend_shader reflection_comp{nullptr};
 	rbtrend_binding_layout reflection_output_layout{nullptr};
 	rbtrend_compute_pipeline reflection_pipeline{nullptr};
-	rbtrend_view_set reflection_sets[RBTREND_VIEW_SETS]{};
 	/* Every TLAS alive, by address and serial: what a list's reset reads
 	 * before it reaches a TLAS through a seal, which may name one destroyed
 	 * since. Under the instance's release_mutex. */

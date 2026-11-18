@@ -44,6 +44,7 @@
 #include "rbtrend_lit_hiz_down_frag.package.inc"
 #include "rbtrend_lit_ssr_comp.package.inc"
 #include "rbtrend_lit_reflect_frag.package.inc"
+#include "rbtrend_atmosphere_shell_frag.package.inc"
 
 static_assert(sizeof(RBTREND_LIT_VERTEX) == 48, "RBTREND_LIT_VERTEX is 48 bytes");
 static_assert(sizeof(RBTREND_LIT_INSTANCE) == 64, "RBTREND_LIT_INSTANCE is 64 bytes");
@@ -406,11 +407,13 @@ bool rbtrend_lit_prepare_brdf_lut(rbtrend_instance instance) {
 }
 
 // A pipeline over rbtrend_fullscreen_vert.slang with [fragment], rendering to
-// [format], [layouts] at its first slots, [push_size] bytes of push
+// [color_count] targets each of [format] (the first blended by [blend]
+// where given), [layouts] at its first slots, [push_size] bytes of push
 // constants (none if 0).
 static rbtrend_graphics_pipeline rbtrend_lit_fullscreen_pipeline(rbtrend_instance instance, rbtrend_shader fragment, const rbtrend_binding_layout *layouts,
                                                                uint32_t layout_count, CRGPU_FORMAT format, uint32_t push_size,
-                                                               const char *name, const crgpu_blend_attachment_desc *blend = nullptr) {
+                                                               const char *name, const crgpu_blend_attachment_desc *blend = nullptr,
+                                                               uint32_t color_count = 1) {
 	RBTREND_GRAPHICS_PIPELINE_DESC desc{};
 	desc.base = rbt_struct_base(RBT_STRUCT_TYPE_REND_GRAPHICS_PIPELINE_DESC);
 	desc._debug_name = name;
@@ -425,9 +428,10 @@ static rbtrend_graphics_pipeline rbtrend_lit_fullscreen_pipeline(rbtrend_instanc
 	desc.fragment_shader             = fragment;
 	desc._vertex_entry_point         = "rbtrend_fullscreen_vert";
 	desc._fragment_entry_point       = rbtrend_shader_get_reflection(fragment)->entry_point;
-	desc.color_attachment_formats[0] = format;
-	desc.color_attachment_count      = 1;
-	desc.depth_format                = CRGPU_FORMAT_UNKNOWN;
+	for (uint32_t i = 0; i < color_count; ++i)
+		desc.color_attachment_formats[i] = format;
+	desc.color_attachment_count = color_count;
+	desc.depth_format           = CRGPU_FORMAT_UNKNOWN;
 	if (blend)
 		desc._blends[0] = *blend;
 	for (uint32_t i = 0; i < layout_count; ++i)
@@ -546,8 +550,9 @@ static bool rbtrend_lit_prepare_passes(rbtrend_instance instance) {
 bool rbtrend_lit_prepare_passes_for(rbtrend_instance instance) { return rbtrend_lit_prepare_passes(instance); }
 
 rbtrend_graphics_pipeline rbtrend_lit_fullscreen_pipeline_for(rbtrend_instance instance, rbtrend_shader fragment, const rbtrend_binding_layout *layouts,
-                                                            uint32_t layout_count, CRGPU_FORMAT format, uint32_t push_size, const char *name) {
-	return rbtrend_lit_fullscreen_pipeline(instance, fragment, layouts, layout_count, format, push_size, name);
+                                                            uint32_t layout_count, CRGPU_FORMAT format, uint32_t color_count, uint32_t push_size,
+                                                            const char *name) {
+	return rbtrend_lit_fullscreen_pipeline(instance, fragment, layouts, layout_count, format, push_size, name, nullptr, color_count);
 }
 
 rbtrend_graphics_pipeline rbtrend_lit_pass_pipeline(rbtrend_instance instance, uint32_t pass) {
@@ -703,44 +708,33 @@ rbtrend_graphics_pipeline rbtrend_lit_reflect_pipeline(rbtrend_instance instance
 	                                  "reflection composite", &blend);
 }
 
-rbtrend_binding_set rbtrend_view_set_get(rbtrend_instance instance, rbtrend_view_set (&sets)[RBTREND_VIEW_SETS], rbtrend_binding_layout layout,
-                                       const rbtrend_texture_view *views, uint32_t view_count, const RBTREND_BINDING_SET_ENTRY *entries,
-                                       uint32_t entry_count, const char *what) {
-	rbtrend_view_set *oldest = &sets[0];
-	for (rbtrend_view_set &kept : sets) {
-		bool same = kept.set != nullptr && kept.layout == layout;
-		for (uint32_t i = 0; i < view_count && same; ++i)
-			same = kept.views[i] == views[i] && kept.serials[i] == views[i]->serial;
-		if (same) {
-			kept.used = instance->frame_number;
-			return kept.set;
-		}
-		if (!kept.set || (oldest->set && kept.used < oldest->used))
-			oldest = &kept;
-	}
-	rbtrend_binding_set made = nullptr;
-	RBTREND_ERROR error;
-	if (rbtrend_binding_set_create(layout, entries, entry_count, &made, &error) != RBT_RESULT_OK) {
-		rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "%s's set can't be made: %s", what, error.message);
+rbtrend_graphics_pipeline rbtrend_lit_shell_pipeline(rbtrend_instance instance, CRGPU_FORMAT format) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.shell_pipelines)
+		if (entry.format == format)
+			return entry.pipeline;
+	rbtrend_binding_layout scene_layout = rbtrend_lit_scene_layout(instance);
+	if (!scene_layout)
 		return nullptr;
-	}
-	rbtrend_binding_set_destroy(oldest->set);
-	*oldest        = rbtrend_view_set{};
-	oldest->set    = made;
-	oldest->layout = layout;
-	for (uint32_t i = 0; i < view_count; ++i) {
-		oldest->views[i]   = views[i];
-		oldest->serials[i] = views[i]->serial;
-	}
-	oldest->used = instance->frame_number;
-	return made;
-}
-
-void rbtrend_view_sets_destroy(rbtrend_view_set (&sets)[RBTREND_VIEW_SETS]) {
-	for (rbtrend_view_set &kept : sets) {
-		rbtrend_binding_set_destroy(kept.set);
-		kept = rbtrend_view_set{};
-	}
+	// Set 1 is an atmosphere's block, of the atmosphere passes' layout.
+	if (!rbtrend_atmosphere_prepare(instance))
+		return nullptr;
+	if (!rbtrend_lit_own_shader(instance, &rbtrend_atmosphere_shell_frag_package, &lit.shell_frag, 2, &lit.shell_input_layout, "atmosphere shell"))
+		return nullptr;
+	// The texel becomes texel x T + X per channel: X the first output, T
+	// the second (rbtrend_atmosphere_shell_frag.slang); the alpha kept, the
+	// first output's 0 and the second's 1.
+	crgpu_blend_attachment_desc blend{};
+	blend.blend_enable                      = true;
+	blend.src_color_blend_factor            = CRGPU_BLEND_FACTOR_ONE;
+	blend.dst_color_blend_factor            = CRGPU_BLEND_FACTOR_SRC1_COLOR;
+	blend.color_blend_op                    = CRGPU_BLEND_OP_ADD;
+	blend.src_alpha_blend_factor            = CRGPU_BLEND_FACTOR_ONE;
+	blend.dst_alpha_blend_factor            = CRGPU_BLEND_FACTOR_SRC1_ALPHA;
+	blend.alpha_blend_op                    = CRGPU_BLEND_OP_ADD;
+	const rbtrend_binding_layout layouts[3] = {scene_layout, lit.atmosphere_layout, lit.shell_input_layout};
+	return rbtrend_lit_format_pipeline(instance, lit.shell_pipelines, lit.shell_frag, layouts, 3, format, sizeof(rbtrend_shell_params), "atmosphere shell",
+	                                  &blend);
 }
 
 rbtrend_compute_pipeline rbtrend_lit_histogram_pipeline(rbtrend_instance instance) {
@@ -873,10 +867,12 @@ rbtrend_binding_set rbtrend_texture_view_environment_set(rbtrend_texture_view vi
 
 void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	rbtrend_lit_builtins &lit = instance->builtins.lit;
-	rbtrend_view_sets_destroy(lit.view_sets);
 	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.reflect_pipelines)
 		rbtrend_graphics_pipeline_destroy(entry.pipeline);
 	lit.reflect_pipelines.clear();
+	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.shell_pipelines)
+		rbtrend_graphics_pipeline_destroy(entry.pipeline);
+	lit.shell_pipelines.clear();
 	rbtrend_compute_pipeline_destroy(lit.ssr_pipeline);
 	lit.ssr_pipeline = nullptr;
 	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.tone_map_pipelines)
@@ -899,7 +895,7 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	lit.cull_bounded_pipeline = nullptr;
 	rbtrend_compute_pipeline_destroy(lit.histogram_pipeline);
 	lit.histogram_pipeline           = nullptr;
-	rbtrend_binding_layout *layouts[] = {&lit.reflect_input_layout, &lit.ssr_input_layout, &lit.ssr_scene_layout,  &lit.tone_map_layout,
+	rbtrend_binding_layout *layouts[] = {&lit.shell_input_layout, &lit.reflect_input_layout, &lit.ssr_input_layout, &lit.ssr_scene_layout,  &lit.tone_map_layout,
 	                                    &lit.pass_layout,          &lit.occlusion_layout, &lit.hosek_layout,       &lit.histogram_layout,
 	                                    &lit.cull_depth_layout,    &lit.cull_layout,      &lit.material_layout,    &lit.shadow_layout,
 	                                    &lit.scene_layout,         &lit.atmosphere_layout};
@@ -913,6 +909,8 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	lit.ssr_comp = nullptr;
 	rbtrend_shader_destroy(lit.reflect_frag);
 	lit.reflect_frag = nullptr;
+	rbtrend_shader_destroy(lit.shell_frag);
+	lit.shell_frag = nullptr;
 	rbtrend_shader_destroy(lit.cull_comp);
 	lit.cull_comp = nullptr;
 	rbtrend_shader_destroy(lit.cull_bounded_comp);
@@ -1793,6 +1791,13 @@ uint32_t rbtrend_lit_scene_directional_slot(rbtrend_lit_scene scene, uint32_t li
 // scene itself is the caller's to free: at once after a failed create, and
 // with RBT_RETIRE after a destroy (../rbtstale.hpp, card X27).
 static void rbtrend_lit_scene_free_parts(rbtrend_lit_scene scene) {
+	// The view-set records' sets retire through the release queue, as
+	// every destroyed set does; the array is the CPU's.
+	for (uint32_t i = 0; i < scene->view_set_count; ++i)
+		rbtrend_binding_set_destroy(scene->view_sets[i].set);
+	free(scene->view_sets);
+	scene->view_sets      = nullptr;
+	scene->view_set_count = 0;
 	rbtrend_binding_set_destroy(scene->rt_set);
 	rbtrend_binding_set_destroy(scene->ssr_set);
 	if (scene->material)
@@ -1847,7 +1852,7 @@ static bool rbtrend_lit_kind_fits(RBTREND_LIT_SHADOW_KIND kind, uint32_t type) {
 
 extern "C" {
 
-RBT_RESULT rbtrend_lit_scene_create(rbtrend_instance instance, rbtrend_lit_scene *out_scene, RBTREND_ERROR *out_error) {
+RBT_RESULT rbtrend_lit_scene_create(rbtrend_instance instance, const RBTREND_LIT_SCENE_DESC *desc, rbtrend_lit_scene *out_scene, RBTREND_ERROR *out_error) {
 	rbtrend_error_clear(out_error);
 	if (out_scene)
 		*out_scene = nullptr;
@@ -1856,6 +1861,13 @@ RBT_RESULT rbtrend_lit_scene_create(rbtrend_instance instance, rbtrend_lit_scene
 	if (RBT_STALE(instance, "rbtrend_lit_scene_create", "instance"))
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "instance is destroyed");
 	RBTREND_ENTER(instance, "rbtrend_lit_scene_create");
+	if (!desc)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "desc is NULL");
+	if (const RBT_RESULT base = rbtrend_base_check(out_error, "desc", &desc->base, RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC))
+		return base;
+	if (desc->max_view_sets > RBTREND_LIT_SCENE_MAX_VIEW_SETS)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "desc->max_view_sets %u is above RBTREND_LIT_SCENE_MAX_VIEW_SETS (%u)",
+		                   desc->max_view_sets, RBTREND_LIT_SCENE_MAX_VIEW_SETS);
 	if (!out_scene)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_scene is NULL");
 	rbtrend_binding_layout layout        = nullptr;
@@ -1876,19 +1888,29 @@ RBT_RESULT rbtrend_lit_scene_create(rbtrend_instance instance, rbtrend_lit_scene
 	if (!scene)
 		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the scene");
 	RBTREND_CONSTRUCT__T(scene, rbtrend_lit_scene_t);
-	scene->instance                = instance;
+	scene->instance = instance;
+	// The view-set records, empty: every one a compile may need, made
+	// here (none for 0).
+	if (desc->max_view_sets > 0) {
+		scene->view_sets = (rbtrend_view_set *)calloc(desc->max_view_sets, sizeof(rbtrend_view_set));
+		if (!scene->view_sets) {
+			RBTREND_DESTRUCT__T(scene, rbtrend_lit_scene_t);
+			return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the scene's %u view-set records", desc->max_view_sets);
+		}
+		scene->view_set_count = desc->max_view_sets;
+	}
 	const rbtrend_lit_builtins &lit = instance->builtins.lit;
-	RBTREND_MATERIAL_DESC desc{};
-	desc.base = rbt_struct_base(RBT_STRUCT_TYPE_REND_MATERIAL_DESC);
-	desc._layout = layout;
-	(void)rbtrend_material_create(instance, &desc, &scene->material, nullptr);
-	desc._layout = shadow_layout;
+	RBTREND_MATERIAL_DESC md{};
+	md.base    = rbt_struct_base(RBT_STRUCT_TYPE_REND_MATERIAL_DESC);
+	md._layout = layout;
+	(void)rbtrend_material_create(instance, &md, &scene->material, nullptr);
+	md._layout = shadow_layout;
 	for (rbtrend_material &material : scene->shadow_pass_materials)
-		(void)rbtrend_material_create(instance, &desc, &material, nullptr);
-	desc._layout = lit.cull_layout;
-	(void)rbtrend_material_create(instance, &desc, &scene->cull_material, nullptr);
-	desc._layout = lit.occlusion_layout;
-	(void)rbtrend_material_create(instance, &desc, &scene->occlusion_material, nullptr);
+		(void)rbtrend_material_create(instance, &md, &material, nullptr);
+	md._layout = lit.cull_layout;
+	(void)rbtrend_material_create(instance, &md, &scene->cull_material, nullptr);
+	md._layout = lit.occlusion_layout;
+	(void)rbtrend_material_create(instance, &md, &scene->occlusion_material, nullptr);
 
 	bool ok = scene->material && scene->cull_material && scene->occlusion_material;
 	for (rbtrend_material material : scene->shadow_pass_materials)
@@ -2965,9 +2987,10 @@ RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTRE
 	if (!a.atmosphere) {
 		// None: the bindings back to their placeholders; the scene's own
 		// tables kept for the next atmosphere of their sizes.
-		scene->atmosphere      = RBTREND_LIT_ATMOSPHERE{};
-		scene->sky_view_filled = false;
-		scene->aerial_filled   = false;
+		scene->atmosphere            = RBTREND_LIT_ATMOSPHERE{};
+		scene->sky_view_filled       = false;
+		scene->aerial_filled         = false;
+		scene->transmittance_copied = false;
 		(void)rbtrend_material_set_texture(scene->material, "atmosphere_tables", 0, lit.placeholder_2d_array_view, nullptr);
 		rbtrend_lit_scene_commit(scene);
 		return RBT_RESULT_OK;
@@ -2984,19 +3007,29 @@ RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTRE
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sun_count is 0");
 	if (a.sun_count > 2)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sun_count %u is above 2", a.sun_count);
-	if (a.sky_view_width < RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE)
+	// Both sky-view sizes 0: no sky (rbtrendlit.h, RBTREND_LIT_ATMOSPHERE).
+	if (a.sky_view_width == 0 && a.sky_view_height != 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sky_view_width is 0 and sky_view_height %u is not (both 0 for no sky)",
+		                   a.sky_view_height);
+	if (a.sky_view_height == 0 && a.sky_view_width != 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sky_view_height is 0 and sky_view_width %u is not (both 0 for no sky)",
+		                   a.sky_view_width);
+	const bool sky = a.sky_view_width != 0;
+	if (sky && a.sky_view_width < RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sky_view_width %u is below %u", a.sky_view_width,
 		                   RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE);
 	if (a.sky_view_width > RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sky_view_width %u is above %u", a.sky_view_width,
 		                   RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE);
-	if (a.sky_view_height < RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE)
+	if (sky && a.sky_view_height < RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sky_view_height %u is below %u", a.sky_view_height,
 		                   RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE);
 	if (a.sky_view_height > RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere->sky_view_height %u is above %u", a.sky_view_height,
 		                   RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE);
 	const bool volume = a.aerial_width != 0 || a.aerial_height != 0 || a.aerial_depth != 0;
+	if (volume && !sky)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "atmosphere has an aerial volume and no sky-view (its sky-view sizes 0)");
 	if (volume) {
 		const uint32_t sides[3]    = {a.aerial_width, a.aerial_height, a.aerial_depth};
 		const char *const names[3] = {"aerial_width", "aerial_height", "aerial_depth"};
@@ -3031,10 +3064,15 @@ RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTRE
 		                   RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_STEPS);
 
 	// The scene's array, made where its size differs from the one held,
-	// and its pass material, before anything of the scene changes.
+	// and its pass material, before anything of the scene changes. An
+	// atmosphere with no sky reads only the transmittance table at layer 1,
+	// so it keeps any array of two layers or more that holds that table: a
+	// caller switching one between a sky and none makes nothing.
 	uint32_t size[3];
 	rbtrend_lit_atmosphere_array_size(a, size);
-	const bool new_array = !scene->atmosphere_tables || memcmp(size, scene->atmosphere_array_size, sizeof(size)) != 0;
+	const uint32_t *held = scene->atmosphere_array_size;
+	const bool holds = scene->atmosphere_tables && held[0] >= size[0] && held[1] >= size[1] && held[2] >= size[2];
+	const bool new_array = !scene->atmosphere_tables || (sky ? memcmp(size, held, sizeof(size)) != 0 : !holds);
 	rbtrend_texture2d tables           = nullptr;
 	rbtrend_texture_view tables_view   = nullptr;
 	rbtrend_texture_view first_view    = nullptr;
@@ -3072,13 +3110,19 @@ RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTRE
 		scene->atmosphere_tables_view = tables_view;
 		scene->sky_view_view          = first_view;
 		memcpy(scene->atmosphere_array_size, size, sizeof(size));
-		scene->sky_view_filled = false;
-		scene->aerial_filled   = false;
+		scene->sky_view_filled       = false;
+		scene->aerial_filled         = false;
+		scene->transmittance_copied = false;
 	}
 	if (scene->atmosphere.atmosphere != a.atmosphere) {
-		scene->sky_view_filled = false;
-		scene->aerial_filled   = false;
+		scene->sky_view_filled       = false;
+		scene->aerial_filled         = false;
+		scene->transmittance_copied = false;
 	}
+	// A sky-view the scene filled before it had no sky, or one it holds
+	// from a sky it no longer draws, is not this sky.
+	if ((scene->atmosphere.sky_view_width != 0) != sky)
+		scene->sky_view_filled = false;
 	scene->atmosphere = a;
 	(void)rbtrend_material_set_texture(scene->material, "atmosphere_tables", 0, scene->atmosphere_tables_view, nullptr);
 	rbtrend_lit_scene_commit(scene);

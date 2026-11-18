@@ -523,14 +523,30 @@ public PathResult trace_path(uint2 pixel, uint index, uint seed, TraceParams par
     result.albedo   = float3(0.0, 0.0, 0.0);
     result.normal   = float3(0.0, 0.0, 0.0);
     // The camera ray: from the view's near plane through a jittered point
-    // of the pixel, along its depth, the eye's side whichever end that is.
+    // of the pixel, along its depth, whichever end that is. Both ends taken
+    // homogeneously (card A69): under a far plane at infinity the far end
+    // has w 0, so the near end is the one whose w is the larger (w is one
+    // over the clip w, the distance along the view), or for an orthographic
+    // view (w alike) the nearer the eye; the direction between them, away
+    // from the eye along the view.
     float2 jitter = sobol_pair(index, seed);
-    float3 a      = rt_unproject(u_lit_scene.inverse_view_projection, rt_clip(float2(pixel), jitter, float2(params.size), 0.0));
-    float3 b      = rt_unproject(u_lit_scene.inverse_view_projection, rt_clip(float2(pixel), jitter, float2(params.size), 1.0));
+    float4 ha     = mul(u_lit_scene.inverse_view_projection, rt_clip(float2(pixel), jitter, float2(params.size), 0.0));
+    float4 hb     = mul(u_lit_scene.inverse_view_projection, rt_clip(float2(pixel), jitter, float2(params.size), 1.0));
     float3 eye    = u_lit_scene.eye_position.xyz;
-    bool a_near   = dot(a - eye, a - eye) <= dot(b - eye, b - eye);
-    float3 origin = a_near ? a : b;
-    float3 dir    = normalize(a_near ? b - a : a - b);
+    float wa      = abs(ha.w);
+    float wb      = abs(hb.w);
+    bool a_near;
+    if (abs(wa - wb) > 1e-4 * max(wa, wb)) {
+        a_near = wa > wb;
+    } else {
+        float3 a = ha.xyz / ha.w;
+        float3 b = hb.xyz / hb.w;
+        a_near   = dot(a - eye, a - eye) <= dot(b - eye, b - eye);
+    }
+    float3 origin = a_near ? ha.xyz / ha.w : hb.xyz / hb.w;
+    float3 dir    = normalize(hb.xyz * ha.w - ha.xyz * hb.w);
+    if (dot(dir, u_lit_scene.view_direction.xyz) < 0.0)
+        dir = -dir;
 
     float3 throughput   = float3(1.0, 1.0, 1.0);
     float last_bsdf_pdf = 0.0;  // 0: the camera's ray, or a hit after none

@@ -6,6 +6,7 @@
 
 import rbtrend_atmosphere_model;
 import rbtrend_atmosphere_pass;
+import rbtrend_atmosphere_pass_block;
 
 [shader("fragment")]
 float4 rbtrend_atmosphere_transmittance_frag(float4 frag_coord : SV_Position) : SV_Target0 {

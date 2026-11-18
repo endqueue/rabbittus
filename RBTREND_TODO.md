@@ -3285,7 +3285,9 @@ Left:
         own set 0, the upsample weighted by plane distance and normal.
       - The sets over the commands' views: two caches of 16
         (`rbtrend_view_set`, lit and ray tracing), matched by layout, views
-        and serials. `claude_made_decisions.md` (2026-11-02) has every
+        and serials. Since card A67 (2026-11-17, item 63) one set of
+        records per lit scene, sized by its desc's `max_view_sets`,
+        serves all four commands, the traced reflections' cache merged in. `claude_made_decisions.md` (2026-11-02) has every
         call the draft left open.
       Ran: Rabbittus' 37 ctests in Debug, Release, `-asan` and
       `-tsan` (37 before: the new test is a function in
@@ -5192,7 +5194,8 @@ filled from the sky-view). As built, against the draft:
   layers 2 on the aerial volume's slices, each table in its layer's top
   left (read with its uv scaled and clamped). A set 0 binding added: a
   break for any caller's own lit shader, listed with the ABI's.
-  7.2 MiB at the defaults (256 x 108 by 34 layers of half floats).
+  7.2 MiB at the defaults (256 x 108 by 34 layers of half floats);
+  13.9 MiB (66 layers) since card A64, below.
 - **Fragment passes, not compute:** every table is a full-screen pass of
   Rend's own (no 3D storage image is asked of Carrottus GPU), so nothing is
   UNSUPPORTED anywhere. The aerial volume is a pass a slice: 32 passes at
@@ -5214,7 +5217,7 @@ filled from the sky-view). As built, against the draft:
   atmosphere's transmittance (their suns reach surfaces undimmed); the
   volume keeps the mean of the three channels' transmittance (the
   paper's), so a bright emissive surface far off is dimmed, not
-  reddened; stage 4 (the shell from space).
+  reddened (done: card A64, below); stage 4 (the shell from space).
 Tests (`rabbittustests`, under Metal's validation with warnings fatal):
 `test_atmosphere_refusals`, `_sun_through_air` (a face's light against
 Rabbittus Math's transmittance: 0.889 / 0.887 at 30 degrees, 0.556 /
@@ -5255,6 +5258,266 @@ version 9, approval kept):**
 - Tests: a placed light (once item 58 is built; point and spot refused),
   the turn-on and the array made once, no blend feature refused. The
   build: S50 first, then Metal.
+
+**Stage 4 built 2026-11-17 on the Mac** (Metal, the M5 Pro, built and
+run; D3D12 and Vulkan never built: written for every backend through
+Carrottus GPU, no backend branch in Rend; card A55, the approved
+`rbtrend_atmosphere_space_draft.h` version 9, over card S50's dual-source
+blending). As built:
+- `RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS` (51), its 48 bytes of the 120;
+  the frozen 32-byte `RBTREND_LIT_ATMOSPHERE_SHELL` (`rbtrendlit.h`,
+  `RBT_PLAIN_DATA` in `src/`), `RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS`
+  (128) and `_MAX_SHELL_LIGHTS` (2). Its send checks one each, in the
+  members' order then each shell's (its index named); the shells copied
+  into the list's side storage and sorted there at the compile by the
+  eye's power against each top sphere (insertion, stable). At the compile
+  the lights again, a shell naming the scene's own atmosphere while it
+  draws a sky refused, and `RBT_RESULT_UNSUPPORTED` on a device without
+  `CRGPU_FEATURE_DUAL_SOURCE_BLEND`, now in
+  `rbtrend_get_optional_gpu_features()`. A shell whose atmosphere has no
+  medium or no tables is skipped (no report: Rend has no Debug report to
+  give one, unlike what the draft says).
+- `RBTREND_LIT_ATMOSPHERE`'s sky-view sizes both 0 mean no sky ([CHANGED]):
+  one 0 alone, and a volume without a sky-view, each refused on its own;
+  an atmosphere with no sky keeps any array the scene holds that is as
+  large. The turn-on as two flags: `RBTREND_LIT_SCENE_FLAG_ATMOSPHERE` once
+  LIT_ATMOSPHERE has copied the transmittance (internal
+  `transmittance_copied`), a new `RBTREND_LIT_SCENE_FLAG_SKY` (2048) once
+  a sky's sky-view is filled, gating the sky shader's sky and its discs'
+  dimming; LIT_ATMOSPHERE skips the sky-view pass with no sky.
+- The pass (`shaders/rbtrend_atmosphere_shell_frag.slang`): set 0 the
+  scene's own set, set 1 the atmosphere's block (the atmosphere passes'
+  layout), set 2 the depth and the two tables from the view-set cache, a
+  shell's values 96 bytes of push constants; one pass over the target for
+  every shell, a draw each in the scissor of its top sphere's projected
+  bounds (the conic of its dual quadric, from the view-projection alone);
+  blend colour ONE / SRC1_COLOR, alpha ONE / SRC1_ALPHA. The stable
+  ray-sphere roots (`sphere_hits_stable`), the entry put back on the top
+  sphere; the ray's direction taken homogeneously, so an infinite far
+  plane works. `atmosphere_march` takes the suns and the tables' sizes as
+  arguments; the set-0 block moved to `rbtrend_atmosphere_pass_block.slang`
+  (the shell pass's set 0 is the scene's).
+- Found and fixed: the ground's light in the sky-view and the
+  multiple-scattering table read the transmittance through
+  `transmittance_towards` from a point on the ground, whose ground test
+  then turned on its rounding: the sky-view's ground was speckled and the
+  multiple-scattering table low. Now `ground_transmittance` reads the table
+  at the ground's radius. `test_atmosphere_sky`'s zenith is (37, 78, 183)
+  and its horizon (55, 66, 72) since (were 31, 68, 164 and 43, 53, 59).
+- Found, not fixed: a scene's block is staged at the submit, so the whole
+  submission that holds a scene's first LIT_ATMOSPHERE sees its flags on,
+  a draw recorded before that command included (it would read layers not
+  yet written); "a frame's lag" above is not what the code does. The
+  sky shader (and the aerial pass) bring depth 0 back through the inverse,
+  which an infinite far plane sends to infinity (NaN) (fixed: card A66,
+  below). The view-set cache
+  holds 16 sets for every command: more distinct shells' atmospheres in
+  one list than it holds would evict a set the list uses (fixed: card
+  A67, item 63; the approved draft's "a steady frame makes none" held
+  only to 16 sets until then).
+- Pending: a shell lit by a placed directional light, once item 58 is
+  built (`test_atmosphere_shell_placed_light` reports it pending).
+- ABI (`./check.sh --update-abi`): additions only, no break: command 51,
+  its parameters, the shell struct, the two macros.
+Tests (`rabbittustests`, Metal's validation with warnings fatal, Debug
+and Release, the device with the features and the bare one, all passing;
+each seen failing first): `test_atmosphere_shell_refusals` (every check,
+each its message), `_transmittance` (from 3 radii, the GPU's T against
+Rabbittus Math's within 0.15%: 0.9404 / 0.9405 vertical), `_crossing`
+(rows within 0.70% at a 1024 x 512 sky-view; 11.8% at 192 x 108 in the
+rows just above the horizon), `_whole_world`, `_depth`, `_order` (0.079%
+against hand composition), `_inside` (0.169% against section 4b; see
+the note under A65 below),
+`_far` (the ground's edge within half a texel at 1e7 and 1e9 off, no
+speckle; metres against kilometres 0.098%), `_placed_light` (point and
+spot refused; the placed light pending), `test_atmosphere_no_sky`,
+`test_atmosphere_shell_unsupported`, `test_frame_allocations` (a scene
+switched between a sky and none every frame and two shells: 0 of ours),
+and `rbtrend_contract_tests`, `rbtrendfeatures_tests` headless.
+Measured (Release, no validation, submit to idle less the same frame with
+no shell, means of 50 after 10, the 150 km world with a 30 km top, 4 to
+32 steps, 60 degrees high; `test_atmosphere_shell_measure`): at 1440p the
+world whole from 4 radii (13% of the texels) 0.42 to 0.49 ms (estimate
+0.1 to 0.2), half the view from low orbit 1.04 to 1.13 ms (0.5 to 0.7),
+the view filled from 100 km up 2.42 to 2.46 ms, 1.41 to 1.53 ms at 4 to
+16 steps (budget 1.5 ms: over at 32), eight small worlds 0.18 to 0.19 ms;
+at 1080p 0.29 to 0.30, 0.66 to 0.70 (0.3 to 0.4), 1.41 to 1.46, 0.14; the
+eye inside, every texel, 16 steps 2.9 ms at 1440p and 1.65 ms at 1080p,
+32 steps 5.5 ms and 3.14 ms (estimate 4 and 2.3). Over the budget: the
+steps first, then a half-resolution march (the draft's section 7).
+
+**Card A64, decided 2026-11-17 by you (a): the aerial volume keeps its
+transmittance per channel.** Built 2026-11-17 on the Mac (Metal, the M5
+Pro, built and run; D3D12 and Vulkan never built: no backend branch, the
+two colour targets through Carrottus GPU's dynamic rendering). Stage 4's
+shell pass dims each channel and the volume kept the mean, so a distant
+surface stepped in colour as the eye rose through a world's top (a
+caller's crossing test: 13.8%, the sky within 0.86%). As built, no
+public declaration changed (the ABI snapshot unchanged):
+- **The layout:** the scene's array is 2 + 2D layers for a volume of D
+  slices: 0 the sky-view, 1 the transmittance table, 2 to 2 + D - 1 the
+  volume's light a slice (RGB), 2 + D to 2 + 2D - 1 its transmittance a
+  slice (RGB, per channel), each in its layer's top left. The aerial pass
+  is still one full-screen pass a slice, now rendering two targets (the
+  slice's two layers) from one march; `lit_atmosphere_air()` returns a
+  `LitAir` (light, transmittance, both RGB), and lit surfaces and the
+  shell pass's composition over a drawn surface (`L_h (1 - T) + T_h L`)
+  apply it channel by channel. An array with no sky is kept as before
+  (two layers, no volume).
+- **Memory:** the array is as wide and high as its largest table, so the
+  volume's layers are too: at the paper's sizes (sky-view 192 x 108,
+  transmittance 256 x 64, a 32 x 32 x 32 volume) 66 layers of 256 x 108
+  half-float RGBA, 14,598,144 bytes (13.9 MiB), from 34 layers, 7,520,256
+  bytes (7.2 MiB). Without a volume unchanged (432 KiB). Packing the
+  transmittance beside the light in one layer (2W wide) would cost no
+  memory here but march every texel twice; the second target costs no
+  march. `rbtrendlit.h`'s memory note rewritten to say the array's true
+  size (it gave the volume's own 256 KiB).
+- **Measured** (Release, no validation, `test_atmosphere_measure`, the
+  sky-view, its copy and the volume at 32 x 32 x 32, a step a slice,
+  submit to idle, means of 50): before 1.15 to 1.41 ms over six runs,
+  after 1.03 to 2.05 ms over sixteen, the Mac under another build's load
+  throughout (the unchanged tables pass swung 1.06 to 2.13 ms in the same
+  runs); the best of each 1.15 and 1.03 ms: no change the noise shows.
+- **Re-recorded** (once): `test_atmosphere_aerial`, the white face 8 km
+  off (68, 61, 52) is (75, 62, 46), 24 km off (54, 52, 50) is (68, 54,
+  39); its mean transmittance 0.844 is 0.840 and 0.621 (0.623 when run
+  before the change today) is 0.622, against Rabbittus Math's 0.847 and
+  0.622 (tolerance 0.04 unchanged). No other recorded figure moved.
+- **Test** (seen failing first): `test_atmosphere_aerial_channels`, the
+  same faces 8 and 24 km off, red and blue each against Rabbittus Math's
+  transmittance along the segment within 0.04: before, (0.835, 0.851,
+  0.846) and (0.608, 0.627, 0.635) against (0.925, 0.870, 0.745) and
+  (0.792, 0.659, 0.415), failing; after (0.924, 0.866, 0.731) and (0.785,
+  0.657, 0.423). `test_frame_allocations` still 0 of ours.
+
+**Card A65, decided 2026-11-17 by you (a): a lit surface on the ground
+reads its suns as the ground does.** Built 2026-11-17 on the Mac (Metal,
+the M5 Pro; D3D12 and Vulkan never built). A lit surface within a few
+centimetres of its atmosphere's ground radius was speckled: its suns'
+transmittance went through `transmittance_ray`, whose ray-sphere test
+against the ground sphere, from a point within a few ulps of it, turned
+on its rounding (a point under the ground was put on it and tested
+there, where the horizon's cosine is exactly 0). As built:
+`surface_transmittance_ray` (`rbtrend_atmosphere_model.slang`): inside
+the shell, the radius taken no lower than the ground's and the direction
+tested against that radius's horizon in closed form (none of the light
+where its cosine with the vertical is at most -sqrt(r^2 - R^2) / r, so
+at most 0 on the ground: `ground_transmittance`'s rule); above the shell,
+`transmittance_ray`'s. Both of `rbtrend_lit_atmosphere.slang`'s readers
+take it: `lit_atmosphere_sun_transmittance` (lit surfaces, and the sky's
+suns' discs from the eye) and `lit_atmosphere_transmittance` (the shell
+pass's scene air in front of a texel with nothing drawn). The shell
+pass's own ground already read `ground_transmittance`. The tables'
+marches (`transmittance_towards`) are as they were. No public change.
+- **Test** (seen failing first): `test_atmosphere_ground_surface`, a
+  white face 2 m across (lit_test_vert's square scaled by its uv.z, a
+  test-shader change: 0 keeps every other test's square as it was) on a
+  150 km world in units of 10 km, its up the face's normal, 0, 1, 2 and 5
+  cm over the ground, a sun 30 degrees up: each face's middle even (no
+  two texels more than 2 levels apart in a channel) and within 2 levels
+  of the face 10 m up (92, 81, 63). Before: 0 cm from (0, 0, 0) to (92,
+  81, 63), its mean (34.5, 30.4, 23.6); 1, 2 and 5 cm clean at this
+  sun. After: all five (92, 81, 63) throughout. No other recorded figure
+  moved.
+- **`test_atmosphere_shell_inside`'s figure** (recorded above as 0.155%):
+  0.169% since stage 4's fix of the ground's light in the sky-view and
+  the multiple-scattering table (`ground_transmittance`, 2026-11-17), the
+  scene's sky brighter (the middle texel (0.0258, 0.0548, 0.1259), was
+  (0.0219, 0.0472, 0.1116)); its 0.155% was recorded before that fix and
+  not re-recorded with `test_atmosphere_sky`'s. Shown by putting
+  `transmittance_towards` from the ground point back in the two passes
+  for one run: 0.155% and the sky's zenith (31, 68, 164) again; then
+  restored. A64 and A65 don't reach it (no aerial volume; its rays leave
+  the ground upwards).
+
+**Card A66, decided 2026-11-17 by you (a): every atmosphere shader takes
+its ray homogeneously.** Built 2026-11-17 on the Mac (Metal, the M5 Pro;
+D3D12 and Vulkan never built). The sky shader
+(`rbtrend_lit_sky_frag.slang`) and the aerial pass took a texel's ray as
+`normalize(unproject(ndc, 1) - unproject(ndc, 0))`, dividing each point
+by its w: under a far plane at infinity one of them has w 0 and the ray
+was NaN (the sky drawn in a wrong colour, the volume black). Both now
+take `normalize(b.xyz * a.w - a.xyz * b.w)` from the two points' homogeneous
+coordinates, as the shell pass does; the near-or-far flip against the
+view direction as before. Finite, infinite and reversed-depth
+projections give the same rays. No public change.
+- **Test** (seen failing first): `test_atmosphere_infinite_far`, the
+  earth's sky 0.2 km up looking 15 degrees up and the air over a black
+  face 24 km off through a 32 x 32 x 32 volume (the view looking 35
+  degrees up), each under four perspective projections (a far plane
+  and at infinity, each reversed and not): every texel at infinity within
+  a level of the same projection's with a far plane. Before: the sky at
+  infinity 139 levels off (a texel above the horizon (159, 142, 119)
+  against (31, 62, 134)), the face's air (0, 0, 0) against (5, 9, 17).
+  After: the sky 0 levels, the air at most 1. No recorded figure moved.
+- **Found, not fixed (A65's cause in the tables' marches):**
+  `atmosphere_march` reads each point's sun through
+  `transmittance_towards`, whose ground test is the ray-sphere one A65
+  replaced for lit surfaces; a march's point under the ground sphere is
+  put on it, where that test turns on rounding. In the aerial volume,
+  rays that go under the ground (a view looking level from 0.2 km)
+  differ by up to 2 levels at scattered texels between any two
+  projections, reversed against not included (the test looks up to stay
+  clear of it). Taking `surface_transmittance_ray` in
+  `transmittance_towards` removed it in a one-run trial (restored); it
+  would change the tables' marches (the sky-view, the multiple
+  scattering, the volume), so it waits on a decision of yours (decided:
+  card A68, below). `rbtrend_lit_occlusion_frag.slang` and the path tracer
+  (`rbtrend_rt_path_trace.slang`) bring depths 0 and 1 back through the
+  inverse the same way (`p.xyz / p.w`), so their view ray is NaN under
+  an infinite far plane too; outside A66's atmosphere shaders, not
+  changed (decided: card A69, below).
+
+**Card A68, decided 2026-11-17 by you (a): the marches read their sun by
+the ground's rule.** Built 2026-11-18 on the Mac (Metal, the M5 Pro;
+D3D12 and Vulkan never built). `transmittance_towards`
+(`rbtrend_atmosphere_model.slang`) takes A65's
+`surface_transmittance_ray` in place of `transmittance_ray`: a march's
+point under the ground sphere, put on it, reads its sun's transmittance
+at the ground's radius against that radius's horizon in closed form, not
+by a ray-sphere test that turns on rounding there. It is what
+`atmosphere_march` reads at each point and what the multiple-scattering
+pass reads, so the sky-view, the multiple scattering, the aerial volume
+and the shells' march all take it. No public change.
+- **Test** (seen failing first): `test_atmosphere_infinite_far` now looks
+  level for the volume (half its rays under the ground), and checks every
+  projection against the first: the sky every texel the same (it was);
+  the volume's light over the black face, below the horizon, every texel
+  the same. Before: 2 levels at scattered texels below the horizon (rows
+  34 to 55) between a projection not reversed and a reversed one, a far
+  plane or none. After: none below the horizon; a projection not
+  reversed differs from a reversed one by a level at 4 texels above it
+  (its rays' own rounding across an 8-bit step, nothing under the
+  ground), so the check across reversals is within a level, the draft's
+  "0 levels" held below the horizon only.
+- **Figures:** none moved. Every recorded atmosphere figure is the same
+  after it: `test_atmosphere_sky` (37, 78, 183) and (55, 66, 72),
+  `_sun_through_air`, `_aerial` (0.840, 0.622), `_aerial_channels`,
+  `_environment`, `_shell_crossing` 0.70%, `_order` 0.079%, `_inside`
+  0.169%, `_far`, `_whole_world`, `_depth`, `_no_sky`.
+
+**Card A69, decided 2026-11-17 by you (a): GTAO and the path tracer take
+their rays homogeneously.** Built 2026-11-18 on the Mac (Metal, the M5
+Pro; D3D12 and Vulkan never built). `rbtrend_lit_occlusion_frag.slang`'s
+view ray is `normalize(ha.xyz * hb.w - hb.xyz * ha.w)` from the depth-0
+and depth-1 points' homogeneous coordinates, turned to the eye's side as
+before. The path tracer's camera ray (`rbtrend_rt_path_trace.slang`)
+starts at the near end, the one whose homogeneous w is the larger (w is
+one over the clip w; the far end at infinity has w 0), or for an
+orthographic view (w alike to 1e-4) the nearer the eye as before; its
+direction the two ends taken homogeneously, turned along the view
+direction. No public change.
+- **Tests** (seen failing first): `test_lit_occlusion_projections` (a step
+  of two planes, 2 and 1.6 ahead, through four perspective projections,
+  each plane at its projection's depth): before, at infinity every texel
+  0 against 249 to 255 with a far plane (255 levels off); after, within 1
+  level of the same projection's with a far plane.
+  `test_rt_path_trace_projections` (the emissive square over the ground
+  in perspective from 5 above, 16 samples, on the device with
+  CRGPU_FEATURE_RAY_QUERY; the bare device reports it skipped): before,
+  at infinity the middle's mean 0 against 0.20324; after, 0.20324, within
+  0.002% of the same projection's with a far plane, no texel not finite.
 
 Found while drafting stage 1 (measured 2026-11-16, M5 Pro, Release,
 `rabbittustests`' `test_lit_sky_measure`): one LIT_SKY fill at 128/32 is
@@ -5573,6 +5836,90 @@ slide A60 describes. Every ctest passes, and `rabbittustests` on Metal
 under validation (other callers' cascades unchanged). Windows and Linux
 owed: test 6's bits within FIT_ULPS, card X25. The first caller's renderer
 chains it on every cascade fit, its scene origin the frame's eye.
+
+### 63. The view-set records sized by the caller (card A67, decided 2026-11-17)
+
+Decided 2026-11-17 with you: `rbtrend_view_sets_draft.h` (version 1)
+approved, every question as recommended (Q1 b, Q2 to Q7 a). Built
+2026-11-17 on the Mac (Metal, the M5 Pro; D3D12 and Vulkan never built:
+no backend branch), with its caller's half the same session.
+- **Public:** `RBTREND_LIT_SCENE_DESC {base; max_view_sets}` (struct type
+  5040), `RBTREND_LIT_SCENE_MAX_VIEW_SETS` 256,
+  `rbtrend_lit_scene_create(instance, desc, out_scene, out_error)` (a
+  break: the desc second; checks in order: instance NULL, destroyed; desc
+  NULL; its base; max_view_sets above 256; out_scene NULL, each its own
+  message). The four commands' text says which sets each takes; the
+  compile's @return names RBT_RESULT_LIMIT and the records as something
+  it changes outside the list. `./check.sh --update-abi`: the create's
+  signature the one break; the struct, its type and the macro added.
+- **Inside:** each scene keeps `max_view_sets` records (120 bytes each,
+  one calloc at creation, none for 0; `src/render/rbtrendviewsets_internal.hpp`),
+  serving LIT_SSR, LIT_TRACE_REFLECTIONS (its own 16 on the ray-tracing
+  state merged in), LIT_REFLECT and LIT_ATMOSPHERE_SHELLS. The hand-out
+  (`rbtrend_view_set_get`, now in `rbtrendcommands.cpp`, taking the list
+  and the scene): a record over the same layout and views hands out its
+  set; else, under the instance's release_mutex, `rbtrend_view_set_choose()`
+  picks the first empty record or the least recently handed out (a
+  per-scene counter, not frame_number) whose set is not held - in the
+  compiling list's used_handles or any compiled, unsubmitted list's; none:
+  RBT_RESULT_LIMIT naming the command (a shell by its index), the count
+  and the field, nothing made ("command 8: LIT_ATMOSPHERE_SHELLS: shell 4
+  needs a view set, and the scene's 4 (max_view_sets,
+  RBTREND_LIT_SCENE_DESC) are all held by this compile and lists compiled
+  and not yet submitted"); 0 records refused with its own message. Every
+  hand-out puts the set in the compile's used_handles. The shells' double
+  fetch removed: each shell's set taken once and kept in the list's
+  reused `shell_sets` for the draws. The instance's and the ray-tracing
+  state's caches and their destroys are gone; the scene's destroy
+  destroys its records' sets (through the release queue).
+- **The hazard (draft section 1), as found:** past 16 distinct sets in one
+  list the old cache evicted a set the compile already bound, retired at
+  an earlier submission's serial. On the M5 Pro it never showed in a
+  picture (64 shells in one list matched eight lists of eight before and
+  after), but the second compile of 64 shells made 393 allocations of
+  ours (every set past the 16th made again in the draw loop); now 0.
+- **Tests** (each seen failing first where it could; rabbittus:
+  `rbtrend_contract_tests`' `lit_scene_desc` and its NULL-instance check,
+  and `rbtrendviewsets_tests`, a new ctest, 44 now, both failing to
+  compile before; `rbt_misuse_tests` regenerated. rabbittustests:
+  `test_view_sets_refusals`; `_limit` (five atmospheres in four records
+  compiled before, refused now); `_eviction` (six lists each replacing the
+  records the list before binds, submitted without waiting: every picture
+  equal to its group drawn alone, no validation message; it could not
+  fail before, 16 records held both groups); `_across_lists` (B refused
+  while A holds 3 of 4, compiled before; A never stale; 20 lists holding
+  every record destroyed on Rabbittus Jobs' pool thread during B's
+  compile, then B compiled); `_many_shells` (64 against eight lists of
+  eight, the pictures equal; the second compile 0 allocations of ours,
+  393 before); `_zero` (LIT_SSR, LIT_REFLECT, LIT_ATMOSPHERE_SHELLS and,
+  where the device traces (the M5 Pro's device with the features does),
+  LIT_TRACE_REFLECTIONS refused naming max_view_sets, each compiled
+  before); `test_frame_allocations` (shells of two atmospheres at 2 records;
+  reflections at frames_in_flight + 2: 0 of ours);
+  `rbtrend_destroyed_calls.inc` regenerated. No -asan or -tsan run (no
+  new build tree): the two-thread case ran under neither.
+- **Found, not fixed (Carrottus GPU's Metal backend, not Rend's to
+  change here):** a list compiled and never submitted (a refused compile,
+  or a compiled list destroyed or reset unsubmitted) keeps its Metal
+  command buffer's place in the queue: the backend gives it back only
+  when committed (`crgpumetalcommand.m`'s own comment at
+  `crgpumetal___internal_acquire_command_buffer`), and a queue hands out
+  a fixed number, so enough of them in one process block a later compile
+  for good. The two-thread test hung at 20 rounds in the whole suite (a
+  compile waiting in `-commandBuffer`), alone it passed; it runs 3 now.
+  Rend could commit an abandoned recording empty, or Carrottus give a
+  reset list's buffer back: a card for you.
+- **Measured** (Release, no validation, `RABBITTUSTESTS_MEASURE`,
+  `test_view_sets_many_shells`): the compile of a list of 64 tables'
+  sends, LIT_ATMOSPHERE, a clear and 64 shells, every set found, 0.044 to
+  0.045 ms (means of 50 after 10). Not measured before (the old code was
+  replaced first; the draft's test 9 asked for both).
+- **Ran:** rabbittus' 44 ctests Debug and Release; rabbittustests all
+  passing, Debug and Release, both devices, under Metal's API and shader
+  validation with warnings as asserts; the workspace's check.sh
+  (abi, doxygen, conventions, caller-names, struct-bases, plain-data,
+  naming and the hosts' check); the first caller's half built and run
+  with it, recorded in that caller's own TODO.
 
 ## Suggested order
 

@@ -719,29 +719,80 @@ uint32_t rbtrend_lit_environment_get_specular_mip_count(rbtrend_lit_environment 
 typedef struct rbtrend_lit_scene_t *rbtrend_lit_scene;
 
 /**
+ * @brief The most records a scene keeps of the binding sets its commands
+ * make over views (RBTREND_LIT_SCENE_DESC::max_view_sets): a set is found by
+ * a scan of the records at each command that takes one, so this bounds a
+ * scan and what a scene allocates when it is made.
+ */
+#define RBTREND_LIT_SCENE_MAX_VIEW_SETS 256u
+
+/**
+ * @brief How a lit scene is created (rbtrend_lit_scene_create()).
+ */
+typedef struct RBTREND_LIT_SCENE_DESC {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC, and its
+	 * chain, which takes nothing today (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/**
+	 * How many binding sets over views the scene keeps, for the commands
+	 * that name it and make one: RBTREND_COMMAND_LIT_SSR,
+	 * _LIT_TRACE_REFLECTIONS, _LIT_REFLECT and _LIT_ATMOSPHERE_SHELLS
+	 * (rbtrendcommands.h says which sets each takes). 0 to
+	 * RBTREND_LIT_SCENE_MAX_VIEW_SETS.
+	 *
+	 * A set is kept and handed out again to a later compile that names the
+	 * same views, so a steady frame makes none. A compile that needs a set
+	 * while every record holds one bound by it or by a list compiled and
+	 * not yet submitted is refused with RBT_RESULT_LIMIT, naming this
+	 * field; otherwise a record not so held takes the new set (an empty
+	 * one, else the one handed out least recently), its old set destroyed.
+	 *
+	 * 0 is a scene with no records: those four commands naming it are
+	 * refused at the compile, with RBT_RESULT_LIMIT naming this field; it
+	 * draws lit surfaces, skies and every other command as any scene.
+	 *
+	 * Costs 120 bytes a record, allocated by rbtrend_lit_scene_create().
+	 * Each set made costs the descriptors of its layout (3 to 7) from the
+	 * device's crgpu_device_desc::max_descriptors, and its sampler from
+	 * max_samplers, until the record takes another or the scene is
+	 * destroyed.
+	 */
+	uint32_t max_view_sets;
+} RBTREND_LIT_SCENE_DESC;
+
+/**
  * @brief Creates a scene. It starts with exposure 1 and LINEAR output and
  * everything else 0: no view, no lights, no shadow atlas, no ambient light,
  * no shadows, so a surface drawn with it is black but for its emission.
  *
  * It makes, with its own material, RBTREND_LIT_MAX_SHADOW_VIEWS shadow pass
  * materials (rbtrend_lit_scene_get_shadow_pass_material()), handed out to
- * shadows' views as they are set: what setting a shadow needs is allocated
- * here, once.
+ * shadows' views as they are set, and @p desc's `max_view_sets` records of
+ * the sets its commands make over views (RBTREND_LIT_SCENE_DESC): what
+ * setting a shadow or compiling a command needs is allocated here, once.
  *
  * @param[in]  instance  Instance the scene is of.
+ * @param[in]  desc      How it is made. Copied: only read during the call.
  * @param[out] out_scene Receives the scene; NULL on failure.
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
- * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT if @p instance or
- *         @p out_scene is NULL; RBT_RESULT_OUT_OF_MEMORY; or
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT if @p instance is
+ *         NULL or destroyed, @p desc is NULL, `max_view_sets` is above
+ *         RBTREND_LIT_SCENE_MAX_VIEW_SETS, or @p out_scene is NULL;
+ *         RBT_RESULT_STRUCT_WRONG_TYPE or RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN
+ *         for `desc->base`; RBT_RESULT_OUT_OF_MEMORY; or
  *         RBT_RESULT_REND_GPU_FAILURE if what it is drawn with can't be made.
  */
-RBT_RESULT rbtrend_lit_scene_create(rbtrend_instance instance, rbtrend_lit_scene *out_scene, RBTREND_ERROR *out_error);
+RBT_RESULT rbtrend_lit_scene_create(
+	rbtrend_instance instance,
+	const RBTREND_LIT_SCENE_DESC *desc,
+	rbtrend_lit_scene *out_scene,
+	RBTREND_ERROR *out_error);
 
 /**
- * @brief Destroys a scene and its materials. What it names (shadow maps, an
- * environment, an occlusion texture) is the caller's. The GPU doesn't have
- * to be finished with it.
+ * @brief Destroys a scene, its materials and the sets its records hold.
+ * What it names (shadow maps, an environment, an occlusion texture) is the
+ * caller's. The GPU doesn't have to be finished with it.
  *
  * Thread: may overlap calls on other handles of its instance, from any
  * thread; no call may be using @p scene itself meanwhile (rbtrendcontext.h,
@@ -1359,7 +1410,12 @@ typedef struct RBTREND_LIT_ATMOSPHERE {
 	uint32_t sun_count;
 	/** The sky-view table's width (round the eye) and height (from the
 	 * zenith to the nadir), each RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE to
-	 * RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE. 192 x 108 is the paper's. */
+	 * RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE (192 x 108 is the paper's),
+	 * or both 0 for no sky: the atmosphere then lights the scene's surfaces
+	 * through its transmittance and draws nothing behind them, the aerial
+	 * volume's sizes 0 too (its air drawn by
+	 * RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS, given the same atmosphere and
+	 * centre). */
 	uint32_t sky_view_width;
 	/** See #sky_view_width. */
 	uint32_t sky_view_height;
@@ -1402,8 +1458,22 @@ typedef struct RBTREND_LIT_ATMOSPHERE {
  * by the aerial volume where the scene has one. With none, nothing of this
  * is read, and the scene draws as it did.
  *
- * Memory: the sky-view table and the volume, R16G16B16A16_FLOAT: 162 KiB at
- * 192 x 108, 256 KiB at 32 x 32 x 32.
+ * With no sky (both sky-view sizes 0): the sky shader draws as with no
+ * atmosphere, the suns' discs undimmed; each of the first `sun_count`
+ * directional lights still reaches a surface through the transmittance.
+ * Refused: one sky-view size 0 and not the other; a volume without a
+ * sky-view. The sky-view's steps are checked as ever, and not read.
+ *
+ * Memory: one array of R16G16B16A16_FLOAT layers, each the largest of the
+ * sky-view table, the atmosphere's transmittance table and a slice of the
+ * volume across and down: two layers (the sky-view, the transmittance),
+ * and two a slice of the volume (its light and its transmittance, each per
+ * channel). 432 KiB with a 192 x 108 sky-view and a 256 x 64 transmittance
+ * table and no volume; 13.9 MiB (66 layers of 256 x 108) with a 32 x 32 x
+ * 32 volume. With no sky, two layers of the transmittance table's size
+ * (the first unread); an array the scene already
+ * holds that is as large is kept, so switching an atmosphere between a sky
+ * and none makes nothing.
  *
  * @param[in]  scene      The scene.
  * @param[in]  atmosphere What it draws. Only read during the call.
@@ -1416,6 +1486,41 @@ typedef struct RBTREND_LIT_ATMOSPHERE {
  *         changes on failure.
  */
 RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTREND_LIT_ATMOSPHERE *atmosphere, RBTREND_ERROR *out_error);
+
+/** The most steps a texel's march takes in RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS 128u
+
+/** The most lights an RBTREND_LIT_ATMOSPHERE_SHELL names: the size of its
+ * frozen #RBTREND_LIT_ATMOSPHERE_SHELL::_lights array, as a scene's
+ * atmosphere takes at most two suns. */
+#define RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS 2u
+
+/**
+ * @brief An atmosphere's shell drawn from where the eye is, by
+ * RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS: which atmosphere, where its
+ * centre is this frame, and which of the scene's lights light it.
+ */
+/* Frozen: an array element, sent every frame. It never changes; a new need gets a new type. */
+typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
+	/** The atmosphere (rbtrendatmosphere.h): its medium and tables. Of the
+	 * scene's instance; it must outlive the list's submission. */
+	rbtrend_atmosphere _atmosphere;
+	/** Its centre in the scene's space this frame: finite. */
+	float _center[3];
+	/** How many of #_lights light it: 0 to
+	 * RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS. 0: its air is dark, its
+	 * ground black, and it still dims what is behind it (a world's night). */
+	uint32_t _light_count;
+	/**
+	 * Its lights, by their places in the scene's light list
+	 * (rbtrend_lit_scene_set_lights()): each a directional light
+	 * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL), its direction and radiance used
+	 * as they are; a directional light given a source place joins them once
+	 * Rend has one. A point or spot light is refused. Entries past
+	 * #_light_count are not read.
+	 */
+	uint32_t _lights[RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS];
+} RBTREND_LIT_ATMOSPHERE_SHELL;
 
 /**
  * @brief Sets the ambient occlusion of the view, or takes it away: a texture

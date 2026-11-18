@@ -288,11 +288,13 @@ typedef struct rbtrend_instance_t *rbtrend_instance;
  * creates the device it gives rbtrend_instance_create(): Rend reads the
  * device's features, so one the device wasn't created with is a path not
  * taken. Today these are CRGPU_FEATURE_MULTI_DRAW_INDIRECT (an indirect
- * draw command is one Carrottus GPU call, not one a draw) and
+ * draw command is one Carrottus GPU call, not one a draw),
  * CRGPU_FEATURE_DEVICE_MAPPABLE_MEMORY (a storage buffer is written
- * directly, not staged). Features that one of Rend's calls needs are not
- * here: each such call names its feature, and the caller asks for it if it
- * makes the call.
+ * directly, not staged) and CRGPU_FEATURE_DUAL_SOURCE_BLEND (the blend of
+ * Rend's own pass for RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS, rbtrendcommands.h,
+ * which is refused without it). Other features that one of Rend's calls
+ * needs are not here: each such call names its feature, and the caller
+ * asks for it if it makes the call.
  *
  * A function, not a macro, so the value is the linked library's, not the
  * header's the caller compiled against.

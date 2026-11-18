@@ -7,6 +7,7 @@
 
 import rbtrend_atmosphere_model;
 import rbtrend_atmosphere_pass;
+import rbtrend_atmosphere_pass_block;
 import rbtrend_environment;
 
 [[vk::binding(0, 1)]] Texture2D<float4> sky_view_table : register(t0, space1);

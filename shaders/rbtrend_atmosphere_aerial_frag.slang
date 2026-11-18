@@ -2,11 +2,13 @@
 // 3 of the atmosphere): a froxel volume over the view's frustum, each texel
 // a ray from the eye through it (the block's inverse_view_projection), each
 // slice the light scattered into that ray up to its distance (the slice's
-// end, slices even in distance to the block's aerial_distance) in RGB and
-// its transmittance there in A (the mean of the three channels), marched
-// in the block's steps a slice. A lit surface reads it at its own distance
-// (rbtrend_lit_atmosphere.slang): its colour times the transmittance, plus
-// the light. The ray stops where it leaves the shell, never at the ground
+// end, slices even in distance to the block's aerial_distance), and its
+// transmittance there per channel, marched in the block's steps a slice:
+// two targets, the light's layer (RGB) and the transmittance's (RGB; the
+// scene's array holds the volume's light slices, then its transmittance
+// slices). A lit surface reads both at its own distance
+// (rbtrend_lit_atmosphere.slang): its colour times the transmittance,
+// channel by channel, plus the light. The ray stops where it leaves the shell, never at the ground
 // sphere: whatever a surface there stands on is the caller's geometry, not
 // that sphere, and its path is the slice's whole distance, a point of it
 // under the sphere read at the sphere (atmosphere_march). An eye above the
@@ -14,6 +16,7 @@
 
 import rbtrend_atmosphere_model;
 import rbtrend_atmosphere_pass;
+import rbtrend_atmosphere_pass_block;
 
 [[vk::binding(0, 1)]] Texture2D<float4> transmittance_table : register(t0, space1);
 [[vk::binding(1, 1)]] SamplerState transmittance_sampler : register(s1, space1);
@@ -29,18 +32,30 @@ struct AerialParams {
 };
 [[vk::push_constant]] ConstantBuffer<AerialParams> params : register(b0, space4);
 
-float3 unproject(float2 ndc, float depth) {
-    float4 p = mul(u_atmosphere.inverse_view_projection, float4(ndc, depth, 1.0));
-    return p.xyz / p.w;
+// The slice's light, and its transmittance, each in RGB (A 1, unread).
+struct AerialOut {
+    float4 light : SV_Target0;
+    float4 transmittance : SV_Target1;
+};
+
+AerialOut aerial_out(float3 light, float3 transmittance) {
+    AerialOut result;
+    result.light         = float4(light, 1.0);
+    result.transmittance = float4(transmittance, 1.0);
+    return result;
 }
 
 [shader("fragment")]
-float4 rbtrend_atmosphere_aerial_frag(float4 frag_coord : SV_Position) : SV_Target0 {
+AerialOut rbtrend_atmosphere_aerial_frag(float4 frag_coord : SV_Position) {
     AtmosphereMedium m = pass_medium();
     // The texel's ray, the first row at the top, as the sky shader casts.
     float2 ndc = frag_coord.xy / params.size * 2.0 - 1.0;
     ndc.y      = -ndc.y;
-    float3 d   = normalize(unproject(ndc, 1.0) - unproject(ndc, 0.0));
+    // The ray between its points at depths 1 and 0, taken homogeneously, as
+    // the sky shader takes it: a far plane at infinity gives a direction.
+    float4 a   = mul(u_atmosphere.inverse_view_projection, float4(ndc, 1.0, 1.0));
+    float4 b   = mul(u_atmosphere.inverse_view_projection, float4(ndc, 0.0, 1.0));
+    float3 d   = normalize(b.xyz * a.w - a.xyz * b.w);
     // Near at 0 or at 1: either way the ray runs away from the eye.
     if (dot(d, u_atmosphere.view_direction.xyz) < 0.0)
         d = -d;
@@ -50,11 +65,12 @@ float4 rbtrend_atmosphere_aerial_frag(float4 frag_coord : SV_Position) : SV_Targ
     float t_end  = u_atmosphere.more_sizes.z * (float(params.slice) + 1.0) / slices;
     float3 top   = sphere_hits(o, d, m.top_radius);
     if (top.z < 0.0 || top.y <= 0.0)
-        return float4(0.0, 0.0, 0.0, 1.0);
+        return aerial_out(float3(0.0), float3(1.0));
     float start = max(top.x, 0.0);
     float end   = min(top.y, start + t_end);
     uint steps = max(uint(u_atmosphere.more_sizes.w) * (params.slice + 1u), 1u);
-    AtmosphereMarch march = atmosphere_march(m, transmittance_table, transmittance_sampler, multiple_scattering_table, multiple_scattering_sampler, o, d,
-                                             start, max(end, start), steps, false);
-    return float4(march.light, dot(march.transmittance, float3(1.0 / 3.0)));
+    AtmosphereMarch march = atmosphere_march(m, transmittance_table, transmittance_sampler, multiple_scattering_table, multiple_scattering_sampler,
+                                             u_atmosphere.sizes.xy, u_atmosphere.more_sizes.x, u_atmosphere.sun_direction, u_atmosphere.sun_illuminance,
+                                             o, d, start, max(end, start), steps, false);
+    return aerial_out(march.light, march.transmittance);
 }

@@ -72,6 +72,9 @@ typedef struct rbtrend_tlas_t *rbtrend_tlas;
 /** A medium in a sphere's shell and its tables (rbtrendatmosphere.h),
  * rebuilt by RBTREND_COMMAND_ATMOSPHERE_TABLES. */
 typedef struct rbtrend_atmosphere_t *rbtrend_atmosphere;
+/** An atmosphere's shell (rbtrendlit.h), drawn by
+ * RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
+struct RBTREND_LIT_ATMOSPHERE_SHELL;
 
 /**
  * @brief What RBTREND_COMMAND_BUILD_BLAS does to its BLAS
@@ -1038,6 +1041,12 @@ enum {
 	 * write none of the variant's targets: they are drawn after LIT_REFLECT
 	 * and are not reflected.
 	 *
+	 * It takes one set from `_scene`'s view-set records
+	 * (RBTREND_LIT_SCENE_DESC::max_view_sets), over its views and its Hi-Z
+	 * pyramid. The pyramid is taken from the render target pool, which
+	 * hands out another while a frame that took one is unfinished: over
+	 * frames, one of up to frames_in_flight sets.
+	 *
 	 * It binds pipelines and sets of its own: a compute pipeline is set
 	 * again after it before a dispatch.
 	 */
@@ -1076,6 +1085,10 @@ enum {
 	 * submitted before. `_ray_count` is 1 or more, `_cull_mask` 1 to 255,
 	 * `_max_distance` above 0 and `_max_roughness` 0 to 1, both finite.
 	 * Its write is ordered before any later read of `_reflection`.
+	 *
+	 * It takes one set from `_scene`'s view-set records
+	 * (RBTREND_LIT_SCENE_DESC::max_view_sets), over its views, the scene's
+	 * environment's cubes (or Rend's placeholder) and the BRDF table.
 	 */
 	RBTREND_COMMAND_LIT_TRACE_REFLECTIONS       = 46,
 	/**
@@ -1108,6 +1121,9 @@ enum {
 	 * view's target size, left in COLOR_ATTACHMENT_OPTIMAL. Each view but
 	 * `_target` holds what was written earlier in the list or before it.
 	 *
+	 * It takes one set from `_scene`'s view-set records
+	 * (RBTREND_LIT_SCENE_DESC::max_view_sets), over its four views.
+	 *
 	 * It binds pipelines and sets of its own, as BLOOM does.
 	 */
 	RBTREND_COMMAND_LIT_REFLECT                 = 47,
@@ -1130,7 +1146,9 @@ enum {
 	 * atmosphere's tables. Once a frame for a scene that draws an
 	 * atmosphere; a scene drawn with none since its view changed reads
 	 * the tables of the last one, a frame stale. Nothing for a scene with
-	 * no atmosphere.
+	 * no atmosphere. For a scene whose atmosphere has no sky (sky-view
+	 * sizes 0), copies its transmittance table only; the scene's surfaces
+	 * read it from the submission that holds the first copy on.
 	 *
 	 * It binds pipelines and sets of its own, as BLOOM does.
 	 */
@@ -1148,6 +1166,63 @@ enum {
 	 * It binds pipelines and sets of its own, as BLOOM does.
 	 */
 	RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT  = 50,
+	/**
+	 * Draws atmospheres' shells over `_target`, outside a pass: each of
+	 * `_shells` (RBTREND_LIT_ATMOSPHERE_SHELL, rbtrendlit.h), the farthest
+	 * first, by the eye's power against its top sphere. At each texel its
+	 * bounds cover, the view ray from `_scene`'s eye is marched through the
+	 * shell from where it enters (or the eye, inside it) to where it leaves,
+	 * meets the ground sphere or meets the surface `_depth` holds (a texel
+	 * at the projection's far value holds none, whatever its far plane), in
+	 * `_min_steps` to `_max_steps` steps, more for a longer ray (the most
+	 * at the shell's longest chord, 2 sqrt(top^2 - bottom^2)); the light it
+	 * gathers from the shell's lights (directional;
+	 * RBTREND_LIT_ATMOSPHERE_SHELL), by Hillaire's model with its
+	 * atmosphere's two tables, is added and what is behind dimmed by its
+	 * transmittance, per channel. Where the ray meets the ground sphere and
+	 * no surface is drawn, the medium's ground is drawn there, opaque, lit
+	 * by the lights through the air. A texel the ray doesn't reach in the
+	 * shell is left as it was, bit for bit.
+	 *
+	 * Inside the scene's own atmosphere (with a sky-view), a shell is put
+	 * behind the scene's air: its light dimmed by the scene's transmittance
+	 * along the ray and the scene's air kept in front, read from the
+	 * scene's sky-view and volume. A shell naming the scene's own
+	 * atmosphere then is refused (its air twice); with no sky, naming it is
+	 * how its air is drawn (rbtrendlit.h, RBTREND_LIT_ATMOSPHERE).
+	 *
+	 * `_scene` gives the view (its view-projection, which can be inverted,
+	 * its eye and target size), its lights, its exposure and its
+	 * atmosphere; its output encoding linear
+	 * (RBTREND_COLOR_ENCODING_LINEAR). `_depth` is a SHADER_RESOURCE 2D
+	 * view, DEPTH aspect, single-sampled, of the depth the surfaces were
+	 * drawn with through that view-projection at the view's target size;
+	 * `_target` a RENDER_TARGET 2D view of the picture as the lit surfaces
+	 * wrote it, linear and times the scene's exposure (before the tone
+	 * map), of R16G16B16A16_FLOAT, R32G32B32A32_FLOAT or R11G11B10_FLOAT at
+	 * that size, left in COLOR_ATTACHMENT_OPTIMAL. Each holds what was
+	 * written earlier in the list or before it. Each atmosphere's tables
+	 * built (ATMOSPHERE_TABLES) earlier in the list or before it; a shell
+	 * whose atmosphere has no medium, or tables never built, is skipped,
+	 * as LIT_ATMOSPHERE skips such an atmosphere.
+	 * `_min_steps` 1 to `_max_steps`, `_max_steps` at most
+	 * RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS. `_shells` copied at the send.
+	 *
+	 * The frame's order: after the lit surfaces and LIT_REFLECT, before the
+	 * transparent surfaces and the tone map. Needs Carrottus GPU's
+	 * dual-source blending, CRGPU_FEATURE_DUAL_SOURCE_BLEND, on the device,
+	 * which rbtrend_get_optional_gpu_features() names: refused with
+	 * RBT_RESULT_UNSUPPORTED at the compile without it.
+	 *
+	 * It takes one set from `_scene`'s view-set records
+	 * (RBTREND_LIT_SCENE_DESC::max_view_sets) for each shell it draws, over
+	 * `_depth` and the shell's atmosphere's two tables; shells naming one
+	 * atmosphere share it, and a shell off the screen takes none. A caller
+	 * sizes the records for every shell it may list.
+	 *
+	 * It binds pipelines and sets of its own, as BLOOM does.
+	 */
+	RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS       = 51,
 };
 
 /**
@@ -1620,6 +1695,22 @@ typedef struct RBTREND_COMMAND {
 			/** The scene whose sky-view table fills it. */
 			rbtrend_lit_scene _scene;
 		} _lit_atmosphere_environment; /**< RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT. */
+		struct {
+			/** The scene: its view, lights and atmosphere. */
+			rbtrend_lit_scene _scene;
+			/** The shells, `_shell_count` of them; copied at the send. */
+			const struct RBTREND_LIT_ATMOSPHERE_SHELL *_shells;
+			/** How many: 0 draws nothing. */
+			uint32_t _shell_count;
+			/** The least steps a texel's march takes: 1 to `_max_steps`. */
+			uint32_t _min_steps;
+			/** The most: up to RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS (32 is a good start). */
+			uint32_t _max_steps;
+			/** The depth the surfaces were drawn with. */
+			rbtrend_texture_view _depth;
+			/** The picture the shells are drawn over. */
+			rbtrend_texture_view _target;
+		} _lit_atmosphere_shells; /**< RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
 		/**
 		 * Never read. Fixes `_params` at 120 bytes, so the command's size
 		 * stays 128 as commands are added: a new command's parameters fit
@@ -1936,11 +2027,19 @@ void rbtrend_command_list_send(
  *         - no Carrottus GPU command list to record into, if one has to be made
  *           and the device refuses it.
  *
- *         Compiling builds the binding set of every material a SET_MATERIAL
- *         names, when it has none or a resource was set since its last
- *         build (rbtrendmaterial.h). That is the one thing it changes outside
- *         the list, and it is done whether or not the rest of the compile
- *         succeeds.
+ *         RBT_RESULT_LIMIT for a LIT_SSR, LIT_TRACE_REFLECTIONS, LIT_REFLECT
+ *         or LIT_ATMOSPHERE_SHELLS that needs a set of its scene's view-set
+ *         records while each holds one bound by this compile or by a list
+ *         compiled and not yet submitted
+ *         (RBTREND_LIT_SCENE_DESC::max_view_sets), and for any of them
+ *         naming a scene whose max_view_sets is 0.
+ *
+ *         Compiling changes two things outside the list, whether or not the
+ *         rest of the compile succeeds: it builds the binding set of every
+ *         material a SET_MATERIAL names, when it has none or a resource was
+ *         set since its last build (rbtrendmaterial.h); and the view-set
+ *         records of the scenes its commands name: a set made into a record
+ *         stays there.
  */
 RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_ERROR *out_error);
 

@@ -1884,7 +1884,7 @@ int main(void)
     calls++;
     expect_error("rbtrend_lit_point_shadow_view_projection", rbtrend_lit_point_shadow_view_projection((const RBTREND_LIT_SCENE_LIGHT *){0}, (uint32_t){0}, (float){0}, (_Bool){0}, (float *){0}, (RBTREND_ERROR *){0}));
     calls++;
-    expect_error("rbtrend_lit_scene_create", rbtrend_lit_scene_create((rbtrend_instance){0}, (rbtrend_lit_scene *){0}, (RBTREND_ERROR *){0}));
+    expect_error("rbtrend_lit_scene_create", rbtrend_lit_scene_create((rbtrend_instance){0}, (const RBTREND_LIT_SCENE_DESC *){0}, (rbtrend_lit_scene *){0}, (RBTREND_ERROR *){0}));
     calls++;
     rbtrend_lit_scene_destroy((rbtrend_lit_scene){0});
     calls++;

@@ -273,6 +273,23 @@ void rbtrend_record_fullscreen_pass_region(
     const void *push,
     uint32_t push_size);
 
+/* As rbtrend_record_fullscreen_pass_sets, into [target_count] targets at
+ * once (at most CRGPU_MAX_COLOR_ATTACHMENTS), each a view [width] by
+ * [height], for a pipeline that renders as many. */
+void rbtrend_record_fullscreen_pass_targets(
+    crgpu_command_list cmd,
+    rbtrend_graphics_pipeline pipeline,
+    const crgpu_image_view *targets,
+    uint32_t target_count,
+    uint32_t width,
+    uint32_t height,
+    CRGPU_LOAD_OP load_op,
+    const rbtrend_binding_set *sets,
+    uint32_t set_count,
+    uint32_t frame,
+    const void *push,
+    uint32_t push_size);
+
 /* From the instance's destructor, before its release queue is emptied:
  * destroys every built-in object, pipelines before the layout they
  * declare. Each destroy call goes through the release queue, which the

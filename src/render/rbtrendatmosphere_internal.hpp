@@ -60,6 +60,26 @@ struct rbtrend_aerial_params {
 	float size[2];
 };
 
+/* ShellParams in shaders/rbtrend_atmosphere_shell_frag.slang, a shell's
+ * push constants (RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS): its centre and
+ * light count, each light's direction (w 1 where it lights the shell) and
+ * illuminance (pi times its radiance) at the centre, and the least and
+ * most steps, whether the scene's own air is in front, and whether depth
+ * is reversed. */
+struct rbtrend_shell_params {
+	float center_lights[4];
+	float light_direction[2][4];
+	float light_illuminance[2][4];
+	uint32_t steps[4];
+};
+RBT_PLAIN_DATA(rbtrend_shell_params);
+static_assert(sizeof(rbtrend_shell_params) == 96, "ShellParams in rbtrend_atmosphere_shell_frag.slang: 96 bytes of push constants");
+
+/* A shell is copied into the command list at the send and read at the
+ * compile (rbtrendcommands.cpp). */
+RBT_PLAIN_DATA(RBTREND_LIT_ATMOSPHERE_SHELL);
+static_assert(sizeof(RBTREND_LIT_ATMOSPHERE_SHELL) == sizeof(void *) + 24, "RBTREND_LIT_ATMOSPHERE_SHELL: 32 bytes on a 64-bit build");
+
 /* The passes, each a fragment shader over the full-screen vertex shader
  * rendering RBTREND_ATMOSPHERE_FORMAT. */
 enum {
@@ -68,7 +88,7 @@ enum {
 	RBTREND_ATMOSPHERE_PASS_SKY_VIEW      = 2, /* a scene's sky-view table, from both */
 	RBTREND_ATMOSPHERE_PASS_ENVIRONMENT   = 3, /* a face of an environment's radiance cube, from a sky-view table */
 	RBTREND_ATMOSPHERE_PASS_COPY          = 4, /* a table into a layer of a scene's atmosphere array, texel for texel */
-	RBTREND_ATMOSPHERE_PASS_AERIAL        = 5, /* a slice of a scene's aerial volume, from both of an atmosphere's tables */
+	RBTREND_ATMOSPHERE_PASS_AERIAL        = 5, /* a slice of a scene's aerial volume, its light and its transmittance (two targets), from both of an atmosphere's tables */
 	RBTREND_ATMOSPHERE_PASS_COUNT         = 6,
 };
 
@@ -122,7 +142,7 @@ bool rbtrend_atmosphere_drawable(const rbtrend_atmosphere_t &atmosphere);
 /* The width, height and layers of a scene's atmosphere array for
  * [atmosphere] as set (rbtrendlit_internal.hpp,
  * rbtrend_lit_scene_t::atmosphere_tables): every table's largest side, and
- * two layers and the volume's slices. */
+ * two layers and two a slice of the volume (its light, its transmittance). */
 void rbtrend_lit_atmosphere_array_size(const RBTREND_LIT_ATMOSPHERE &atmosphere, uint32_t out_size[3]);
 
 /* The scene's atmosphere members of its block (rbtrend_lit_scene_block),

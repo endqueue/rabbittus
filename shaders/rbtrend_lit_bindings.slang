@@ -40,8 +40,9 @@ module rbtrend_lit_bindings;
 // RBTREND_LIT_SCENE_ATMOSPHERE is set, in one binding (a set holds at most
 // sixteen, Carrottus GPU's CRGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET, and this is
 // the sixteenth): layer 0 the scene's sky-view table, layer 1 its
-// atmosphere's transmittance table, layers 2 on its aerial volume's slices
-// where RBTREND_LIT_SCENE_AERIAL is set, each in the top left of its layer
+// atmosphere's transmittance table, and where RBTREND_LIT_SCENE_AERIAL is
+// set, layers 2 on its aerial volume's slices of light (RGB), then as many
+// of its transmittance (RGB, per channel), each in the top left of its layer
 // at its own size (the block's atmosphere_sizes and atmosphere_aerial; the
 // array's in atmosphere_array). Read through environment_sampler.
 [[vk::binding(15, 0)]] public Texture2DArray<float4> atmosphere_tables : register(t15, space0);

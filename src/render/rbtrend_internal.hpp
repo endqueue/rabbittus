@@ -855,6 +855,7 @@ typedef struct rbtrend_command_list_t {
 	 * across a call to another user of the same array.
 	 * - pass_images, pass_stores: what one pass's or dispatch's sets hold
 	 *   (rbtrend_pass_images_add_set, rbtrend_storage_stores_add_set).
+	 * - shell_sets: one LIT_ATMOSPHERE_SHELLS' sets, a shell each.
 	 * - pass_arguments: the argument buffers of one pass's indirect draws.
 	 * - set_barriers: rbtrend_cmd_ready_set_resources' storage buffer barriers.
 	 * - upload_before, upload_after: rbtrend_cmd_record_uploads' barriers.
@@ -864,6 +865,10 @@ typedef struct rbtrend_command_list_t {
 	 *   each 1 if it was opened inside a pass. */
 	eq::array<rbtrend_pass_image> pass_images{};
 	eq::array<rbtrend_pass_store> pass_stores{};
+	/* LIT_ATMOSPHERE_SHELLS' set 2 for each of its shells, from the scene's
+	 * view-set records (NULL for a shell that draws nothing), taken once
+	 * and bound by its draws. */
+	eq::array<rbtrend_binding_set> shell_sets{};
 	eq::array<rbtrend_buffer_store *> pass_arguments{};
 	eq::array<crgpu_buffer_barrier> set_barriers{};
 	eq::array<crgpu_buffer_barrier> upload_before{};

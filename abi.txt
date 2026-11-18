@@ -151,6 +151,7 @@ const RBTREND_COMMAND_GENERATE_MIPS = 28
 const RBTREND_COMMAND_LIT_AMBIENT_OCCLUSION = 33
 const RBTREND_COMMAND_LIT_ATMOSPHERE = 49
 const RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT = 50
+const RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS = 51
 const RBTREND_COMMAND_LIT_CULL_LIGHTS = 38
 const RBTREND_COMMAND_LIT_ENVIRONMENT = 31
 const RBTREND_COMMAND_LIT_PATH_TRACE = 44
@@ -390,6 +391,7 @@ const RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT = 5022
 const RBT_STRUCT_TYPE_REND_LIT_ENVIRONMENT_DESC = 5017
 const RBT_STRUCT_TYPE_REND_LIT_LIGHT_SHADOW = 5034
 const RBT_STRUCT_TYPE_REND_LIT_MATERIAL_VALUES = 5018
+const RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC = 5040
 const RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS = 5035
 const RBT_STRUCT_TYPE_REND_LIT_VIEW = 5019
 const RBT_STRUCT_TYPE_REND_MATERIAL_DESC = 5009
@@ -694,7 +696,7 @@ fn rbtrend_lit_material_set_map_uv_transform RBT_RESULT (rbtrend_material, RBTRE
 fn rbtrend_lit_material_set_sampler RBT_RESULT (rbtrend_material, rbtrend_sampler, RBTREND_ERROR *)
 fn rbtrend_lit_material_set_values RBT_RESULT (rbtrend_material, const RBTREND_LIT_MATERIAL_VALUES *, RBTREND_ERROR *)
 fn rbtrend_lit_point_shadow_view_projection RBT_RESULT (const RBTREND_LIT_SCENE_LIGHT *, uint32_t, float, _Bool, float *, RBTREND_ERROR *)
-fn rbtrend_lit_scene_create RBT_RESULT (rbtrend_instance, rbtrend_lit_scene *, RBTREND_ERROR *)
+fn rbtrend_lit_scene_create RBT_RESULT (rbtrend_instance, const RBTREND_LIT_SCENE_DESC *, rbtrend_lit_scene *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_destroy void (rbtrend_lit_scene)
 fn rbtrend_lit_scene_get_material rbtrend_material (rbtrend_lit_scene)
 fn rbtrend_lit_scene_get_shadow_pass_material rbtrend_material (rbtrend_lit_scene, uint32_t, uint32_t)
@@ -868,6 +870,8 @@ macro RBTREND_DRAW_LIST_NO_MATERIAL UINT32_MAX
 macro RBTREND_ERROR_MESSAGE_SIZE 256
 macro RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_SIZE 128u
 macro RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_STEPS 16u
+macro RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS 2u
+macro RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS 128u
 macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE 1024u
 macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS 128u
 macro RBTREND_LIT_ATMOSPHERE_MIN_AERIAL_SIZE 8u
@@ -878,6 +882,7 @@ macro RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS 4u
 macro RBTREND_LIT_MAX_LIGHTS 128u
 macro RBTREND_LIT_MAX_SHADOW_VIEWS 64u
 macro RBTREND_LIT_MAX_TILE_LIGHTS 63u
+macro RBTREND_LIT_SCENE_MAX_VIEW_SETS 256u
 macro RBTREND_LIT_SCENE_SET 0u
 macro RBTREND_LIT_TILE_SIZE 16u
 macro RBTREND_MAX_BINDINGS_PER_LAYOUT CRGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET
@@ -1543,6 +1548,8 @@ field RBTREND_COMMAND._params._lit_atmosphere @8 struct {}
 field RBTREND_COMMAND._params._lit_atmosphere._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_atmosphere_environment @8 struct {}
 field RBTREND_COMMAND._params._lit_atmosphere_environment._environment @8 rbtrend_lit_environment
+field RBTREND_COMMAND._params._lit_atmosphere_shells @8 struct {}
+field RBTREND_COMMAND._params._lit_atmosphere_shells._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_cull_lights @8 struct {}
 field RBTREND_COMMAND._params._lit_cull_lights._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_environment @8 struct {}
@@ -1613,6 +1620,7 @@ field RBTREND_COMMAND._params._draw_texture._target @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._generate_mips._base_mip @16 uint32_t
 field RBTREND_COMMAND._params._lit_ambient_occlusion._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_atmosphere_environment._scene @16 rbtrend_lit_scene
+field RBTREND_COMMAND._params._lit_atmosphere_shells._shells @16 const struct RBTREND_LIT_ATMOSPHERE_SHELL *
 field RBTREND_COMMAND._params._lit_cull_lights._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_environment._source @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_path_trace._tlas @16 rbtrend_tlas
@@ -1645,6 +1653,7 @@ field RBTREND_COMMAND._params._draw_indexed_instanced._start_instance_location @
 field RBTREND_COMMAND._params._draw_indirect._draw_count @24 uint32_t
 field RBTREND_COMMAND._params._draw_texture._scaling @24 RBTREND_TEXTURE_SCALING
 field RBTREND_COMMAND._params._lit_ambient_occlusion._target @24 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_atmosphere_shells._shell_count @24 uint32_t
 field RBTREND_COMMAND._params._lit_path_trace._target @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_reflect._normal_roughness @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._light @24 uint32_t
@@ -1656,12 +1665,14 @@ field RBTREND_COMMAND._params._tone_map._exposure @24 float
 field RBTREND_COMMAND._params._bloom._knee @28 float
 field RBTREND_COMMAND._params._draw_indirect._stride @28 uint32_t
 field RBTREND_COMMAND._params._draw_texture._filter @28 CRGPU_FILTER
+field RBTREND_COMMAND._params._lit_atmosphere_shells._min_steps @28 uint32_t
 field RBTREND_COMMAND._params._lit_sky._turbidity @28 float
 field RBTREND_COMMAND._params._present_texture._filter @28 CRGPU_FILTER
 field RBTREND_COMMAND._params._tone_map._curve @28 RBTREND_TONE_CURVE
 field RBTREND_COMMAND._params._bloom._radius @32 float
 field RBTREND_COMMAND._params._draw_texture._border_color @32 float[4]
 field RBTREND_COMMAND._params._lit_ambient_occlusion._radius @32 float
+field RBTREND_COMMAND._params._lit_atmosphere_shells._max_steps @32 uint32_t
 field RBTREND_COMMAND._params._lit_path_trace._albedo @32 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_reflect._specular @32 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._depth @32 rbtrend_texture_view
@@ -1674,6 +1685,7 @@ field RBTREND_COMMAND._params._bloom._intensity @36 float
 field RBTREND_COMMAND._params._lit_ambient_occlusion._intensity @36 float
 field RBTREND_COMMAND._params._lit_sky._ground_albedo @36 float[3]
 field RBTREND_COMMAND._params._bloom._levels @40 uint32_t
+field RBTREND_COMMAND._params._lit_atmosphere_shells._depth @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_path_trace._normal @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_reflect._reflection @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._target @40 rbtrend_texture_view
@@ -1683,6 +1695,7 @@ field RBTREND_COMMAND._params._outline._width @40 float
 field RBTREND_COMMAND._params._tone_map._auto_exposure @40 rbtrend_exposure
 field RBTREND_COMMAND._params._bloom._mask @48 rbtrend_texture_view
 field RBTREND_COMMAND._params._draw_texture._source_rect @48 RBTREND_TEXEL_RECT
+field RBTREND_COMMAND._params._lit_atmosphere_shells._target @48 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_path_trace._samples @48 uint32_t
 field RBTREND_COMMAND._params._lit_reflect._target @48 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._ray_count @48 uint32_t
@@ -1846,6 +1859,11 @@ field RBTREND_LIT_ATMOSPHERE.aerial_distance @60 float
 field RBTREND_LIT_ATMOSPHERE.sky_view_min_steps @64 uint32_t
 field RBTREND_LIT_ATMOSPHERE.sky_view_max_steps @68 uint32_t
 field RBTREND_LIT_ATMOSPHERE.aerial_steps_per_slice @72 uint32_t
+struct RBTREND_LIT_ATMOSPHERE_SHELL size=32 align=8
+field RBTREND_LIT_ATMOSPHERE_SHELL._atmosphere @0 rbtrend_atmosphere
+field RBTREND_LIT_ATMOSPHERE_SHELL._center @8 float[3]
+field RBTREND_LIT_ATMOSPHERE_SHELL._light_count @20 uint32_t
+field RBTREND_LIT_ATMOSPHERE_SHELL._lights @24 uint32_t[2]
 struct RBTREND_LIT_CASCADE_ANCHOR size=40 align=8
 field RBTREND_LIT_CASCADE_ANCHOR.base @0 RBT_STRUCT_BASE
 field RBTREND_LIT_CASCADE_ANCHOR.scene_origin @16 RbtDVec3
@@ -1897,6 +1915,9 @@ field RBTREND_LIT_MATERIAL_VALUES.ior @120 float
 field RBTREND_LIT_MATERIAL_VALUES.thickness @124 float
 field RBTREND_LIT_MATERIAL_VALUES.attenuation_color @128 float[3]
 field RBTREND_LIT_MATERIAL_VALUES.attenuation_distance @140 float
+struct RBTREND_LIT_SCENE_DESC size=24 align=8
+field RBTREND_LIT_SCENE_DESC.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_SCENE_DESC.max_view_sets @16 uint32_t
 struct RBTREND_LIT_SCENE_LIGHT size=60 align=4
 field RBTREND_LIT_SCENE_LIGHT._type @0 RBTREND_LIT_LIGHT_TYPE
 field RBTREND_LIT_SCENE_LIGHT._position @4 float[3]
@@ -2536,6 +2557,7 @@ typedef RBTREND_INDEX_STRIDE = enum RBTREND_INDEX_STRIDE
 typedef RBTREND_INSTANCE_DESC = struct RBTREND_INSTANCE_DESC
 typedef RBTREND_LIT_AMBIENT = struct RBTREND_LIT_AMBIENT
 typedef RBTREND_LIT_ATMOSPHERE = struct RBTREND_LIT_ATMOSPHERE
+typedef RBTREND_LIT_ATMOSPHERE_SHELL = struct RBTREND_LIT_ATMOSPHERE_SHELL
 typedef RBTREND_LIT_CASCADE_ANCHOR = struct RBTREND_LIT_CASCADE_ANCHOR
 typedef RBTREND_LIT_CASCADE_FIT = struct RBTREND_LIT_CASCADE_FIT
 typedef RBTREND_LIT_ENVIRONMENT_DESC = struct RBTREND_LIT_ENVIRONMENT_DESC
@@ -2544,6 +2566,7 @@ typedef RBTREND_LIT_LIGHT_SHADOW = struct RBTREND_LIT_LIGHT_SHADOW
 typedef RBTREND_LIT_LIGHT_TYPE = uint32_t
 typedef RBTREND_LIT_MAP = uint32_t
 typedef RBTREND_LIT_MATERIAL_VALUES = struct RBTREND_LIT_MATERIAL_VALUES
+typedef RBTREND_LIT_SCENE_DESC = struct RBTREND_LIT_SCENE_DESC
 typedef RBTREND_LIT_SCENE_LIGHT = struct RBTREND_LIT_SCENE_LIGHT
 typedef RBTREND_LIT_SHADER = uint32_t
 typedef RBTREND_LIT_SHADOW_KIND = enum RBTREND_LIT_SHADOW_KIND

@@ -12,6 +12,7 @@
 
 import rbtrend_atmosphere_model;
 import rbtrend_atmosphere_pass;
+import rbtrend_atmosphere_pass_block;
 
 [[vk::binding(0, 1)]] Texture2D<float4> transmittance_table : register(t0, space1);
 [[vk::binding(1, 1)]] SamplerState transmittance_sampler : register(s1, space1);
@@ -47,8 +48,9 @@ float4 rbtrend_atmosphere_skyview_frag(float4 frag_coord : SV_Position) : SV_Tar
     float most       = float(u_atmosphere.steps.w);
     uint steps       = uint(max(floor(lerp(least, most, saturate(length_in / thickness))), 1.0));
 
-    AtmosphereMarch march = atmosphere_march(m, transmittance_table, transmittance_sampler, multiple_scattering_table, multiple_scattering_sampler, o,
-                                             d, start, end, steps, true);
+    AtmosphereMarch march = atmosphere_march(m, transmittance_table, transmittance_sampler, multiple_scattering_table, multiple_scattering_sampler,
+                                             u_atmosphere.sizes.xy, u_atmosphere.more_sizes.x, u_atmosphere.sun_direction, u_atmosphere.sun_illuminance,
+                                             o, d, start, end, steps, true);
     float3 light      = march.light;
     float3 throughput = march.transmittance;
     if (ground) {
@@ -58,7 +60,7 @@ float4 rbtrend_atmosphere_skyview_frag(float4 frag_coord : SV_Position) : SV_Tar
             if (u_atmosphere.sun_direction[k].w < 0.5)
                 continue;
             float3 sun = u_atmosphere.sun_direction[k].xyz;
-            float3 lit = transmittance_towards(m, transmittance_table, transmittance_sampler, tsize, pg, sun);
+            float3 lit = ground_transmittance(m, transmittance_table, transmittance_sampler, tsize, n, sun);
             light += throughput * u_atmosphere.sun_illuminance[k].rgb * lit * saturate(dot(n, sun)) * m.ground_albedo / PI;
         }
     }

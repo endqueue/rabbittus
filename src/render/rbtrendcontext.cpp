@@ -374,8 +374,10 @@ void rbtrend_instance_retire(
 extern "C" {
 CRGPU_FEATURES rbtrend_get_optional_gpu_features(void) {
 	// The features only Rend's own code uses, each with a path for a
-	// device without it (rbtrend_internal.hpp, rbtrend_instance_t::features).
-	return CRGPU_FEATURE_MULTI_DRAW_INDIRECT | CRGPU_FEATURE_DEVICE_MAPPABLE_MEMORY;
+	// device without it (rbtrend_internal.hpp, rbtrend_instance_t::features),
+	// and the blend of Rend's own pass for the atmosphere's shells, which is
+	// refused without it (rbtrendcommands.h, LIT_ATMOSPHERE_SHELLS).
+	return CRGPU_FEATURE_MULTI_DRAW_INDIRECT | CRGPU_FEATURE_DEVICE_MAPPABLE_MEMORY | CRGPU_FEATURE_DUAL_SOURCE_BLEND;
 }
 RBT_RESULT rbtrend_instance_create(
     const RBTREND_INSTANCE_DESC *desc,

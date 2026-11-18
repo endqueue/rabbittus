@@ -8,6 +8,7 @@
 
 #include "rbtrend.h"
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -422,7 +423,11 @@ static void test_materials_and_lit_null(void)
     rbtrend_lit_environment_destroy(NULL);
 
     rbtrend_lit_scene scene = (rbtrend_lit_scene)(uintptr_t)0x20;
-    CHECK(rbtrend_lit_scene_create(NULL, &scene, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    RBTREND_LIT_SCENE_DESC scene_desc;
+    memset(&scene_desc, 0, sizeof(scene_desc));
+    scene_desc.base.type = RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC;
+    CHECK(rbtrend_lit_scene_create(NULL, &scene_desc, &scene, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "instance is NULL") == 0);
     CHECK(scene == NULL);
     CHECK(rbtrend_lit_scene_set_lights(NULL, NULL, 0, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(rbtrend_lit_scene_set_bent_normals(NULL, true, &error) == RBT_RESULT_INVALID_ARGUMENT);
@@ -1151,10 +1156,46 @@ static void test_reflection_commands(void)
     CHECK(sizeof(command._params._lit_reflect) <= sizeof(command._params._padding));
 }
 
+// The atmosphere's shell seen from outside (rbtrend_atmosphere_space_draft.h,
+// card A55): command 51, its parameters within RBTREND_COMMAND's 120 bytes
+// (48 on a 64-bit build), the frozen 32-byte shell and its two limits. Its
+// refusals read views and a scene's lights, so need a device:
+// rabbittustests' test_atmosphere_shell_refusals.
+static void test_atmosphere_shell_command(void)
+{
+    current_test = "atmosphere_shell_command";
+    RBTREND_COMMAND command;
+    CHECK(RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS == 51);
+    CHECK(sizeof(RBTREND_COMMAND) == 128);
+    if (sizeof(void *) == 8)
+        CHECK(sizeof(command._params._lit_atmosphere_shells) == 48);
+    CHECK(sizeof(command._params._lit_atmosphere_shells) <= sizeof(command._params._padding));
+    CHECK(sizeof(RBTREND_LIT_ATMOSPHERE_SHELL) == (sizeof(void *) == 8 ? 32 : 28));
+    CHECK(RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS == 128u);
+    CHECK(RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS == 2u);
+    RBTREND_LIT_ATMOSPHERE_SHELL shell;
+    CHECK(sizeof(shell._lights) / sizeof(shell._lights[0]) == RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS);
+}
+
+// A lit scene's desc (card A67, rbtrend_view_sets_draft.h): its struct
+// type, the records' maximum, and its layout. Its refusals past the
+// instance need a device (rabbittustests' test_view_sets_refusals).
+static void test_lit_scene_desc(void)
+{
+    current_test = "lit_scene_desc";
+    CHECK(RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC == 5040);
+    CHECK(RBTREND_LIT_SCENE_MAX_VIEW_SETS == 256u);
+    CHECK(offsetof(RBTREND_LIT_SCENE_DESC, base) == 0);
+    CHECK(offsetof(RBTREND_LIT_SCENE_DESC, max_view_sets) == sizeof(RBT_STRUCT_BASE));
+    CHECK(sizeof(RBTREND_LIT_SCENE_DESC) == (sizeof(void *) == 8 ? 24 : 12));
+}
+
 int main(int argc, char **argv)
 {
     print_anchor = argc > 1 && strcmp(argv[1], "--print-anchor") == 0;
     test_instance_create();
+    test_atmosphere_shell_command();
+    test_lit_scene_desc();
     test_null_instance();
     test_images_null();
     test_pipelines_null();

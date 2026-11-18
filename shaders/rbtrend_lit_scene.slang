@@ -56,6 +56,7 @@ public static const uint RBTREND_LIT_SCENE_BENT_NORMALS     = 64u; // ambient_oc
 public static const uint RBTREND_LIT_SCENE_SCENE_COLOR      = 256u; // scene_color holds the opaque picture behind
 public static const uint RBTREND_LIT_SCENE_ATMOSPHERE       = 512u; // the atmosphere_* members and textures hold the scene's atmosphere (rbtrendatmosphere.h)
 public static const uint RBTREND_LIT_SCENE_AERIAL           = 1024u; // atmosphere_aerial holds its aerial volume
+public static const uint RBTREND_LIT_SCENE_SKY              = 2048u; // the atmosphere's sky-view table, layer 0, holds its sky (none with no sky)
 
 // Every matrix is column-major in memory, as the CPU writes it.
 public struct RbtrendLitScene {

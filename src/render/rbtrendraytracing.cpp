@@ -131,7 +131,6 @@ void rbtrend_rt_state_destroy(rbtrend_instance instance) {
 	rbtrend_compute_pipeline_destroy(rt->emitter_pipeline);
 	rbtrend_compute_pipeline_destroy(rt->mask_pipelines[0]);
 	rbtrend_compute_pipeline_destroy(rt->mask_pipelines[1]);
-	rbtrend_view_sets_destroy(rt->reflection_sets);
 	rbtrend_compute_pipeline_destroy(rt->reflection_pipeline);
 	rt->reflection_pipeline = nullptr;
 	for (rbtrend_compute_pipeline &pipeline : rt->path_pipelines) {

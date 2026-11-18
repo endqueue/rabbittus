@@ -258,6 +258,7 @@ set(RABBITTUS_SHADERS
         rbtrend_atmosphere_environment_frag
         rbtrend_atmosphere_copy_frag
         rbtrend_atmosphere_aerial_frag
+        rbtrend_atmosphere_shell_frag
 )
 # The modules the shaders import, from shaders/: every shader is compiled
 # again when one of them changes.
@@ -278,6 +279,7 @@ set(RABBITTUS_SHADER_MODULES
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_rt_path_trace.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_model.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_pass.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_pass_block.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_atmosphere.slang
 )
 # The shaders that trace (rbtrendraytracing.h): inline ray queries, SPIR-V's
@@ -958,6 +960,11 @@ if (RABBITTUS_BUILD_TESTS)
     add_executable(rbtrendranges_tests tests/rbtrendranges_tests.cpp)
     target_include_directories(rbtrendranges_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
     add_test(NAME rbtrendranges_tests COMMAND rbtrendranges_tests)
+    # Which of a lit scene's view-set records takes a new set: an internal
+    # header with no GPU in it, as the range list's (card A67).
+    add_executable(rbtrendviewsets_tests tests/rbtrendviewsets_tests.cpp)
+    target_include_directories(rbtrendviewsets_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
+    add_test(NAME rbtrendviewsets_tests COMMAND rbtrendviewsets_tests)
     # The open-addressing table under Rbtrend's command lists, an internal
     # header too.
     add_executable(rbthashindex_tests tests/rbthashindex_tests.cpp)
