@@ -7,6 +7,7 @@
 // Written in C, to prove the headers compile and link as C.
 
 #include "rbtrend.h"
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -166,6 +167,13 @@ static void test_images_null(void)
     CHECK(rbtrend_texture2d_update(NULL, NULL, 0, 0, 0, 0, 1, 1, texels, 4, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(strcmp(error.message, "texture is NULL") == 0);
     CHECK(rbtrend_texture2d_get_data(NULL, NULL, 0, 0, 0, 0, 1, 1, texels, 4, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    // The whole-level call (card A54): the texture is checked first, before
+    // every other argument, NULL or not.
+    RBTREND_TEXTURE_LEVEL_DATA level = {texels, 4};
+    dirty(&error);
+    CHECK(rbtrend_texture2d_update_levels(NULL, NULL, 0, 0, 1, &level, 1, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "texture is NULL") == 0);
+    CHECK(rbtrend_texture2d_update_levels(NULL, NULL, 0, 0, 0, NULL, 0, NULL) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(rbtrend_texture2d_generate_mips(NULL, NULL, 0, CRGPU_FILTER_LINEAR, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(rbtrend_texture2d_resize(NULL, 1, 1, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(rbtrend_texture2d_get_crgpu_image(NULL) == NULL);
@@ -791,6 +799,248 @@ static void test_lit_fit_cascades(void)
     CHECK(strcmp(error.message, "map_size is 0") == 0);
 }
 
+// ---- The cascade anchor (RBTREND_LIT_CASCADE_ANCHOR; card L66) ------------------
+//
+// Tests 2 to 4, 6 and 7 of its approved draft's section 7 (test 1, nothing
+// chained, is test_lit_fit_cascades above; test 5 is the misuse harness).
+// The fixed world point's texel worked out in double from the fit's float
+// matrix, as the GPU applies it.
+
+static int print_anchor = 0;
+
+// The texel coordinate (x, y) a scene place lands on through cascade [c].
+static void texel_of(const RBTREND_LIT_SHADOW_MAPS *maps, uint32_t c, uint32_t map_size, const double scene[3], double out[2])
+{
+    const float *m = maps->_view_projection[c];
+    const double half = (double)map_size * 0.5;
+    for (int r = 0; r < 2; ++r)
+        out[r] = ((double)m[0 * 4 + r] * scene[0] + (double)m[1 * 4 + r] * scene[1] + (double)m[2 * 4 + r] * scene[2] +
+                  (double)m[3 * 4 + r]) * half;
+}
+
+static double wrapped(double a)
+{
+    a = a - floor(a + 0.5);
+    return a;
+}
+
+// A fit whose scene's origin is the eye: the eye at (0, 0, 0).
+static RBTREND_LIT_CASCADE_FIT eye_fit(void)
+{
+    RBTREND_LIT_CASCADE_FIT fit = fit_of(0, 4, 1);
+    fit.eye_position[0] = fit.eye_position[1] = fit.eye_position[2] = 0.0f;
+    fit.far_depth = 400.0f;
+    fit.map_size = 2048;
+    return fit;
+}
+
+static double fit_drift(const double origin0[3], int anchored, uint32_t frames)
+{
+    RBTREND_LIT_CASCADE_FIT fit = eye_fit();
+    RBTREND_LIT_CASCADE_ANCHOR anchor;
+    memset(&anchor, 0, sizeof(anchor));
+    anchor.base.type = RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR;
+    if (anchored)
+        fit.base.next = &anchor.base;
+    const double len = sqrt((double)fit.view_direction[0] * fit.view_direction[0] + (double)fit.view_direction[1] * fit.view_direction[1] +
+                            (double)fit.view_direction[2] * fit.view_direction[2]);
+    double step[3];
+    for (int a = 0; a < 3; ++a)
+        step[a] = 0.01 * (double)fit.view_direction[a] / len;
+    // One fixed world point per cascade, inside it at the first frame.
+    const double depth[4] = {3.0, 20.0, 80.0, 250.0};
+    double world[4][3];
+    for (int c = 0; c < 4; ++c)
+        for (int a = 0; a < 3; ++a)
+            world[c][a] = origin0[a] + depth[c] * (double)fit.view_direction[a] / len + (a == 1 ? 0.75 : 0.0);
+    double first[4][2], worst = 0.0;
+    for (uint32_t k = 0; k < frames; ++k)
+    {
+        double o[3];
+        for (int a = 0; a < 3; ++a)
+            o[a] = origin0[a] + step[a] * (double)k;
+        anchor.scene_origin.x = o[0];
+        anchor.scene_origin.y = o[1];
+        anchor.scene_origin.z = o[2];
+        RBTREND_LIT_SHADOW_MAPS maps;
+        memset(&maps, 0, sizeof(maps));
+        maps.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
+        CHECK(rbtrend_lit_fit_cascades(&fit, &maps, NULL) == RBT_RESULT_OK);
+        for (uint32_t c = 0; c < 4; ++c)
+        {
+            double scene[3], t[2];
+            for (int a = 0; a < 3; ++a)
+                scene[a] = (double)(float)(world[c][a] - o[a]);
+            texel_of(&maps, c, fit.map_size, scene, t);
+            for (int r = 0; r < 2; ++r)
+            {
+                if (k == 0)
+                    first[c][r] = t[r];
+                const double d = fabs(wrapped(t[r] - first[c][r]));
+                if (d > worst)
+                    worst = d;
+            }
+        }
+    }
+    return worst;
+}
+
+static const uint32_t s_fit_anchor_far_4[][17] = {
+#include "data/rbtrend_contract/anchor_far_4.inc"
+};
+
+static void test_lit_cascade_anchor(void)
+{
+    current_test = "lit_cascade_anchor";
+    // 2. Stable under a moving eye, at the origin, 1e7 out and 4.5e12 out:
+    // a fixed world point's texel fraction the same every frame, within 1e-3.
+    const double origins[3][3] = {{0.0, 0.0, 0.0}, {1e7, 0.0, 1e7}, {4.5e12, 0.0, 0.0}};
+    for (int o = 0; o < 3; ++o)
+    {
+        const double anchored = fit_drift(origins[o], 1, 600);
+        const double loose = fit_drift(origins[o], 0, 600);
+        printf("rbtrend_contract_tests: cascades under an eye moving 1 cm a fit, scene origin %g out: a fixed point's texel "
+               "drifts %.3g of a texel anchored, %.3g not\n",
+               origins[o][0] + origins[o][2], anchored, loose);
+        CHECK(anchored <= 1e-3);
+    }
+    // 3. At the origin, the same whole-texel snap as today's, the matrices
+    // within 1e-6 of a texel.
+    {
+        RBTREND_LIT_CASCADE_FIT fit = fit_of(0, 4, 0);
+        RBTREND_LIT_SHADOW_MAPS plain, chained;
+        memset(&plain, 0, sizeof(plain));
+        plain.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
+        chained = plain;
+        CHECK(rbtrend_lit_fit_cascades(&fit, &plain, NULL) == RBT_RESULT_OK);
+        RBTREND_LIT_CASCADE_ANCHOR anchor;
+        memset(&anchor, 0, sizeof(anchor));
+        anchor.base.type = RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR;
+        fit.base.next = &anchor.base;
+        CHECK(rbtrend_lit_fit_cascades(&fit, &chained, NULL) == RBT_RESULT_OK);
+        const double half = (double)fit.map_size * 0.5;
+        for (uint32_t c = 0; c < fit.cascade_count; ++c)
+            for (int i = 0; i < 16; ++i)
+                CHECK(fabs((double)plain._view_projection[c][i] - (double)chained._view_projection[c][i]) * half <= 1e-6);
+    }
+    // 4. Refused: each axis not finite, its own message; the anchor twice;
+    // another struct chained on the fit; the anchor on the out struct.
+    {
+        RBTREND_LIT_CASCADE_FIT fit = fit_of(0, 4, 0);
+        RBTREND_LIT_SHADOW_MAPS maps;
+        memset(&maps, 0, sizeof(maps));
+        maps.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
+        RBTREND_LIT_CASCADE_ANCHOR anchor, second;
+        memset(&anchor, 0, sizeof(anchor));
+        anchor.base.type = RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR;
+        fit.base.next = &anchor.base;
+        RBTREND_ERROR error;
+        const char *axes[3] = {"scene_origin.x is not finite", "scene_origin.y is not finite", "scene_origin.z is not finite"};
+        for (int a = 0; a < 3; ++a)
+        {
+            anchor.scene_origin.x = anchor.scene_origin.y = anchor.scene_origin.z = 0.0;
+            if (a == 0)
+                anchor.scene_origin.x = NAN;
+            if (a == 1)
+                anchor.scene_origin.y = INFINITY;
+            if (a == 2)
+                anchor.scene_origin.z = -INFINITY;
+            maps._view_count = 77;
+            dirty(&error);
+            CHECK(rbtrend_lit_fit_cascades(&fit, &maps, &error) == RBT_RESULT_INVALID_ARGUMENT);
+            CHECK(strstr(error.message, axes[a]) != NULL);
+            CHECK(maps._view_count == 77);
+        }
+        anchor.scene_origin.x = anchor.scene_origin.y = anchor.scene_origin.z = 0.0;
+        second = anchor;
+        anchor.base.next = &second.base;
+        dirty(&error);
+        CHECK(rbtrend_lit_fit_cascades(&fit, &maps, &error) == RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN);
+        anchor.base.next = NULL;
+        RBT_STRUCT_BASE other = {RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE, NULL};
+        fit.base.next = &other;
+        dirty(&error);
+        CHECK(rbtrend_lit_fit_cascades(&fit, &maps, &error) == RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN);
+        fit.base.next = NULL;
+        maps.base.next = &anchor.base;
+        dirty(&error);
+        CHECK(rbtrend_lit_fit_cascades(&fit, &maps, &error) == RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN);
+    }
+    // 6. Recorded on the Mac (owed: Windows and Linux to match, within the
+    // fit's FIT_ULPS for its float part, card A49): an anchored fit 1e7 out.
+    {
+        RBTREND_LIT_CASCADE_FIT fit = eye_fit();
+        RBTREND_LIT_CASCADE_ANCHOR anchor;
+        memset(&anchor, 0, sizeof(anchor));
+        anchor.base.type = RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR;
+        anchor.scene_origin.x = 6.5e6 + 0.37;
+        anchor.scene_origin.y = 1.5e5 - 2.25;
+        anchor.scene_origin.z = -1e7 + 11.125;
+        fit.base.next = &anchor.base;
+        if (print_anchor)
+        {
+            RBTREND_LIT_SHADOW_MAPS maps;
+            memset(&maps, 0, sizeof(maps));
+            maps.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
+            CHECK(rbtrend_lit_fit_cascades(&fit, &maps, NULL) == RBT_RESULT_OK);
+            for (uint32_t c = 0; c < fit.cascade_count; ++c)
+            {
+                uint32_t bits[17];
+                memcpy(bits, maps._view_projection[c], sizeof(float) * 16);
+                memcpy(&bits[16], &maps._split_depths[c], sizeof(float));
+                printf("    {");
+                for (int k = 0; k < 17; ++k)
+                    printf("0x%08Xu%s", bits[k], k < 16 ? ", " : "},\n");
+            }
+        }
+        else
+            check_fit(&fit, s_fit_anchor_far_4);
+    }
+    // 7. Recorded, not asserted: a light turning 1.2e-6 radians a fit (a day
+    // of 24 hours at 60 Hz), the view still, the fixed point 0, 200 m, 250 km
+    // and 1e7 m from it: the grid's slide a fit near the view, in texels,
+    // against the distance times the turn (card A60).
+    {
+        const double distances[4] = {0.0, 200.0, 2.5e5, 1e7};
+        for (int d = 0; d < 4; ++d)
+        {
+            RBTREND_LIT_CASCADE_FIT fit = eye_fit();
+            RBTREND_LIT_CASCADE_ANCHOR anchor;
+            memset(&anchor, 0, sizeof(anchor));
+            anchor.base.type = RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR;
+            anchor.scene_origin.x = distances[d];
+            fit.base.next = &anchor.base;
+            const double angle0 = atan2((double)fit.light_direction[1], (double)fit.light_direction[0]);
+            const double r = sqrt((double)fit.light_direction[0] * fit.light_direction[0] +
+                                  (double)fit.light_direction[1] * fit.light_direction[1]);
+            double last = 0.0, sum = 0.0, most = 0.0;
+            for (int k = 0; k < 600; ++k)
+            {
+                fit.light_direction[0] = (float)(r * cos(angle0 + 1.2e-6 * k));
+                fit.light_direction[1] = (float)(r * sin(angle0 + 1.2e-6 * k));
+                RBTREND_LIT_SHADOW_MAPS maps;
+                memset(&maps, 0, sizeof(maps));
+                maps.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
+                CHECK(rbtrend_lit_fit_cascades(&fit, &maps, NULL) == RBT_RESULT_OK);
+                const double scene[3] = {0.0, 0.0, 5.0};
+                double t[2];
+                texel_of(&maps, 0, fit.map_size, scene, t);
+                if (k > 0)
+                {
+                    const double moved = fabs(wrapped(t[0] - last));
+                    sum += moved;
+                    if (moved > most)
+                        most = moved;
+                }
+                last = t[0];
+            }
+            printf("rbtrend_contract_tests: a light turning 1.2e-6 rad a fit, the fixed point %g m from the view: the nearest "
+                   "cascade's grid moves %.3g texels a fit on average, %.3g at most (recorded, card A60)\n",
+                   distances[d], sum / 599.0, most);
+        }
+    }
+}
+
 // rbtrend_get_lit_vertex_color_layout(): one VEC4 named color at 0, a stride of
 // 16 (card A46).
 static void test_lit_vertex_color_layout(void)
@@ -901,8 +1151,9 @@ static void test_reflection_commands(void)
     CHECK(sizeof(command._params._lit_reflect) <= sizeof(command._params._padding));
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    print_anchor = argc > 1 && strcmp(argv[1], "--print-anchor") == 0;
     test_instance_create();
     test_null_instance();
     test_images_null();
@@ -913,6 +1164,7 @@ int main(void)
     test_command_lists_null();
     test_buffers();
     test_lit_fit_cascades();
+    test_lit_cascade_anchor();
     test_lit_vertex_color_layout();
     test_lit_light_checks();
     test_reflection_commands();

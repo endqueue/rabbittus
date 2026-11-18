@@ -75,6 +75,8 @@ add_library(rabbittus STATIC
         src/math/rbtmathpoly_internal.hpp
         src/math/rbtmathpoly.cpp
         src/math/rbtmathmedium.cpp
+        src/math/rbtmathnoise.cpp
+        src/math/rbtmathnoise_internal.hpp
         src/sync/rbtsync_internal.hpp
         src/sync/rbtsyncnet.cpp
         src/text/rbttext_internal.hpp
@@ -113,6 +115,7 @@ add_library(rabbittus STATIC
         include/math/rbtmatherror.h
         include/math/rbtmathpoly.h
         include/math/rbtmathmedium.h
+        include/math/rbtmathnoise.h
         include/sync/rbtsyncnet.h
         include/text/rbttext.h
         include/jobs/rbtjobs.h
@@ -748,6 +751,25 @@ file(CONFIGURE OUTPUT ${RABBITTUS_SHADER_INC_DIR}/rbtrend_hosek_rgb.inc CONTENT 
 # For a caller's tests that work the model out in C to compare with.
 set(RABBITTUS_HOSEK_RGB_INC ${RABBITTUS_SHADER_INC_DIR}/rbtrend_hosek_rgb.inc CACHE INTERNAL "")
 
+# No floating-point contraction in RbtMath's noise (rbtmathnoise.h, "Same
+# bits"), chosen by the compiler's ID rather than "NOT MSVC": clang-cl, which
+# CMake counts as MSVC, contracts by default. MSVC itself contracts only
+# under /fp:contract or /fp:fast from 17.0 (cl 19.30); earlier versions
+# contracted under /fp:precise, so they are refused.
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(RABBITTUS_NO_CONTRACT /clang:-ffp-contract=off)
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set(RABBITTUS_NO_CONTRACT -ffp-contract=off)
+elseif (MSVC)
+    if (MSVC_VERSION LESS 1930)
+        message(FATAL_ERROR "rbtmathnoise.cpp needs MSVC 17.0 (cl 19.30) or later: earlier versions contract under /fp:precise")
+    endif ()
+    set(RABBITTUS_NO_CONTRACT /fp:precise)
+else ()
+    message(FATAL_ERROR "rbtmathnoise.cpp: no known way to turn floating-point contraction off for ${CMAKE_CXX_COMPILER_ID}")
+endif ()
+set_source_files_properties(src/math/rbtmathnoise.cpp PROPERTIES COMPILE_OPTIONS "${RABBITTUS_NO_CONTRACT}")
+
 # No floating-point contraction where RbtMath's polygons compute in doubles:
 # results must be the same bits on every platform. MSVC doesn't contract
 # unless asked (/fp:contract), so only Clang and GCC need telling.
@@ -884,6 +906,34 @@ if (RABBITTUS_BUILD_TESTS)
     add_executable(rbtmathmedium_tests tests/rbtmathmedium_tests.c)
     target_link_libraries(rbtmathmedium_tests PRIVATE rabbittus)
     add_test(NAME rbtmathmedium_tests COMMAND rbtmathmedium_tests)
+    # RbtMath's noise (rbtmathnoise.h, card A56): the draft's section 10,
+    # tests 1 to 13. Its inputs are worked out in the test, so with no
+    # contraction either. --full runs each test at the draft's counts (by
+    # hand, Release; RBTMATH_TODO.md has the run).
+    add_executable(rbtmathnoise_tests tests/rbtmathnoise_tests.c)
+    target_link_libraries(rbtmathnoise_tests PRIVATE rabbittus Threads::Threads)
+    target_compile_options(rbtmathnoise_tests PRIVATE ${RABBITTUS_NO_CONTRACT})
+    add_test(NAME rbtmathnoise_tests COMMAND rbtmathnoise_tests)
+    set_tests_properties(rbtmathnoise_tests PROPERTIES TIMEOUT 600)
+    # The same bits on every platform: a fixed run of every kind, fractal,
+    # dimension, distance and return, and the definition's parts a copy must
+    # match exactly, against values recorded on the M5 Pro
+    # (tests/data/rbtmathnoise).
+    add_executable(rbtmathnoise_bits_tests tests/rbtmathnoise_bits_tests.c)
+    target_link_libraries(rbtmathnoise_bits_tests PRIVATE rabbittus)
+    target_compile_options(rbtmathnoise_bits_tests PRIVATE ${RABBITTUS_NO_CONTRACT})
+    add_test(NAME rbtmathnoise_bits_tests COMMAND rbtmathnoise_bits_tests)
+    # Numbers, not a test: samples a second per kind, dimension and fractal,
+    # and a terrain chunk's proxy (RBTMATH_TODO.md). Run by hand, Release.
+    add_executable(rbtmathnoise_bench tests/rbtmathnoise_bench.c)
+    target_link_libraries(rbtmathnoise_bench PRIVATE rabbittus)
+    # The scale constants' search (rbtmathnoise.h, Definition, step 10): each
+    # scaled kind's octave maximum, and a count of the clamp acting over 10^9
+    # samples. A program of the build's, run by hand once; it sees
+    # src/math for the octave's raw evaluation.
+    add_executable(rbtmathnoise_scale_search tests/rbtmathnoise_scale_search.cpp)
+    target_include_directories(rbtmathnoise_scale_search PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/math ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_options(rbtmathnoise_scale_search PRIVATE ${RABBITTUS_NO_CONTRACT})
     add_executable(rbtmathpoly_tests tests/rbtmathpoly_tests.c)
     target_link_libraries(rbtmathpoly_tests PRIVATE rabbittus)
     add_test(NAME rbtmathpoly_tests COMMAND rbtmathpoly_tests)

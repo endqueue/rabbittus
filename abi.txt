@@ -42,6 +42,28 @@ const RBTAUDIO_VIRTUAL_KILL = 1
 const RBTAUDIO_VIRTUAL_PAUSE = 4
 const RBTAUDIO_VIRTUAL_RESTART = 3
 const RBTAUDIO_VIRTUAL_UNSPECIFIED = 0
+const RBTMATH_NOISE_CELL_DISTANCE_CHEBYSHEV = 3
+const RBTMATH_NOISE_CELL_DISTANCE_EUCLIDEAN = 1
+const RBTMATH_NOISE_CELL_DISTANCE_MANHATTAN = 2
+const RBTMATH_NOISE_CELL_DISTANCE_UNKNOWN = 0
+const RBTMATH_NOISE_CELL_RETURN_CELL_VALUE = 4
+const RBTMATH_NOISE_CELL_RETURN_F1 = 1
+const RBTMATH_NOISE_CELL_RETURN_F2 = 2
+const RBTMATH_NOISE_CELL_RETURN_F2_MINUS_F1 = 3
+const RBTMATH_NOISE_CELL_RETURN_UNKNOWN = 0
+const RBTMATH_NOISE_FRACTAL_ERODED = 4
+const RBTMATH_NOISE_FRACTAL_FBM = 2
+const RBTMATH_NOISE_FRACTAL_RIDGED = 3
+const RBTMATH_NOISE_FRACTAL_SINGLE = 1
+const RBTMATH_NOISE_FRACTAL_UNKNOWN = 0
+const RBTMATH_NOISE_KIND_CELLULAR = 3
+const RBTMATH_NOISE_KIND_GRADIENT = 1
+const RBTMATH_NOISE_KIND_SIMPLEX = 2
+const RBTMATH_NOISE_KIND_UNKNOWN = 0
+const RBTMATH_NOISE_ORIENTATION_EVEN = 1
+const RBTMATH_NOISE_ORIENTATION_UNKNOWN = 0
+const RBTMATH_NOISE_ORIENTATION_Y_UP = 2
+const RBTMATH_NOISE_ORIENTATION_Z_UP = 3
 const RBTMATH_OVERLAP_NONE = 0
 const RBTMATH_OVERLAP_PARTIAL = 1
 const RBTMATH_OVERLAP_WHOLE = 2
@@ -339,6 +361,8 @@ const RBT_STRUCT_TYPE_MATH_BOX_BVH_DESC = 4006
 const RBT_STRUCT_TYPE_MATH_CAST_DESC = 4002
 const RBT_STRUCT_TYPE_MATH_INSTANCE_BVH_DESC = 4001
 const RBT_STRUCT_TYPE_MATH_MESH_BVH_DESC = 4000
+const RBT_STRUCT_TYPE_MATH_NOISE_DESC = 4007
+const RBT_STRUCT_TYPE_MATH_NOISE_WARP_DESC = 4008
 const RBT_STRUCT_TYPE_MATH_POLY_BOOLEAN_DESC = 4003
 const RBT_STRUCT_TYPE_MATH_POLY_OFFSET_DESC = 4004
 const RBT_STRUCT_TYPE_MATH_POLY_SKELETON_DESC = 4005
@@ -361,6 +385,7 @@ const RBT_STRUCT_TYPE_REND_INDEX_POOL_DESC = 5002
 const RBT_STRUCT_TYPE_REND_INSTANCE_DESC = 5000
 const RBT_STRUCT_TYPE_REND_LIT_AMBIENT = 5023
 const RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE = 5037
+const RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR = 5038
 const RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT = 5022
 const RBT_STRUCT_TYPE_REND_LIT_ENVIRONMENT_DESC = 5017
 const RBT_STRUCT_TYPE_REND_LIT_LIGHT_SHADOW = 5034
@@ -543,6 +568,11 @@ fn rbtmath_mesh_bvh_overlaps_shape _Bool (rbtmath_mesh_bvh, const RbtDMat4 *, co
 fn rbtmath_mesh_bvh_overlaps_volume _Bool (rbtmath_mesh_bvh, const RbtDMat4 *, const RBTMATH_VOLUME *)
 fn rbtmath_mesh_bvh_sweep _Bool (rbtmath_mesh_bvh, const RbtDMat4 *, const RBTMATH_SWEEP *, RBTMATH_SWEEP_HIT *)
 fn rbtmath_mesh_bvh_within_volume _Bool (rbtmath_mesh_bvh, const RbtDMat4 *, const RBTMATH_VOLUME *)
+fn rbtmath_noise_compute_grid RBT_RESULT (const RBTMATH_NOISE_DESC *, const RBTMATH_NOISE_GRID *, float *, float *, RBTMATH_ERROR *)
+fn rbtmath_noise_compute_nearest_cells RBT_RESULT (const RBTMATH_NOISE_DESC *, const double *, uint32_t, float *, uint32_t *, float *, RBTMATH_ERROR *)
+fn rbtmath_noise_compute_offsets RBT_RESULT (const RBTMATH_NOISE_DESC *, const double *, const float *, uint32_t, float *, float *, RBTMATH_ERROR *)
+fn rbtmath_noise_compute_points RBT_RESULT (const RBTMATH_NOISE_DESC *, const double *, uint32_t, float *, float *, RBTMATH_ERROR *)
+fn rbtmath_noise_warp_points RBT_RESULT (const RBTMATH_NOISE_WARP_DESC *, const double *, uint32_t, double *, float *, RBTMATH_ERROR *)
 fn rbtmath_poly_boolean RBT_RESULT (const RBTMATH_POLY_BOOLEAN_DESC *, rbtmath_poly *, RBTMATH_ERROR *)
 fn rbtmath_poly_destroy void (rbtmath_poly)
 fn rbtmath_poly_get_set RBTMATH_POLY_SET (rbtmath_poly)
@@ -721,6 +751,7 @@ fn rbtrend_texture2d_get_data RBT_RESULT (rbtrend_texture2d, crgpu_command_queue
 fn rbtrend_texture2d_get_desc RBT_RESULT (rbtrend_texture2d, RBTREND_TEXTURE2D_DESC *)
 fn rbtrend_texture2d_resize RBT_RESULT (rbtrend_texture2d, uint32_t, uint32_t, RBTREND_ERROR *)
 fn rbtrend_texture2d_update RBT_RESULT (rbtrend_texture2d, crgpu_command_queue, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, const void *, uint64_t, RBTREND_ERROR *)
+fn rbtrend_texture2d_update_levels RBT_RESULT (rbtrend_texture2d, crgpu_command_queue, uint32_t, uint32_t, uint32_t, const RBTREND_TEXTURE_LEVEL_DATA *, uint32_t, RBTREND_ERROR *)
 fn rbtrend_texture3d_create RBT_RESULT (rbtrend_instance, const RBTREND_TEXTURE3D_DESC *, rbtrend_texture3d *, RBTREND_ERROR *)
 fn rbtrend_texture3d_destroy void (rbtrend_texture3d)
 fn rbtrend_texture3d_get_crgpu_image crgpu_image (rbtrend_texture3d)
@@ -821,6 +852,8 @@ macro RBTAUDIO_ERROR_MESSAGE_SIZE 256
 macro RBTJOBS_ERROR_MESSAGE_SIZE 256
 macro RBTJOBS_POOL_MAX_THREADS 256
 macro RBTMATH_ERROR_MESSAGE_SIZE 256
+macro RBTMATH_NOISE_MAX_CELLS 68719476736.0
+macro RBTMATH_NOISE_MAX_OCTAVES 32u
 macro RBTMATH_POLY_COORD_LIMIT ((int64_t)1 << 40)
 macro RBTMATH_POLY_NO_RING UINT32_MAX
 macro RBTMATH_SHELL_MEDIUM_MAX_STEPS 1024u
@@ -1244,6 +1277,31 @@ field RBTMATH_MESH_HIT.back_face @4 _Bool
 field RBTMATH_MESH_HIT.t @8 double
 field RBTMATH_MESH_HIT.point @16 RbtDVec3
 field RBTMATH_MESH_HIT.normal @40 RbtDVec3
+struct RBTMATH_NOISE_DESC size=96 align=8
+field RBTMATH_NOISE_DESC.base @0 RBT_STRUCT_BASE
+field RBTMATH_NOISE_DESC.dimensions @16 uint32_t
+field RBTMATH_NOISE_DESC.kind @20 RBTMATH_NOISE_KIND
+field RBTMATH_NOISE_DESC.fractal @24 RBTMATH_NOISE_FRACTAL
+field RBTMATH_NOISE_DESC.seed @28 uint32_t
+field RBTMATH_NOISE_DESC.octaves @32 uint32_t
+field RBTMATH_NOISE_DESC.frequency @40 double
+field RBTMATH_NOISE_DESC.lacunarity @48 double
+field RBTMATH_NOISE_DESC.gain @56 float
+field RBTMATH_NOISE_DESC.ridge_feedback @60 float
+field RBTMATH_NOISE_DESC.erosion @64 float
+field RBTMATH_NOISE_DESC.cell_distance @68 RBTMATH_NOISE_CELL_DISTANCE
+field RBTMATH_NOISE_DESC.cell_return @72 RBTMATH_NOISE_CELL_RETURN
+field RBTMATH_NOISE_DESC.cell_jitter @76 float
+field RBTMATH_NOISE_DESC.orientation @80 RBTMATH_NOISE_ORIENTATION
+field RBTMATH_NOISE_DESC.period @84 uint32_t[3]
+struct RBTMATH_NOISE_GRID size=64 align=8
+field RBTMATH_NOISE_GRID.origin @0 double[3]
+field RBTMATH_NOISE_GRID.step @24 double[3]
+field RBTMATH_NOISE_GRID.count @48 uint32_t[3]
+struct RBTMATH_NOISE_WARP_DESC size=32 align=8
+field RBTMATH_NOISE_WARP_DESC.base @0 RBT_STRUCT_BASE
+field RBTMATH_NOISE_WARP_DESC.field @16 const RBTMATH_NOISE_DESC *
+field RBTMATH_NOISE_WARP_DESC.amplitude @24 double
 struct RBTMATH_PLANE size=32 align=8
 field RBTMATH_PLANE.normal @0 RbtDVec3
 field RBTMATH_PLANE.d @24 double
@@ -1788,6 +1846,9 @@ field RBTREND_LIT_ATMOSPHERE.aerial_distance @60 float
 field RBTREND_LIT_ATMOSPHERE.sky_view_min_steps @64 uint32_t
 field RBTREND_LIT_ATMOSPHERE.sky_view_max_steps @68 uint32_t
 field RBTREND_LIT_ATMOSPHERE.aerial_steps_per_slice @72 uint32_t
+struct RBTREND_LIT_CASCADE_ANCHOR size=40 align=8
+field RBTREND_LIT_CASCADE_ANCHOR.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_CASCADE_ANCHOR.scene_origin @16 RbtDVec3
 struct RBTREND_LIT_CASCADE_FIT size=112 align=8
 field RBTREND_LIT_CASCADE_FIT.base @0 RBT_STRUCT_BASE
 field RBTREND_LIT_CASCADE_FIT.eye_position @16 float[3]
@@ -2016,6 +2077,9 @@ field RBTREND_TEXTURE3D_DESC.format @28 CRGPU_FORMAT
 field RBTREND_TEXTURE3D_DESC.usage @32 RBTREND_TEXTURE_USAGE_BITS
 field RBTREND_TEXTURE3D_DESC.mip_levels @36 uint32_t
 field RBTREND_TEXTURE3D_DESC.debug_name @40 const char *
+struct RBTREND_TEXTURE_LEVEL_DATA size=16 align=8
+field RBTREND_TEXTURE_LEVEL_DATA.data @0 const void *
+field RBTREND_TEXTURE_LEVEL_DATA.data_size @8 uint64_t
 struct RBTREND_TEXTURE_VIEW_DESC size=48 align=8
 field RBTREND_TEXTURE_VIEW_DESC.base @0 RBT_STRUCT_BASE
 field RBTREND_TEXTURE_VIEW_DESC.type @16 RBTREND_TEXTURE_VIEW_TYPE
@@ -2402,6 +2466,14 @@ typedef RBTMATH_INSTANCE_BVH_DESC = struct RBTMATH_INSTANCE_BVH_DESC
 typedef RBTMATH_INSTANCE_HIT = struct RBTMATH_INSTANCE_HIT
 typedef RBTMATH_MESH_BVH_DESC = struct RBTMATH_MESH_BVH_DESC
 typedef RBTMATH_MESH_HIT = struct RBTMATH_MESH_HIT
+typedef RBTMATH_NOISE_CELL_DISTANCE = enum RBTMATH_NOISE_CELL_DISTANCE
+typedef RBTMATH_NOISE_CELL_RETURN = enum RBTMATH_NOISE_CELL_RETURN
+typedef RBTMATH_NOISE_DESC = struct RBTMATH_NOISE_DESC
+typedef RBTMATH_NOISE_FRACTAL = enum RBTMATH_NOISE_FRACTAL
+typedef RBTMATH_NOISE_GRID = struct RBTMATH_NOISE_GRID
+typedef RBTMATH_NOISE_KIND = enum RBTMATH_NOISE_KIND
+typedef RBTMATH_NOISE_ORIENTATION = enum RBTMATH_NOISE_ORIENTATION
+typedef RBTMATH_NOISE_WARP_DESC = struct RBTMATH_NOISE_WARP_DESC
 typedef RBTMATH_OVERLAP = enum RBTMATH_OVERLAP
 typedef RBTMATH_PLANE = struct RBTMATH_PLANE
 typedef RBTMATH_POLY_BOOLEAN_DESC = struct RBTMATH_POLY_BOOLEAN_DESC
@@ -2464,6 +2536,7 @@ typedef RBTREND_INDEX_STRIDE = enum RBTREND_INDEX_STRIDE
 typedef RBTREND_INSTANCE_DESC = struct RBTREND_INSTANCE_DESC
 typedef RBTREND_LIT_AMBIENT = struct RBTREND_LIT_AMBIENT
 typedef RBTREND_LIT_ATMOSPHERE = struct RBTREND_LIT_ATMOSPHERE
+typedef RBTREND_LIT_CASCADE_ANCHOR = struct RBTREND_LIT_CASCADE_ANCHOR
 typedef RBTREND_LIT_CASCADE_FIT = struct RBTREND_LIT_CASCADE_FIT
 typedef RBTREND_LIT_ENVIRONMENT_DESC = struct RBTREND_LIT_ENVIRONMENT_DESC
 typedef RBTREND_LIT_INSTANCE = struct RBTREND_LIT_INSTANCE
@@ -2496,6 +2569,7 @@ typedef RBTREND_TEXEL_RECT = struct RBTREND_TEXEL_RECT
 typedef RBTREND_TEXTURE2D_DESC = struct RBTREND_TEXTURE2D_DESC
 typedef RBTREND_TEXTURE3D_DESC = struct RBTREND_TEXTURE3D_DESC
 typedef RBTREND_TEXTURE_DIMENSION = uint32_t
+typedef RBTREND_TEXTURE_LEVEL_DATA = struct RBTREND_TEXTURE_LEVEL_DATA
 typedef RBTREND_TEXTURE_SCALING = uint32_t
 typedef RBTREND_TEXTURE_USAGE_BITS = uint32_t
 typedef RBTREND_TEXTURE_VIEW_ASPECT = uint32_t

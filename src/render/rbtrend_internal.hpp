@@ -478,6 +478,18 @@ RBT_RESULT rbtrend_binding_set_create_traced(
     rbtrend_binding_set *out_set,
     RBTREND_ERROR *out_error);
 
+/* Writes [entries] into [set]'s own descriptor sets in place, allocating
+ * nothing: only for a set no submitted work may still read and no compiled
+ * list still binds (a material's spare, card L79). False, and the set
+ * unchanged, where it can't: an entry rbtrend_binding_set_create would
+ * refuse, an acceleration structure, or a shape the set wasn't built for
+ * (another number of frame sets or of texture views); the caller then
+ * builds a set anew. */
+bool rbtrend_binding_set_rewrite(
+    rbtrend_binding_set set,
+    const RBTREND_BINDING_SET_ENTRY *entries,
+    uint32_t entry_count);
+
 /* Release functions for Carrottus GPU objects retired on their own, apart from the
  * handle that owned them. */
 inline void rbtrend_release_crgpu_buffer(void *object) { crgpu_buffer_destroy((crgpu_buffer)object); }
@@ -1322,6 +1334,15 @@ typedef struct rbtrend_material_t {
 	uint32_t entry_count{0};
 	/* Built at the first compile that binds the material; NULL until then. */
 	rbtrend_binding_set set{nullptr};
+	/* The sets it held before its last changes (card L79), each with the
+	 * submission serial it was let go at: once the frame fence has passed
+	 * it, nothing submitted reads it and every list compiled with it is
+	 * stale, so the next change rewrites it in place and takes it back. A
+	 * changed resource then allocates nothing once the material has made
+	 * its few spares. */
+	rbtrend_binding_set spare_sets[RBTREND_MAX_FRAMES_IN_FLIGHT + 1]{};
+	uint64_t spare_serials[RBTREND_MAX_FRAMES_IN_FLIGHT + 1]{};
+	uint32_t spare_count{0};
 	/* A resource was set since the binding set was built. */
 	bool resources_changed{true};
 	/* The lit scene (rbtrendlit.h) this is the material of, or NULL: a

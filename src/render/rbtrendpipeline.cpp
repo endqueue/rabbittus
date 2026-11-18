@@ -1771,6 +1771,91 @@ void rbtrend_binding_layout_destroy(rbtrend_binding_layout layout) {
 
 } // extern "C"
 
+/* Writes [entries] into every descriptor set of [set] (its frame sets),
+ * and lists again what a command list reads beside them: the texture views
+ * with their layouts (image_uses, from frame 0's) and each frame's storage
+ * stores. The arrays are the set's own, sized by its layout, so nothing is
+ * allocated: the writes go out in batches from the stack. [top_level] is
+ * the one acceleration structure entry's, NULL for a caller's set. */
+static void rbtrend_binding_set_write_frames(
+    rbtrend_binding_set set,
+    const RBTREND_BINDING_SET_ENTRY *entries,
+    uint32_t entry_count,
+    crgpu_acceleration_structure top_level) {
+	enum { BATCH = 16 };
+	struct write_info {
+		crgpu_descriptor_buffer_info buffer;
+		crgpu_descriptor_image_info image;
+	};
+	set->image_use_count = 0;
+	for (uint32_t frame = 0; frame < set->frame_set_count; ++frame) {
+		set->storage_store_counts[frame]                   = 0;
+		rbtrend_binding_set_t::storage_store *frame_stores = set->storage_stores + (size_t)frame * set->storage_store_capacity;
+		for (uint32_t first = 0; first < entry_count; first += BATCH) {
+			const uint32_t count = entry_count - first < BATCH ? entry_count - first : BATCH;
+			write_info infos[BATCH];
+			crgpu_write_descriptor_set writes[BATCH];
+			for (uint32_t k = 0; k < count; ++k) {
+				const uint32_t i                       = first + k;
+				const RBTREND_BINDING_SET_ENTRY &entry = entries[i];
+				crgpu_write_descriptor_set &write      = writes[k];
+				write                                  = {};
+				write.base.type                        = CR_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET;
+				infos[k]                               = {};
+				write.dst_set                          = set->sets[frame];
+				write.dst_binding                      = entry._binding;
+				write.dst_array_element                = entry._array_element;
+				write.descriptor_count                 = 1;
+				write.descriptor_type                  = entry._type;
+
+				if (entry._type == CRGPU_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE) {
+					write.acceleration_structures = &top_level;
+					continue;
+				}
+				if (entry._type == CRGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+					const auto &r                   = entry._resource._uniform;
+					const rbtrend_buffer_part *part = rbtrend_buffer_part_of(r._buffer, frame);
+					infos[k].buffer.buffer          = part->store.buffer;
+					infos[k].buffer.offset          = r._offset;
+					infos[k].buffer.range           = r._range ? r._range : r._buffer->desc.size - r._offset;
+					write.buffer_info               = &infos[k].buffer;
+					continue;
+				}
+				if (entry._type == CRGPU_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+					const auto &r             = entry._resource._storage;
+					rbtrend_buffer_part *part = rbtrend_buffer_part_of(r._buffer, frame);
+					infos[k].buffer.buffer    = part->store.buffer;
+					infos[k].buffer.offset    = r._offset;
+					infos[k].buffer.range     = r._range ? r._range : r._buffer->desc.size - r._offset;
+					write.buffer_info         = &infos[k].buffer;
+					// Every storage buffer, staged or not; the same one in two
+					// slots is listed twice, and a command list takes each once.
+					frame_stores[set->storage_store_counts[frame]++] = {&part->store, entry._binding};
+					continue;
+				}
+
+				const auto &r = entry._resource._image;
+				if (rbtrend_descriptor_type_reads_view(entry._type)) {
+					// A storage image is read and written in GENERAL; anything
+					// sampled is read in SHADER_READ_ONLY.
+					const CRGPU_IMAGE_LAYOUT image_layout =
+					    entry._type == CRGPU_DESCRIPTOR_TYPE_STORAGE_IMAGE ? CRGPU_IMAGE_LAYOUT_GENERAL : CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY;
+					infos[k].image.image_view   = r._view->image_view;
+					infos[k].image.image_layout = image_layout;
+					write.image_info            = &infos[k].image;
+
+					// The same textures in every frame's set: recorded once.
+					if (frame == 0)
+						set->image_uses[set->image_use_count++] = {r._view, image_layout, entry._binding};
+				}
+				if (rbtrend_descriptor_type_reads_sampler(entry._type))
+					write.sampler = r._sampler->sampler;
+			}
+			crgpu_device_update_descriptor_sets(set->instance->desc.device, writes, count);
+		}
+	}
+}
+
 /* rbtrend_binding_set_create(), and rbtrend_binding_set_create_traced() with
  * [top_level] for its one CRGPU_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE
  * entry (NULL for a caller's set, which holds none). */
@@ -1825,26 +1910,9 @@ static RBT_RESULT rbtrend_binding_set_build(
 	// each frame in flight if an entry is a buffer of per-frame copies.
 	const uint32_t frame_set_count = has_per_frame ? layout->instance->desc.frames_in_flight : 1;
 
-	// What the writes point at; only needed until the set is written.
-	struct write_info {
-		crgpu_descriptor_buffer_info buffer;
-		crgpu_descriptor_image_info image;
-	};
-	write_info *infos = (write_info *)calloc(entry_count, sizeof(write_info));
-	if (!infos)
-		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the set's writes");
-	crgpu_write_descriptor_set *writes = (crgpu_write_descriptor_set *)calloc(entry_count, sizeof(crgpu_write_descriptor_set));
-	if (!writes) {
-		free(infos);
-		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the set");
-	}
-
 	RBTREND_MALLOC__T(result, rbtrend_binding_set_t);
-	if (!result) {
-		free(writes);
-		free(infos);
+	if (!result)
 		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the set");
-	}
 	RBTREND_CONSTRUCT__T(result, rbtrend_binding_set_t);
 	result->layout   = layout;
 	// Held from here on: the destructor lets go of it on every path below.
@@ -1857,8 +1925,6 @@ static RBT_RESULT rbtrend_binding_set_build(
 	result->entries = (RBTREND_BINDING_SET_ENTRY *)malloc(sizeof(RBTREND_BINDING_SET_ENTRY) * entry_count);
 	if (!result->entries) {
 		RBTREND_DESTRUCT__T(result, rbtrend_binding_set_t);
-		free(writes);
-		free(infos);
 		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the set");
 	}
 	memcpy(result->entries, entries, sizeof(RBTREND_BINDING_SET_ENTRY) * entry_count);
@@ -1868,8 +1934,6 @@ static RBT_RESULT rbtrend_binding_set_build(
 		result->image_uses = (rbtrend_binding_set_t::image_use *)calloc(image_use_count, sizeof(rbtrend_binding_set_t::image_use));
 		if (!result->image_uses) {
 			RBTREND_DESTRUCT__T(result, rbtrend_binding_set_t);
-			free(writes);
-			free(infos);
 			return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the set");
 		}
 	}
@@ -1881,8 +1945,6 @@ static RBT_RESULT rbtrend_binding_set_build(
 	    (rbtrend_binding_set_t::storage_store *)calloc((size_t)entry_count * frame_set_count, sizeof(rbtrend_binding_set_t::storage_store));
 	if (!result->storage_stores) {
 		RBTREND_DESTRUCT__T(result, rbtrend_binding_set_t);
-		free(writes);
-		free(infos);
 		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the set");
 	}
 
@@ -1893,75 +1955,13 @@ static RBT_RESULT rbtrend_binding_set_build(
 		if (CR_FAILED(sr)) {
 			result->sets[frame] = nullptr;
 			RBTREND_DESTRUCT__T(result, rbtrend_binding_set_t);
-			free(writes);
-			free(infos);
 			return rbtrend_fail_cr(out_error, sr, "taking a descriptor set for the set failed");
 		}
 		++result->frame_set_count;
 	}
 
-	for (uint32_t frame = 0; frame < frame_set_count; ++frame) {
-		rbtrend_binding_set_t::storage_store *frame_stores = result->storage_stores + (size_t)frame * entry_count;
-		for (uint32_t i = 0; i < entry_count; ++i) {
-			const RBTREND_BINDING_SET_ENTRY &entry = entries[i];
-			crgpu_write_descriptor_set &write   = writes[i];
-			write                                 = {};
-			write.base.type                       = CR_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET;
-			infos[i]                              = {};
-			write.dst_set                         = result->sets[frame];
-			write.dst_binding                     = entry._binding;
-			write.dst_array_element               = entry._array_element;
-			write.descriptor_count                = 1;
-			write.descriptor_type                 = entry._type;
+	rbtrend_binding_set_write_frames(result, entries, entry_count, top_level);
 
-			if (entry._type == CRGPU_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE) {
-				write.acceleration_structures = &top_level;
-				continue;
-			}
-			if (entry._type == CRGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
-				const auto &r                  = entry._resource._uniform;
-				const rbtrend_buffer_part *part = rbtrend_buffer_part_of(r._buffer, frame);
-				infos[i].buffer.buffer         = part->store.buffer;
-				infos[i].buffer.offset         = r._offset;
-				infos[i].buffer.range          = r._range ? r._range : r._buffer->desc.size - r._offset;
-				write.buffer_info                  = &infos[i].buffer;
-				continue;
-			}
-			if (entry._type == CRGPU_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-				const auto &r            = entry._resource._storage;
-				rbtrend_buffer_part *part = rbtrend_buffer_part_of(r._buffer, frame);
-				infos[i].buffer.buffer   = part->store.buffer;
-				infos[i].buffer.offset   = r._offset;
-				infos[i].buffer.range    = r._range ? r._range : r._buffer->desc.size - r._offset;
-				write.buffer_info                  = &infos[i].buffer;
-				// Every storage buffer, staged or not; the same one in two
-				// slots is listed twice, and a command list takes each once.
-				frame_stores[result->storage_store_counts[frame]++] = {&part->store, entry._binding};
-				continue;
-			}
-
-			const auto &r = entry._resource._image;
-			if (rbtrend_descriptor_type_reads_view(entry._type)) {
-				// A storage image is read and written in GENERAL; anything
-				// sampled is read in SHADER_READ_ONLY.
-				const CRGPU_IMAGE_LAYOUT image_layout =
-				    entry._type == CRGPU_DESCRIPTOR_TYPE_STORAGE_IMAGE ? CRGPU_IMAGE_LAYOUT_GENERAL : CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY;
-				infos[i].image.image_view   = r._view->image_view;
-				infos[i].image.image_layout = image_layout;
-				write.image_info            = &infos[i].image;
-
-				// The same textures in every frame's set: recorded once.
-				if (frame == 0)
-					result->image_uses[result->image_use_count++] = {r._view, image_layout, entry._binding};
-			}
-			if (rbtrend_descriptor_type_reads_sampler(entry._type))
-				write.sampler = r._sampler->sampler;
-		}
-		crgpu_device_update_descriptor_sets(layout->instance->desc.device, writes, entry_count);
-	}
-
-	free(writes);
-	free(infos);
 	// Its destroy's retire, promised now so the destroy can't fail.
 	if (rbtrend_instance_reserve_release(layout->instance, 1) != RBT_RESULT_OK) {
 		RBTREND_DESTRUCT__T(result, rbtrend_binding_set_t);
@@ -1979,6 +1979,49 @@ RBT_RESULT rbtrend_binding_set_create_traced(
     rbtrend_binding_set *out_set,
     RBTREND_ERROR *out_error) {
 	return rbtrend_binding_set_build(layout, entries, entry_count, top_level, out_set, out_error);
+}
+
+bool rbtrend_binding_set_rewrite(
+    rbtrend_binding_set set,
+    const RBTREND_BINDING_SET_ENTRY *entries,
+    uint32_t entry_count) {
+	if (!set || !entries || entry_count != set->entry_count)
+		return false;
+	rbtrend_binding_layout layout = set->layout;
+	// rbtrend_binding_set_create's checks, each a reason to build anew
+	// instead; and the set's shape kept: as many frame sets, as many views.
+	uint32_t image_use_count = 0;
+	bool has_per_frame       = false;
+	for (uint32_t i = 0; i < entry_count; ++i) {
+		const RBTREND_BINDING_SET_ENTRY &entry = entries[i];
+		const RBTREND_BINDING_DESC *binding    = rbtrend_binding_layout_find_desc(layout, entry._binding);
+		if (!binding)
+			return false;
+		if (entry._array_element >= binding->_count)
+			return false;
+		if (entry._type != binding->_type)
+			return false;
+		if (entry._type == CRGPU_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE)
+			return false;
+		for (uint32_t j = 0; j < i; ++j)
+			if (entries[j]._binding == entry._binding && entries[j]._array_element == entry._array_element)
+				return false;
+		if (rbtrend_binding_set_entry_resource_valid(nullptr, layout->instance, entry, i, nullptr) != RBT_RESULT_OK)
+			return false;
+		if (rbtrend_descriptor_type_reads_view(entry._type))
+			++image_use_count;
+		if (entry._type == CRGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER && entry._resource._uniform._buffer->part_count > 1)
+			has_per_frame = true;
+		if (entry._type == CRGPU_DESCRIPTOR_TYPE_STORAGE_BUFFER && entry._resource._storage._buffer->part_count > 1)
+			has_per_frame = true;
+	}
+	if ((has_per_frame ? layout->instance->desc.frames_in_flight : 1u) != set->frame_set_count)
+		return false;
+	if (image_use_count != set->image_use_count)
+		return false;
+	memcpy(set->entries, entries, sizeof(RBTREND_BINDING_SET_ENTRY) * entry_count);
+	rbtrend_binding_set_write_frames(set, entries, entry_count, nullptr);
+	return true;
 }
 
 extern "C" {

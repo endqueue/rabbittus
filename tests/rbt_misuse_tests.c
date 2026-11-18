@@ -17,6 +17,7 @@
 #include "jobs/rbtjobs.h"
 #include "math/rbtmathbvh.h"
 #include "math/rbtmathmedium.h"
+#include "math/rbtmathnoise.h"
 #include "math/rbtmathpoly.h"
 #include "sync/rbtsyncnet.h"
 #include "text/rbttext.h"
@@ -1631,6 +1632,16 @@ int main(void)
     calls++;
     (void)rbtmath_mesh_bvh_within_volume((rbtmath_mesh_bvh){0}, (const RbtDMat4 *){0}, (const RBTMATH_VOLUME *){0});
     calls++;
+    expect_error("rbtmath_noise_compute_grid", rbtmath_noise_compute_grid((const RBTMATH_NOISE_DESC *){0}, (const RBTMATH_NOISE_GRID *){0}, (float *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_noise_compute_nearest_cells", rbtmath_noise_compute_nearest_cells((const RBTMATH_NOISE_DESC *){0}, (const double *){0}, (uint32_t){0}, (float *){0}, (uint32_t *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_noise_compute_offsets", rbtmath_noise_compute_offsets((const RBTMATH_NOISE_DESC *){0}, (const double *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_noise_compute_points", rbtmath_noise_compute_points((const RBTMATH_NOISE_DESC *){0}, (const double *){0}, (uint32_t){0}, (float *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_noise_warp_points", rbtmath_noise_warp_points((const RBTMATH_NOISE_WARP_DESC *){0}, (const double *){0}, (uint32_t){0}, (double *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
     expect_error("rbtmath_poly_boolean", rbtmath_poly_boolean((const RBTMATH_POLY_BOOLEAN_DESC *){0}, (rbtmath_poly *){0}, (RBTMATH_ERROR *){0}));
     calls++;
     rbtmath_poly_destroy((rbtmath_poly){0});
@@ -1982,6 +1993,8 @@ int main(void)
     expect_error("rbtrend_texture2d_resize", rbtrend_texture2d_resize((rbtrend_texture2d){0}, (uint32_t){0}, (uint32_t){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_texture2d_update", rbtrend_texture2d_update((rbtrend_texture2d){0}, (crgpu_command_queue){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (const void *){0}, (uint64_t){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_texture2d_update_levels", rbtrend_texture2d_update_levels((rbtrend_texture2d){0}, (crgpu_command_queue){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (const RBTREND_TEXTURE_LEVEL_DATA *){0}, (uint32_t){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_texture3d_create", rbtrend_texture3d_create((rbtrend_instance){0}, (const RBTREND_TEXTURE3D_DESC *){0}, (rbtrend_texture3d *){0}, (RBTREND_ERROR *){0}));
     calls++;

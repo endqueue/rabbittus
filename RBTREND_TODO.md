@@ -5417,6 +5417,92 @@ the 28 ASTC formats only; BC4 and BC5 SNORM's constants 0x81 and 0x7F;
 the cube test's faces in different layouts. Its copies use Carrottus
 GPU's new row-pitch alignment query (S48's third round).
 
+**Built 2026-11-17 on the Mac (Apple M5 Pro, macOS 27, Metal), from the
+draft as approved (version 9), over S48 as built the same day (uncommitted
+in carrottus). D3D12 and Vulkan written, not compiled or run (card X25).**
+- **Public (`rbtrendimages.h`):** `RBTREND_TEXTURE_LEVEL_DATA` (frozen) and
+  `rbtrend_texture2d_update_levels()`; the comments of the desc's
+  `format`, create, update, get_data, generate_mips, resize and 3D create
+  as the draft has them. One wording differs from the draft's: the
+  staged row's pitch is named as a multiple of
+  `crgpu_image_get_buffer_copy_row_pitch_alignment()` (and the block's
+  bytes), not `crgpu_image_get_buffer_copy_size()`'s; the two agree for
+  every whole level of a power-of-two block, and the query's is what a
+  region narrower than its level stages at. The new call's thread
+  sentence is plain prose, not a `Thread:` line (it is no exception).
+- **Internals:** `rbtrend_texel_bytes` gave way to the texel block
+  (`crgpu_format_get_texel_block()`); the region check takes the block
+  (offsets on it, width and height on it or reaching the level's edge,
+  data in rows of blocks), each its own check and message; staging re-packs
+  rows of blocks at the pitch step (the block's bytes and the row
+  alignment's least common multiple, so a 12-byte texel on D3D12 is
+  staged at whole texels: the old pitch, `GetCopyableFootprints`' 256-byte
+  `RowPitch`, isn't, and its row length of `pitch / 12` texels implied 252
+  bytes; reasoned from the code, not run), one `memcpy` where
+  the pitch is tight; `buffer_row_length` is `pitch / bytes * block
+  width`. Every copy's `CR_RESULT` is read, the update's and readback's
+  too, the first refusal returned through `rbtrend_fail_cr` naming its
+  level and layer after the closing barriers are recorded; a readback
+  waits only once its copy is recorded. `rbtrend_immediate_on_texture_range`
+  (`rbtrendimages_internal.hpp`) moves a range with one barrier per run
+  (levels in a row of one layout, then layers in a row found alike), and
+  the one-subresource form calls it. `rbtrend_block_format_feature()` is
+  the one thing Rend knows of formats: which feature a BC or ASTC value
+  needs. `rbtrend_format_scalar_type()` names the 28 ASTC formats float.
+  `generate_mips` refuses a block format with `RBT_RESULT_UNSUPPORTED`
+  before its usage checks: the draft said it already did, but its usage
+  check (no `RENDER_TARGET`) came first with `INVALID_ARGUMENT`.
+- **Tests, each seen failing first:** the header's new call failed to
+  compile in `rbtrend_contract_tests` (5 errors); with a stub returning
+  `RBT_RESULT_NOT_IMPLEMENTED`, `rbtrend_contract_tests` failed 3 checks,
+  and `rabbittustests`' `test_block_texture_upload` 714,
+  `test_block_texture_sampling` 36, `test_block_texture_contract` 37 (each
+  refusal reached Carrottus GPU and came back as its code) and
+  `test_frame_allocations` 2. With everything but the scalar fix, the
+  contract test's ASTC 4x4 view as BLOOM's lens dirt was refused ("format
+  1000, which a shader doesn't read as floats"). Mutations: a row length
+  one block too wide failed 257 checks, and the sub-range's copies made at
+  layer 0 in place of `base_layer` 84.
+- **Run:** every ctest, Debug and Release, and under ASan with UBSan and
+  under TSan (43 each, every one passing, no report); `rbtrend_gpu_tests` Debug under Metal API and shader
+  validation (errors and warnings as asserts) on both devices, and under
+  `leaks --atExit`: 0 leaks without Metal's debug layer; with it, 12,
+  every one an `MTLDebugSamplerState` wrapper in the debug layer's object
+  cache from samplers `test_material_copy` and the tests' context make
+  (10 with that test alone, 0 for it without the layer), none from A54's
+  code. On the device with the tests' features: 42 block
+  formats (14 BC, 28 ASTC) written and read back byte for byte (a 2D
+  chain of 4 x 3 blocks and four regions of its level 0 and its last
+  level, a 3-layer array and levels from 1 of layers 1 and 2, a cube whose
+  faces 0 and 3 were written first, face 3 sampled), ASTC 5x4 20 x 8 level
+  by level, an RGBA8 cube; 36 sampled exactly (BC1, BC4 and BC5 in UNORM
+  and SNORM, BC7, ASTC, sRGB forms); 100 frames of an RGBA8 and a BC7
+  chain each through update_levels, none of ours. On the device with no
+  optional features: every block create refused with Rend's message, the
+  RGBA8 cube and frames as above.
+- **Measured** (Release, `RABBITTUSTESTS_MEASURE=1`, the M5 Pro, the mean
+  of 20 runs): a 2048 chain as RGBA8 (22.4 MB) 1.79 ms of CPU through one
+  update_levels against 1.97 ms through 12 updates (2.90 and 3.07 ms to
+  the batch having run); BC7 (5.6 MB) 0.54 ms (1.01 ms), ASTC 4x4 0.49 ms
+  (0.80 ms). Staging is the chain's own bytes on Metal (rows tight). On a
+  unified-memory Mac the copy into staging is most of it; one call saves
+  little time there, and its gain is one batch and one transition.
+- **Owed:** Windows (D3D12: BC on every adapter, ASTC refused; the 256-byte
+  pitch, which pass 6 names: a level of 4 BC7 blocks a row staged at 256;
+  Vulkan on the Iris Xe and A2000) and Fedora (Vulkan), where barriers and
+  layouts are real and the range's runs are seen by the validation
+  layers; Metal makes neither visible. Not reachable by a test on Metal: a
+  planar format's refusal (Metal makes no planar texture) and a copy's
+  refusal by Carrottus GPU (Rend's checks come first).
+- **Found, not in the draft (for a card):** a draw refused at compile
+  inside a pass after `rbtrend_cmd_apply_vertex_buffers` has bound its
+  vertex buffers (the binding sets' checks, `rbtrend_cmd_apply_binding_sets`,
+  come after) leaves Metal's encoder with an unused vertex binding, which
+  Metal's validation with warnings as asserts stops the process for
+  ("unused vertex binding in render encoder at Buffer index 0"): seen
+  drawing a BC7 view through a shader that reads unsigned integers. The
+  scalar-type test went through BLOOM's lens dirt instead.
+
 ### 60. A material's binding sets kept per frame in flight (card L79, decided 2026-11-17)
 
 Decided 2026-11-17 with you (a now, b when A15's item 33 is built): a
@@ -5429,19 +5515,64 @@ only if what `rbtrendmaterial.h` says a rebuild costs changes. Its test: a
 swap a frame in the no-allocation tests, at zero. Bindless (item 33)
 supersedes it where it exists.
 
-### 61. Writing some bytes of a buffer while submitted work reads others (card A62, open)
+**Built 2026-11-17 on the Mac (the session card L79 names, its step 0), Rend's
+internals, no draft:** a material keeps up to `RBTREND_MAX_FRAMES_IN_FLIGHT
++ 1` spare sets, each with the submission serial it was let go at
+(`rbtrend_material_t::spare_sets`, `spare_serials`). A change rewrites in
+place a spare the frame fence has passed (`rbtrend_binding_set_rewrite`,
+internal: `create`'s checks, the same frame sets and views, the writes from
+the stack in batches of 16), takes it, and lets the held set go as a spare
+at the current serial; while it has fewer spares, a new set; past that,
+`rbtrend_binding_set_update` as before. Lists compiled with the set let go
+of are stale (`rbtrend_instance_forget`), as a rebuild made them, so
+`rbtrendmaterial.h`'s contract is unchanged; its sentence on what a
+rebuild costs now says the rewrite (open for review: the card asked for a
+draft if that sentence changed, and only the cost changed). `create` lost
+its two scratch callocs on the way (the writes from the stack).
+`rbtrend_gpu_tests`' `test_material_swap_in_flight`: a busy queue, then
+eight swaps through three textures in one frame, each into its own target,
+all right; seen failing (black targets) with the serial check taken out,
+and with two textures it hadn't (a spare rewritten with the colour it
+held); then 100 frames a swap each, none of ours (700 before, seen
+failing first). The first caller's no-allocation test, a map swapped every
+frame, held to zero (705 in 100 frames before). Every Rabbittus ctest, the GPU tests on
+both Metal devices under validation and under `leaks` (0). Windows and
+Linux owed.
 
-Found 2026-11-17 by a caller's terrain draft's third critique round:
-`rbtrendbuffers.h` forbids any write to a buffer while submitted work that
-uses it has yet to finish, so a large `RBTREND_BUFFER_WRITES_MANY` pool
-drawn every frame (slots written as they are retired) can't be written at
-all, though no unfinished frame reads the slot written. Per-frame copies
-would hold frames-in-flight copies of the pool. The staging copy and the
-device copy are already per range. Card A62 asks for the rule by bytes,
-recommending that a write name the last submission that may read those
-bytes, refused in every build if it hasn't finished. A Rend draft first
-(seven critique passes), approved and built before the caller's renderer
-half that needs it.
+### 61. Writing some bytes of a buffer while submitted work reads others (card A62, decided 2026-11-17: b)
+
+Found 2026-11-17 by a caller's third critique round: `rbtrendbuffers.h` forbids any write to a buffer while submitted work that uses it is unfinished, so a large `RBTREND_BUFFER_WRITES_MANY` pool drawn every frame can never be written. The draft is `rbtrend_buffer_ranges_draft.h` (2026-11-17, version 1, seven critique passes, not approved). It drafts the card's recommendation b: `rbtrend_buffer_write_after()` names the serial of the last submission that may read the bytes, and is refused in every build with a new `RBT_RESULT_REND_IN_USE` while that submission is unfinished. Two getters, `rbtrend_instance_get_last_submission()` and `rbtrend_instance_get_completed_submission()`, make the instance's submission serials public. Rend tracks its own staging copies in flight per range. Questions Q1 to Q7 are open; Q1 adds an option d, a queue write in the style of WebGPU's `writeBuffer`. Nothing is built. It is approved and built before the renderer half of the caller that needs it.
+
+**Approved 2026-11-17 with the user, every question as recommended (Q1 b,
+not d).** Not built (the meta repo's `ROADMAP.md` names the session),
+before the caller's renderer half that needs it.
+
+### 62. Cascades anchored in a space that doesn't move (card L66, built 2026-11-17)
+
+Built 2026-11-17 on the Mac (the session card L66 names, its first step) from the
+approved `rbtrend_large_worlds_draft.h` (version 3): `RBTREND_LIT_CASCADE_ANCHOR`
+(struct type 5038), chained once onto `RBTREND_LIT_CASCADE_FIT`, its
+`scene_origin` the scene origin's place in a fixed space (`RbtDVec3`;
+`rbtrendlit.h` includes `../rbtmath.h`). With it, each cascade is moved by
+whole texels where the fixed space's origin lands: its landing worked out
+from the fit's own float matrix, each product made exact as a pair
+(Veltkamp's split and Dekker's product, no fused multiply-add) and summed
+as a double-double, so the texel's fraction is exact however far the
+origin is. Without it, today's bits (test 1). Refused: an axis not finite,
+each its own check; the anchor twice (`RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN`);
+any other struct in the fit's chain. `rbtrend_contract_tests`' `lit_cascade_anchor`:
+a fixed point's texel under an eye moving 1 cm a fit for 600 fits drifts
+7.6e-5 of a texel anchored at the origin, 1e7 m and 4.5e12 m out (0.5,
+fully loose, without the anchor); at the origin the same snap as today's,
+within 1e-6 of a texel; refusals; an anchored fit 1e7 out recorded
+(`tests/data/rbtrend_contract/anchor_far_4.inc`, within FIT_ULPS). Recorded,
+not asserted (card A60): a light turning 1.2e-6 radians a fit, the fixed
+point at the view 0.00014 texels a fit, 200 m away 0.009, 250 km and 1e7 m
+away a phase effectively random each fit (0.24 to 0.31 on average): the
+slide A60 describes. Every ctest passes, and `rabbittustests` on Metal
+under validation (other callers' cascades unchanged). Windows and Linux
+owed: test 6's bits within FIT_ULPS, card X25. The first caller's renderer
+chains it on every cascade fit, its scene origin the frame's eye.
 
 ## Suggested order
 

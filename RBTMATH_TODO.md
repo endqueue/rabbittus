@@ -110,19 +110,74 @@ all, into the workspace's `.deps/`, never into a project (the user,
   (clang-cl contracts by default; MSVC 17.0 or later): card A63, which
   also covers this repository's existing bit-exact sources.
 
-## Deterministic elementary functions (card A61, open)
+**Built 2026-11-17 on the Mac (the session card A56 names, its Part 1), from the approved
+draft's version 3:** `include/math/rbtmathnoise.h` (the definition in its
+`@verbatim`, the four scale constants found and written in hex:
+gradient 2D `0x1.6cbdaap+0`, 3D `0x1.ee0a2ep-1`, simplex 2D
+`0x1.8f58eep+6`, 3D `0x1.91838ap+3`, each the float just below 1 over the
+octave's exact maximum, the clamp never acting in 10^9 samples a kind),
+`src/math/rbtmathnoise.cpp` and `rbtmathnoise_internal.hpp`, struct types
+4007 and 4008; built with contraction off by the compiler's ID
+(`RABBITTUS_NO_CONTRACT`, card A63's rule), `FLT_EVAL_METHOD == 0`
+asserted. Test 13's finding confirmed first against OpenSimplex2's
+reference (cloned into `../.deps/OpenSimplex2-4cd120d` for a scratch
+program only): the reference is up to 0.0041 off the full sum and steps
+by up to 0.0054 where its point changes; the full sum is continuous.
+Tests: `rbtmathnoise_tests` (1 to 13; ctest at reduced counts, `--full
+[name]` at the draft's, every test passing at full counts in Release),
+`rbtmathnoise_bits_tests` (88 records, `tests/data/rbtmathnoise/bits.inc`,
+the same in Debug and Release and with FZ set), `rbtnoalloc_tests`' noise
+scenario (none of ours), the misuse harness. Three of the draft's test
+bounds changed by what full counts measured (`claude_made_decisions.md`,
+2026-11-17, "Noise in Rabbittus Math as built"): test 13 within 2^-19,
+not 2^-20 (the library's float sum measures 1.06e-6 off the double one);
+continuity's resolution taken where the library rounds; test 2's kinks
+found by second differences too, and RIDGED's clamp kink skipped. Every
+Rabbittus ctest in Debug and under ASan and TSan. Windows (MSVC) and
+Linux (GCC, clang) owed: the bits test's flush controls for x86 are
+written, not compiled (card X25).
+
+**Measured** (`rbtmathnoise_bench`, Release, the M5 Pro, one core, ns a
+place, best of 5 x 65,536; a gradient costs about nothing more, and 1e7 m
+out the same as near): 2D gradient 12 a single octave, 73 an 8-octave
+FBM; 2D simplex 12 and 91; 2D cellular 89 and 711; 3D gradient 26 and
+181; 3D simplex 39 and 285 (about 36 an octave, **the draft estimated 20
+to 25**); 3D cellular 374 and 3,030; points, offsets and a grid alike
+(92 for a 4-octave 3D gradient FBM); a 3D warp of a 4-octave simplex FBM
+450 (443 with Jacobians); nearest cells 92 (2D) and 380 (3D). **A
+terrain chunk's proxy (33 x 33 places, four layers and a warp, with
+gradients) 2.73 ms on one core, against the draft's 0.65 to 0.9 ms
+estimate:** L67's chunk budget is to be set from this, not from the
+estimate (a caller's chunk budget is to be set from this).
+
+## Deterministic elementary functions (card A61, decided 2026-11-17)
 
 Found 2026-11-17 by a caller's terrain draft's third critique round: a
 tangent warp needs tan and atan, a crater's size law exp2 and log2, and
 libm's bits differ between Apple's libm, glibc and the MSVC runtime.
-Rabbittus Math allows floor and sqrt alone from libm; `rbtmathmedium`
-keeps a private exponential for that reason. Card A61 recommends a small
-public draft of its own (tan, atan and atan2, exp2, log2, in float and
-double where needed, each defined by its written evaluation with hex
-constants and contraction off, its bits recorded and frozen at 1.0 as
-the noise's are, an error bound stated against a high-precision
-reference), the medium's exponential moved onto it. A prerequisite of
-that caller's build; a draft first, with seven critique passes.
+
+Drafted 2026-11-17, not approved: `rbtmath_functions_draft.h` (version
+1, seven critique passes), the card's recommendation written out. A new
+header, math/rbtmathfunctions.h: tan, atan, atan2, exp2, exp and log2 in
+double, batch calls (arrays in, arrays out, in place allowed), each
+defined by a written evaluation (range reduction, Remez polynomials in
+hex, compensated last steps, no contraction, no libm call), every result
+within 1 ulp of the exact value (measured against MPFR over 10^7 inputs
+a range, not proven; largest 0.97, tan). The shell medium's
+portable_exp moves onto the new exp (4.30 ulps to 0.71; its CRC
+7d88a849 recorded anew), and rbtmathmedium.cpp onto
+RABBITTUS_NO_CONTRACT. Questions for the card: Q1 own evaluation, not
+CORE-MATH or musl vendored; Q2 double only; Q3 batch calls only, scalar
+internal, nothing inline; Q4 exp public, not exp2(x log2 e); Q5 atan2
+included; Q6 tan to 2^20, a NaN past it; Q7 sin and cos later; Q8 bits
+frozen from the first release (each recommended a). **Approved
+2026-11-17 with the user, every question as recommended.** Not built: a
+prerequisite of that caller's build (the meta repo's `ROADMAP.md`
+names the session). Card A63, decided a the same day, applies with it: the bit-exact
+sources take their contraction flags by compiler ID (MSVC `/fp:precise`
+with Visual Studio 2022 17.0 or later, clang-cl
+`/clang:-ffp-contract=off`, other Clang and GCC `-ffp-contract=off`), one
+CMake function, before A56's bits are recorded on Windows.
 
 ## Cloud density (card A57, decided 2026-11-17)
 

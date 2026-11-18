@@ -56,7 +56,18 @@ typedef struct RBTREND_TEXTURE2D_DESC {
 	uint32_t width;
 	/** Height of mip 0 in texels. Never 0. */
 	uint32_t height;
-	/** Texel format. Never CRGPU_FORMAT_UNKNOWN. */
+	/**
+	 * Texel format. Never CRGPU_FORMAT_UNKNOWN.
+	 *
+	 * A block-compressed format (BC1 to BC7, ASTC; a block larger than one
+	 * texel, crgpu_format_get_texel_block()) needs its feature on the
+	 * instance's device (CRGPU_FEATURE_TEXTURE_COMPRESSION_BC or
+	 * _ASTC_LDR), RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE as its only
+	 * usage, #width and #height whole blocks, #sample_count 1 and
+	 * #cube_capable as any 2D texture. Every level a sampler reaches is the
+	 * caller's to write (rbtrend_texture2d_update_levels()): none can be
+	 * generated.
+	 */
 	CRGPU_FORMAT format;
 
 	/** @see RBTREND_TEXTURE_USAGE_BITS */
@@ -65,7 +76,8 @@ typedef struct RBTREND_TEXTURE2D_DESC {
 	/**
 	 * 0 for a full chain, 1 for no mips, N for N levels. Every level starts
 	 * undefined, and each level a sampler can reach is the caller's to
-	 * write: with rbtrend_texture2d_update(), or from the level above with
+	 * write: with rbtrend_texture2d_update() or
+	 * rbtrend_texture2d_update_levels(), or from the level above with
 	 * rbtrend_texture2d_generate_mips().
 	 */
 	uint32_t mip_levels;
@@ -106,7 +118,13 @@ typedef struct rbtrend_texture2d_t *rbtrend_texture2d;
  *         @p out_texture is NULL, `width` or `height` is 0, `format` is
  *         CRGPU_FORMAT_UNKNOWN, or `cube_capable` is set on a texture
  *         that isn't square or whose `array_layers` is not a multiple of
- *         six; RBT_RESULT_UNSUPPORTED if `sample_count` is above 1; the
+ *         six; after the format's check and before the sample count's,
+ *         RBT_RESULT_UNSUPPORTED if `format` is block-compressed and the
+ *         instance's device was created without its feature, then
+ *         RBT_RESULT_INVALID_ARGUMENT if `format` is block-compressed and
+ *         `usage` is anything but RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE,
+ *         or `width` or `height` isn't whole blocks, each its own check;
+ *         RBT_RESULT_UNSUPPORTED if `sample_count` is above 1; the
  *         struct codes for `desc->base`; RBT_RESULT_OUT_OF_MEMORY; or the code
  *         for Carrottus GPU's result if the image can't be created
  *         (rbtrendcontext.h, "Results and errors").
@@ -187,25 +205,35 @@ crgpu_image rbtrend_texture2d_get_crgpu_image(rbtrend_texture2d texture);
  *                     able to run copies between a buffer and an image.
  * @param[in] mip_level Mip level, 0 the largest. Below the texture's mip count.
  * @param[in] array_layer Array layer. Below the texture's layer count.
- * @param[in] x_offset Left edge of the region, in texels of the level.
- * @param[in] y_offset Top edge of the region, in texels.
- * @param[in] width    Width of the region. Never 0.
- * @param[in] height   Height of the region. Never 0.
- * @param[in] data     The texels: @p height rows of @p width texels,
- *                     tightly packed, in the texture's format. Never NULL.
- * @param[in] data_size The bytes at @p data: exactly the region's,
- *                     @p width x @p height x the format's bytes to a texel.
+ * @param[in] x_offset Left edge of the region, in texels of the level: a
+ *                     multiple of the format's block width (1 for an
+ *                     uncompressed format; crgpu_format_get_texel_block()).
+ * @param[in] y_offset Top edge, a multiple of the block's height.
+ * @param[in] width    Width of the region. Never 0. A multiple of the
+ *                     block's width, or reaching the level's right edge
+ *                     (@p x_offset + @p width is the level's width).
+ * @param[in] height   Height of the region. Never 0. A multiple of the
+ *                     block's height, or reaching the level's bottom edge.
+ * @param[in] data     The region's blocks: ceil(@p height / block height)
+ *                     rows, from the top, of ceil(@p width / block width)
+ *                     blocks, from the left, tightly packed, in the
+ *                     texture's format (for an uncompressed format, a block
+ *                     is a texel, so: @p height rows of @p width texels).
+ *                     Never NULL.
+ * @param[in] data_size The bytes at @p data: exactly the region's, its
+ *                     blocks times the block's bytes.
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
  * @return RBT_RESULT_OK if the copy was recorded; RBT_RESULT_INVALID_ARGUMENT
  *         if @p texture, @p queue or @p data is NULL, @p width or
  *         @p height is 0, the level or layer doesn't exist, the region
- *         runs outside the level, @p data_size is not the region's bytes,
+ *         runs outside the level, the region's offset, width or height is
+ *         off the format's block, @p data_size is not the region's bytes,
  *         or @p queue is not the instance's; RBT_RESULT_UNSUPPORTED if the
- *         texture's format has no whole number of bytes to a texel (a
- *         block-compressed format has no update path);
- *         RBT_RESULT_OUT_OF_MEMORY; or the code for Carrottus GPU's result if the
- *         copy couldn't be staged or recorded.
+ *         texture's format has no texel block
+ *         (crgpu_format_get_texel_block(): CRGPU_FORMAT_R1_UNORM and the
+ *         planar formats); RBT_RESULT_OUT_OF_MEMORY; or the code for
+ *         Carrottus GPU's result if the copy couldn't be staged or recorded.
  */
 RBT_RESULT rbtrend_texture2d_update(
 	rbtrend_texture2d texture,
@@ -235,13 +263,18 @@ RBT_RESULT rbtrend_texture2d_update(
  *                      able to run copies between a buffer and an image.
  * @param[in]  mip_level Mip level, 0 the largest. Below the texture's mip count.
  * @param[in]  array_layer Array layer. Below the texture's layer count.
- * @param[in]  x_offset Left edge of the region, in texels of the level.
- * @param[in]  y_offset Top edge of the region, in texels.
- * @param[in]  width    Width of the region. Never 0.
- * @param[in]  height   Height of the region. Never 0.
- * @param[out] out_data The caller's memory, which receives @p height rows of
- *                      @p width texels, tightly packed, in the texture's
- *                      format. Never NULL.
+ * @param[in]  x_offset Left edge of the region, in texels of the level: as
+ *                      rbtrend_texture2d_update()'s, on the format's block.
+ * @param[in]  y_offset Top edge of the region, in texels, on the block.
+ * @param[in]  width    Width of the region. Never 0. As
+ *                      rbtrend_texture2d_update()'s.
+ * @param[in]  height   Height of the region. Never 0. As
+ *                      rbtrend_texture2d_update()'s.
+ * @param[out] out_data The caller's memory, which receives the region's
+ *                      blocks as rbtrend_texture2d_update() reads them:
+ *                      rows of blocks, tightly packed, in the texture's
+ *                      format (for an uncompressed format, @p height rows of
+ *                      @p width texels). Never NULL.
  * @param[in]  data_size The bytes at @p out_data: exactly the region's.
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
@@ -263,6 +296,122 @@ RBT_RESULT rbtrend_texture2d_get_data(
 	uint32_t height,
 	void *out_data,
 	uint64_t data_size,
+	RBTREND_ERROR *out_error);
+
+/**
+ * @brief One level's data for rbtrend_texture2d_update_levels().
+ *
+ * Each level of a file prepared off the device (a KTX2 file's level index)
+ * is at its own offset, so each is a pointer and a size, and no caller
+ * concatenates levels to make the call.
+ */
+/* Frozen: an array element passed to rbtrend_texture2d_update_levels(). It never changes; a new need gets a new type. */
+typedef struct RBTREND_TEXTURE_LEVEL_DATA {
+	/**
+	 * The level's blocks, for every layer the call writes, first layer
+	 * first: each layer is the whole level, ceil(level height / block
+	 * height) rows of ceil(level width / block width) blocks, top row
+	 * first, tightly packed, in the texture's format; the next layer
+	 * follows at once. A cube-capable texture's faces are its layers, +X,
+	 * -X, +Y, -Y, +Z, -Z in each six: a KTX2 file's level holds its layers
+	 * and faces in that order, so its bytes are passed as they are. Read
+	 * during the call only. Never NULL.
+	 */
+	const void *data;
+	/** The bytes at #data: exactly the level's bytes times the call's
+	 * layer count. */
+	uint64_t data_size;
+} RBTREND_TEXTURE_LEVEL_DATA;
+
+/**
+ * @brief Writes whole mip levels of a range of a 2D texture's layers, in
+ * any format the texture can have: the way a texture's prepared chain is
+ * put on the device (a cooked file's levels, a cube's six faces, an
+ * array's layers).
+ *
+ * Level `base_mip + i` of each layer from @p base_layer to
+ * `base_layer + layer_count - 1` is written from `levels[i]`. Recorded into
+ * the frame's batch of updates and clears, and not waited for, as
+ * rbtrend_texture2d_update() is (rbtrendcontext.h, "Texture updates and
+ * clears"): every level is staged at once, in the frame's transient memory
+ * where the instance has room for all of it, and in one buffer of the
+ * call's own where it hasn't, each row padded to the backend's row pitch
+ * (crgpu_image_get_buffer_copy_row_pitch_alignment()) by Rend and each
+ * copy's start to the copy offset alignment; then one copy per level and
+ * layer is recorded, between the range's transition into
+ * CRGPU_IMAGE_LAYOUT_TRANSFER_DST and its transition back: one barrier per
+ * run of the range's subresources found in the same layout (one for the
+ * whole range of a texture nothing has written yet). Each level is left in
+ * the image layout it was found in, as rbtrend_texture2d_update() leaves
+ * it; a level nothing had written ends in
+ * CRGPU_IMAGE_LAYOUT_SHADER_READ_ONLY, and a list compiled against it
+ * before the call is recompiled before it is submitted.
+ *
+ * A block-compressed texture's levels are only ever written this way or
+ * by rbtrend_texture2d_update(), never generated; each level a sampler
+ * reaches must be written before it is sampled, as every level of every
+ * texture must.
+ *
+ * Every argument is checked before anything is staged, each its own check
+ * and message in parameter order (the levels in index order), after the
+ * texture's null and destroyed checks and Rend's overlap check on its
+ * instance, as rbtrend_texture2d_update(); a refused call records and
+ * stages nothing. The staging's size, each level's rows padded to the
+ * pitch and each copy's offset aligned, is worked out with overflow
+ * checked; no texture the device can make reaches the bound (its levels,
+ * padded, are under 2^46 bytes: 32768^2 texels of 16 bytes in 2048 layers
+ * is 2^45), so the check is a guard no input can trip.
+ *
+ * Unity's LoadRawTextureData and bgfx's createTexture2D take a whole chain
+ * the same way; rbtrend_texture2d_update() would take one staging and one
+ * transition per level and layer.
+ *
+ * One caller at a time with everything else of the instance, not
+ * overlapping a compile or submission of a list that uses the texture, as
+ * rbtrend_texture2d_update() (this header's "Threads").
+ *
+ * @param[in] texture     Texture to write. Never NULL.
+ * @param[in] queue       Queue the copies are submitted on: the instance's
+ *                        one queue, as for rbtrend_texture2d_update(). Never
+ *                        NULL.
+ * @param[in] base_mip    The first level written, 0 the largest. Below the
+ *                        texture's mip count.
+ * @param[in] base_layer  The first layer written. Below the texture's
+ *                        layer count.
+ * @param[in] layer_count How many layers, from @p base_layer: at least 1,
+ *                        and not past the texture's last layer.
+ * @param[in] levels      @p level_count levels' data, the first for
+ *                        @p base_mip. Read during the call only. Never
+ *                        NULL.
+ * @param[in] level_count How many levels: at least 1, and not past the
+ *                        texture's last level.
+ * @param[out] out_error  Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK if every copy was recorded; otherwise, checked in
+ *         this order (parameter order), each its own check and message:
+ *         RBT_RESULT_INVALID_ARGUMENT if @p texture is NULL (or destroyed,
+ *         in Debug), @p queue is NULL, @p queue is not the instance's,
+ *         @p base_mip doesn't exist, @p base_layer doesn't exist,
+ *         @p layer_count is 0, @p layer_count runs past the texture's
+ *         layers, @p levels is NULL, @p level_count is 0, or
+ *         @p level_count runs past the texture's levels (each range checked
+ *         by subtraction, so no sum wraps); RBT_RESULT_UNSUPPORTED if the
+ *         texture's format has no texel block; then, level by level in
+ *         index order, RBT_RESULT_INVALID_ARGUMENT if a level's `data` is
+ *         NULL or its `data_size` isn't its bytes times @p layer_count (the
+ *         message names the level and both sizes);
+ *         RBT_RESULT_OUT_OF_MEMORY if no staging can be had; or the code
+ *         for Carrottus GPU's result if a copy couldn't be staged or
+ *         recorded (a copy's refusal named by its level and layer).
+ */
+RBT_RESULT rbtrend_texture2d_update_levels(
+	rbtrend_texture2d texture,
+	crgpu_command_queue queue,
+	uint32_t base_mip,
+	uint32_t base_layer,
+	uint32_t layer_count,
+	const RBTREND_TEXTURE_LEVEL_DATA *levels,
+	uint32_t level_count,
 	RBTREND_ERROR *out_error);
 
 /**
@@ -300,6 +449,10 @@ RBT_RESULT rbtrend_texture2d_get_data(
  * For a texture whose base level is rendered in a command list, the same
  * passes are a command of that list: RBTREND_COMMAND_GENERATE_MIPS.
  *
+ * A block-compressed texture is refused (RBT_RESULT_UNSUPPORTED): no API
+ * renders into one. Its levels are each written, by
+ * rbtrend_texture2d_update_levels() or rbtrend_texture2d_update().
+ *
  * @param[in] texture  Texture to fill. Created with
  *                     RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE and
  *                     RBTREND_TEXTURE_USAGE_BIT_RENDER_TARGET, in a format
@@ -322,7 +475,8 @@ RBT_RESULT rbtrend_texture2d_get_data(
  *         @p queue is NULL, @p base_mip doesn't exist, @p filter is not a
  *         CRGPU_FILTER, the texture lacks a usage bit, or @p base_mip has
  *         not been written in some layer; RBT_RESULT_UNSUPPORTED if its
- *         format is not one of those above; RBT_RESULT_OUT_OF_MEMORY; or
+ *         format is block-compressed (checked before its usage bits), or
+ *         not one of those above; RBT_RESULT_OUT_OF_MEMORY; or
  *         another code if the passes couldn't be prepared or recorded.
  *         Nothing is recorded when an argument is refused. A failure while
  *         recording leaves the levels already recorded, and the rest as they
@@ -360,7 +514,8 @@ RBT_RESULT rbtrend_texture2d_generate_mips(
  *
  * @return RBT_RESULT_OK if the texture has the new size, including when it
  *         already had it; RBT_RESULT_INVALID_ARGUMENT if @p texture is NULL, a
- *         size is 0, a cube-capable texture would not be square, the new
+ *         size is 0, a block-compressed texture's new size isn't whole
+ *         blocks, a cube-capable texture would not be square, the new
  *         size can't hold an explicit mip count, or (Debug) a view is not
  *         destroyed; RBT_RESULT_OUT_OF_MEMORY; or the code for Carrottus GPU's
  *         result. On failure the texture is left exactly as it was.
@@ -415,6 +570,9 @@ typedef struct rbtrend_texture3d_t *rbtrend_texture3d;
  * @brief Creates a 3D texture, and a view of the whole of it that the texture
  * owns. Its contents are undefined until written.
  *
+ * A block-compressed format is refused (RBT_RESULT_UNSUPPORTED): Carrottus
+ * GPU makes block formats 2D only.
+ *
  * @param[in]  instance    Instance whose device the texture is created on.
  * @param[in]  desc        Texture configuration. Only read during the call.
  * @param[out] out_texture Receives the texture; NULL on failure.
@@ -422,7 +580,9 @@ typedef struct rbtrend_texture3d_t *rbtrend_texture3d;
  *
  * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT if @p instance, @p desc or
  *         @p out_texture is NULL, `width`, `height` or `depth` is 0, or
- *         `format` is CRGPU_FORMAT_UNKNOWN; the struct codes for
+ *         `format` is CRGPU_FORMAT_UNKNOWN; RBT_RESULT_UNSUPPORTED, after
+ *         the format's check, if `format` is block-compressed; the struct
+ *         codes for
  *         `desc->base`; RBT_RESULT_OUT_OF_MEMORY; or the code for Carrottus GPU's
  *         result if the image or its view can't be created.
  *

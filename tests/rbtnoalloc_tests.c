@@ -8,7 +8,8 @@
 //
 // A frame, per module: Rabbittus Audio's render (the audio callback) and update
 // with sounds playing and the limiter on; Rabbittus Math's ray casts against a
-// mesh's BVH; Rabbittus Jobs' reference pool running a task; Rabbittus Text laying the
+// mesh's BVH; Rabbittus Math's noise, every call and kind over 10,000
+// places, alone and split on a pool; Rabbittus Jobs' reference pool running a task; Rabbittus Text laying the
 // same label out again with a layout it keeps. Rend's frame needs a GPU:
 // ../rabbittustests measures it.
 //
@@ -18,6 +19,7 @@
 #include "audio/rbtaudio.h"
 #include "jobs/rbtjobs.h"
 #include "math/rbtmathbvh.h"
+#include "math/rbtmathnoise.h"
 #include "text/rbttext.h"
 #include <math.h>
 #include <stdbool.h>
@@ -719,6 +721,158 @@ static void test_bvh(void)
     free(boxes);
 }
 
+// ---- Rabbittus Math's noise -------------------------------------------------------------
+//
+// Every call and kind over 10,000 places, plain and split across a pool's
+// tasks: nothing allocates, on any path (rbtmathnoise.h, "Allocation").
+
+enum { NOISE_PLACES = 10000 };
+static double noise_places[NOISE_PLACES * 3];
+static double noise_moved[NOISE_PLACES * 3];
+static float noise_offsets[NOISE_PLACES * 3];
+static float noise_values[NOISE_PLACES];
+static float noise_gradients[NOISE_PLACES * 9];
+static uint32_t noise_ids[NOISE_PLACES * 2];
+static float noise_distances[NOISE_PLACES * 2];
+
+static RBTMATH_NOISE_DESC noise_desc(uint32_t dims, RBTMATH_NOISE_KIND kind, RBTMATH_NOISE_FRACTAL fractal)
+{
+    RBTMATH_NOISE_DESC d;
+    memset(&d, 0, sizeof(d));
+    d.base.type = RBT_STRUCT_TYPE_MATH_NOISE_DESC;
+    d.dimensions = dims;
+    d.kind = kind;
+    d.fractal = fractal;
+    d.seed = 7;
+    d.octaves = fractal == RBTMATH_NOISE_FRACTAL_SINGLE ? 1 : 6;
+    d.frequency = 0.01;
+    if (fractal != RBTMATH_NOISE_FRACTAL_SINGLE)
+    {
+        d.lacunarity = 2.0;
+        d.gain = 0.5f;
+    }
+    if (fractal == RBTMATH_NOISE_FRACTAL_RIDGED)
+        d.ridge_feedback = 2.0f;
+    if (fractal == RBTMATH_NOISE_FRACTAL_ERODED)
+        d.erosion = 1.0f;
+    if (kind == RBTMATH_NOISE_KIND_CELLULAR)
+    {
+        d.cell_distance = RBTMATH_NOISE_CELL_DISTANCE_EUCLIDEAN;
+        d.cell_return = RBTMATH_NOISE_CELL_RETURN_F2_MINUS_F1;
+        d.cell_jitter = 1.0f;
+    }
+    if (kind == RBTMATH_NOISE_KIND_SIMPLEX && dims == 3)
+        d.orientation = RBTMATH_NOISE_ORIENTATION_EVEN;
+    return d;
+}
+
+typedef struct noise_frame
+{
+    const RBTMATH_NOISE_DESC *desc;
+    int call;
+} noise_frame;
+
+// One call of the chosen kind over the items' range of places.
+static void noise_call(const RBTMATH_NOISE_DESC *d, int call, uint32_t first, uint32_t end)
+{
+    uint32_t n = end - first, dims = d->dimensions;
+    bool grads = d->fractal != RBTMATH_NOISE_FRACTAL_ERODED;
+    if (call == 0)
+        rbtmath_noise_compute_points(d, noise_places + (size_t)first * dims, n, noise_values + first,
+                                     grads ? noise_gradients + (size_t)first * dims : NULL, NULL);
+    else if (call == 1)
+    {
+        double origin[3] = {1e6, -2e5, 3e4};
+        rbtmath_noise_compute_offsets(d, origin, noise_offsets + (size_t)first * dims, n, noise_values + first,
+                                      grads ? noise_gradients + (size_t)first * dims : NULL, NULL);
+    }
+    else if (call == 2)
+    {
+        RBTMATH_NOISE_WARP_DESC w;
+        memset(&w, 0, sizeof(w));
+        w.base.type = RBT_STRUCT_TYPE_MATH_NOISE_WARP_DESC;
+        w.field = d;
+        w.amplitude = 4.0;
+        rbtmath_noise_warp_points(&w, noise_places + (size_t)first * dims, n, noise_moved + (size_t)first * dims,
+                                  grads ? noise_gradients + (size_t)first * dims * dims : NULL, NULL);
+    }
+}
+
+static void noise_task(uint32_t first, uint32_t end, uint32_t worker, void *data)
+{
+    (void)worker;
+    noise_frame *f = (noise_frame *)data;
+    noise_call(f->desc, f->call, first, end);
+}
+
+static void test_noise(void)
+{
+    for (int i = 0; i < NOISE_PLACES * 3; i++)
+    {
+        noise_places[i] = (double)((i * 7919) % 20011) * 0.37 - 3700.0;
+        noise_offsets[i] = (float)noise_places[i];
+    }
+    RBTJOBS_POOL_DESC pd;
+    memset(&pd, 0, sizeof(pd));
+    pd.base.type = RBT_STRUCT_TYPE_JOBS_POOL_DESC;
+    pd.thread_count = 2;
+    pd.max_tasks = 4;
+    rbtjobs_pool pool = NULL;
+    CHECK(rbtjobs_pool_create(&pd, &pool, NULL) == RBT_RESULT_OK);
+    if (!pool)
+        return;
+    RBTJOBS_SCHEDULER scheduler;
+    memset(&scheduler, 0, sizeof(scheduler));
+    scheduler.base.type = RBT_STRUCT_TYPE_JOBS_SCHEDULER;
+    CHECK(rbtjobs_pool_get_scheduler(pool, &scheduler) == RBT_RESULT_OK);
+    static const char *kinds[] = {"", "gradient", "simplex", "cellular"};
+    static const char *calls[] = {"points", "offsets", "a warp"};
+    for (uint32_t dims = 2; dims <= 3; dims++)
+        for (int kind = 1; kind <= 3; kind++)
+            for (int fractal = 1; fractal <= 4; fractal++)
+            {
+                if (kind == RBTMATH_NOISE_KIND_CELLULAR && fractal > RBTMATH_NOISE_FRACTAL_FBM)
+                    continue;
+                RBTMATH_NOISE_DESC d = noise_desc(dims, (RBTMATH_NOISE_KIND)kind, (RBTMATH_NOISE_FRACTAL)fractal);
+                for (int call = 0; call < 3; call++)
+                    for (int pooled = 0; pooled < 2; pooled++)
+                    {
+                        noise_frame frame = {&d, call};
+                        start_counting();
+                        for (int f = 0; f < 4; f++)
+                        {
+                            if (pooled)
+                                rbtjobs_run(&scheduler, noise_task, NOISE_PLACES, 512, &frame);
+                            else
+                                noise_call(&d, call, 0, NOISE_PLACES);
+                        }
+                        stop_counting();
+                        char what[160];
+                        snprintf(what, sizeof(what), "Rabbittus Math's noise, %uD %s fractal %d, %s over 10,000 places%s", dims,
+                                 kinds[kind], fractal, calls[call], pooled ? " on a pool" : "");
+                        report(what);
+                    }
+            }
+    // The grid and the nearest cells.
+    RBTMATH_NOISE_DESC d = noise_desc(2, RBTMATH_NOISE_KIND_GRADIENT, RBTMATH_NOISE_FRACTAL_FBM);
+    RBTMATH_NOISE_GRID grid;
+    memset(&grid, 0, sizeof(grid));
+    grid.step[0] = grid.step[1] = 0.5;
+    grid.count[0] = grid.count[1] = 100;
+    grid.count[2] = 1;
+    RBTMATH_NOISE_DESC c = noise_desc(3, RBTMATH_NOISE_KIND_CELLULAR, RBTMATH_NOISE_FRACTAL_SINGLE);
+    c.cell_return = RBTMATH_NOISE_CELL_RETURN_UNKNOWN;
+    start_counting();
+    for (int f = 0; f < 4; f++)
+    {
+        rbtmath_noise_compute_grid(&d, &grid, noise_values, noise_gradients, NULL);
+        rbtmath_noise_compute_nearest_cells(&c, noise_places, NOISE_PLACES, noise_distances, noise_ids, noise_gradients, NULL);
+    }
+    stop_counting();
+    report("Rabbittus Math's noise, a 100 x 100 grid and 10,000 places' nearest cells");
+    rbtjobs_pool_destroy(pool);
+}
+
 // ---- Rabbittus Jobs ----------------------------------------------------------------------
 
 static void sum_task(uint32_t first, uint32_t end, uint32_t worker, void *data)
@@ -907,6 +1061,7 @@ int main(int argc, char **argv)
     test_audio_streams(argc > 2 ? argv[2] : NULL);
     test_audio_spatial();
     test_bvh();
+    test_noise();
     test_jobs();
     test_job_groups();
     test_text(argc > 1 ? argv[1] : NULL);

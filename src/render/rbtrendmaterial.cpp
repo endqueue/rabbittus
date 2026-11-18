@@ -122,6 +122,8 @@ rbtrend_material_t::~rbtrend_material_t() {
 	// GPU done with whatever was submitted while the material lived, so the
 	// ranges go straight back.
 	rbtrend_binding_set_destroy(this->set);
+	for (uint32_t i = 0; i < this->spare_count; ++i)
+		rbtrend_binding_set_destroy(this->spare_sets[i]);
 	// A lit material's entry in the lit-material table, its generation
 	// advanced (D4).
 	rbtrend_rt_lit_give(this->instance, this->rt_lit_slot);
@@ -244,6 +246,48 @@ static RBT_RESULT rbtrend_material_own_block(
 	return RBT_RESULT_OK;
 }
 
+/* The material's set changed to its entries as they are now (card L79):
+ * a spare the GPU is done with rewritten in place and taken, the set held
+ * until now becoming a spare at the serial everything submitted so far has
+ * taken; while it has fewer spares than frames in flight and one, a new
+ * set; past that, the set built again (rbtrend_binding_set_update), as
+ * every change was before. Lists compiled with the set let go of are stale
+ * either way (rbtrend_instance_forget), so none submitted later reads it. */
+static bool rbtrend_material_change_set(rbtrend_material material) {
+	rbtrend_instance instance = material->instance;
+	const uint64_t submitted  = instance->submit_serial.load();
+	// 0 if it can't be read: no spare is taken.
+	const uint64_t completed = crgpu_fence_get_value(instance->frame_fence);
+	for (uint32_t i = 0; i < material->spare_count; ++i) {
+		if (material->spare_serials[i] > completed)
+			continue;
+		// A spare of another shape (a buffer of per-frame copies put in or
+		// taken out): built anew below.
+		if (!rbtrend_binding_set_rewrite(material->spare_sets[i], material->entries, material->entry_count))
+			break;
+		rbtrend_binding_set held   = material->set;
+		material->set              = material->spare_sets[i];
+		material->spare_sets[i]    = held;
+		material->spare_serials[i] = submitted;
+		rbtrend_instance_forget(instance, held);
+		return true;
+	}
+	const uint32_t room = sizeof(material->spare_sets) / sizeof(material->spare_sets[0]);
+	if (material->spare_count < room) {
+		rbtrend_binding_set fresh = nullptr;
+		(void)rbtrend_binding_set_create(material->layout, material->entries, material->entry_count, &fresh, nullptr);
+		if (!fresh)
+			return false;
+		material->spare_sets[material->spare_count]    = material->set;
+		material->spare_serials[material->spare_count] = submitted;
+		++material->spare_count;
+		rbtrend_instance_forget(instance, material->set);
+		material->set = fresh;
+		return true;
+	}
+	return rbtrend_binding_set_update(material->set, material->entries, material->entry_count, nullptr) == RBT_RESULT_OK;
+}
+
 bool rbtrend_material_prepare(rbtrend_material material) {
 	const rbtrend_material_slot *empty = nullptr;
 	uint32_t element                  = 0;
@@ -264,9 +308,9 @@ bool rbtrend_material_prepare(rbtrend_material material) {
 	}
 	if (!material->resources_changed)
 		return true;
-	// Every element, changed or not: what the set was built from is the
+	// Every element, changed or not: what the set is written from is the
 	// material's entries, so this is the set as the material holds it now.
-	if (!(rbtrend_binding_set_update(material->set, material->entries, material->entry_count, nullptr) == RBT_RESULT_OK)) {
+	if (!rbtrend_material_change_set(material)) {
 		rbtrend_report(material->instance, RBT_RESULT_REND_GPU_FAILURE, "SET_MATERIAL: the material's binding set can't be built again");
 		return false;
 	}

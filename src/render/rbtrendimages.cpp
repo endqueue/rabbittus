@@ -270,38 +270,146 @@ rbtrend_sampler_t::~rbtrend_sampler_t() {
 		crgpu_sampler_destroy(this->sampler);
 }
 
-/* The bytes of a texel of [format], for an update or a readback: 0 for a
- * format with no whole number of them (a block-compressed one, or one with
- * no known size), which has no update or readback path. */
-static uint32_t rbtrend_texel_bytes(CRGPU_FORMAT format) {
-	const uint32_t bits = crgpu_format_get_bit_count(format);
-	if (bits == 0 || bits % 8 != 0)
-		return 0;
-	return bits / 8;
+/* A format's texel block (crgpu_format_get_texel_block()): the unit an image
+ * of it is copied in, a block-compressed format's compression block or one
+ * texel of an uncompressed format's bytes. */
+struct rbtrend_texel_block {
+	uint32_t width{1};
+	uint32_t height{1};
+	uint32_t bytes{0};
+};
+
+/* [format]'s block into [out]; false for a format with none
+ * (CRGPU_FORMAT_UNKNOWN, R1_UNORM, the planar formats), which no copy
+ * takes. */
+static bool rbtrend_format_texel_block(
+	CRGPU_FORMAT format,
+	rbtrend_texel_block *out) {
+	rbtrend_texel_block block{};
+	if (CR_FAILED(crgpu_format_get_texel_block(format, &block.width, &block.height, &block.bytes)))
+		return false;
+	*out = block;
+	return true;
+}
+
+/* How many blocks of [block] [texels] texels take, the last perhaps in part. */
+static inline uint32_t rbtrend_blocks_across(
+	uint32_t texels,
+	uint32_t block) {
+	return texels / block + (texels % block != 0 ? 1u : 0u);
+}
+
+/* The bytes of one layer of level [level] of a [width] by [height] image:
+ * its rows of blocks, tightly packed. Under 2^35 for any image the device
+ * can make (32768^2 texels of 16 bytes is 2^34), so it can't overflow. */
+static uint64_t rbtrend_level_bytes(
+	const rbtrend_texel_block &block,
+	uint32_t width,
+	uint32_t height,
+	uint32_t level) {
+	return (uint64_t)rbtrend_blocks_across(rbtrend_mip_size(width, level), block.width) * rbtrend_blocks_across(rbtrend_mip_size(height, level), block.height) *
+		   block.bytes;
+}
+
+static uint64_t rbtrend_gcd_u64(
+	uint64_t a,
+	uint64_t b) {
+	while (b != 0) {
+		const uint64_t t = a % b;
+		a                = b;
+		b                = t;
+	}
+	return a;
+}
+
+/* What a staged row's pitch is a multiple of, for copies to and from
+ * [image] of [block]: the least common multiple of the block's bytes and
+ * the image's row pitch alignment (crgpu_image_get_buffer_copy_row_pitch_alignment()),
+ * so the pitch is whole blocks (the row length a copy takes,
+ * pitch / bytes * block width texels, is whole) and meets the alignment. The
+ * block's bytes on Vulkan and Metal, where a tight row is taken; a multiple
+ * of 256 on D3D12. */
+static RBT_RESULT rbtrend_row_pitch_step(
+	crgpu_image image,
+	const rbtrend_texel_block &block,
+	uint64_t *out_step,
+	RBTREND_ERROR *error) {
+	uint64_t alignment = 0;
+	const CR_RESULT sr = crgpu_image_get_buffer_copy_row_pitch_alignment(image, &alignment);
+	if (CR_FAILED(sr))
+		return rbtrend_fail_cr(error, sr, "reading the image's copy row pitch alignment failed");
+	if (alignment == 0)
+		alignment = 1;
+	*out_step = block.bytes / rbtrend_gcd_u64(block.bytes, alignment) * alignment;
+	return RBT_RESULT_OK;
+}
+
+/* [row_bytes] rounded up to a multiple of [step]. Never overflows: a row is
+ * under 2^20 bytes (32768 texels of 16 bytes) and a step under 2^12. */
+static inline uint64_t rbtrend_row_pitch(
+	uint64_t row_bytes,
+	uint64_t step) {
+	return (row_bytes + step - 1) / step * step;
+}
+
+/* [a] + [b], or false if it would pass 2^64. */
+static inline bool rbtrend_add_u64(
+	uint64_t a,
+	uint64_t b,
+	uint64_t *out) {
+	if (b > UINT64_MAX - a)
+		return false;
+	*out = a + b;
+	return true;
+}
+
+/* [a] * [b], or false if it would pass 2^64. */
+static inline bool rbtrend_mul_u64(
+	uint64_t a,
+	uint64_t b,
+	uint64_t *out) {
+	if (a != 0 && b > UINT64_MAX / a)
+		return false;
+	*out = a * b;
+	return true;
+}
+
+/* [value] rounded up to a multiple of [alignment], or false if it would
+ * pass 2^64. */
+static inline bool rbtrend_align_up_u64(
+	uint64_t value,
+	uint64_t alignment,
+	uint64_t *out) {
+	const uint64_t rest = value % alignment;
+	if (rest == 0) {
+		*out = value;
+		return true;
+	}
+	return rbtrend_add_u64(value, alignment - rest, out);
 }
 
 /* What an update or a readback of a region checks, past the handle, in the
  * order of their parameters: a queue, a level and a layer that exist, a
- * region inside the level, a format with whole bytes to a texel, and the
- * caller's memory, [data_size] bytes at [data], the region's bytes exactly.
- * [mip_*] is the texture's size, [layers] its layer count (1 for 3D). The
- * region's bytes, tightly packed, go to [out_texel_bytes] and
- * [out_region_bytes]. */
+ * region inside the level, a format with a texel block, a region on the
+ * block (its offsets multiples of the block's sides, its width and height
+ * multiples of them or reaching the level's edges), and the caller's
+ * memory, [data_size] bytes at [data], the region's blocks exactly.
+ * [size] is the texture's level 0, [layers] its layer count (1 for 3D).
+ * The block goes to [out_block]. */
 static RBT_RESULT rbtrend_texture_region_valid(
-    crgpu_command_queue queue,
-    uint32_t mip_levels,
-    uint32_t layers,
-    uint32_t mip_level,
-    uint32_t array_layer,
-    const uint32_t size[3],
-    const uint32_t offset[3],
-    const uint32_t extent[3],
-    CRGPU_FORMAT format,
-    const void *data,
-    uint64_t data_size,
-    uint32_t *out_texel_bytes,
-    uint64_t *out_region_bytes,
-    RBTREND_ERROR *error) {
+	crgpu_command_queue queue,
+	uint32_t mip_levels,
+	uint32_t layers,
+	uint32_t mip_level,
+	uint32_t array_layer,
+	const uint32_t size[3],
+	const uint32_t offset[3],
+	const uint32_t extent[3],
+	CRGPU_FORMAT format,
+	const void *data,
+	uint64_t data_size,
+	rbtrend_texel_block *out_block,
+	RBTREND_ERROR *error) {
 	static const char axis[3][7] = {"width", "height", "depth"};
 	static const char off[3][9]  = {"x_offset", "y_offset", "z_offset"};
 	if (!queue)
@@ -325,105 +433,183 @@ static RBT_RESULT rbtrend_texture_region_valid(
 			return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "%s %u from %s %u runs past the level's %s of %u", axis[i], extent[i], off[i], offset[i],
 			                   axis[i], level);
 	}
-	const uint32_t texel_bytes = rbtrend_texel_bytes(format);
-	if (texel_bytes == 0)
-		return rbtrend_fail(error, RBT_RESULT_UNSUPPORTED, "format %d has no whole number of bytes to a texel; a block-compressed format has no update or readback path",
-		                   (int)format);
+	rbtrend_texel_block block{};
+	if (!rbtrend_format_texel_block(format, &block))
+		return rbtrend_fail(error, RBT_RESULT_UNSUPPORTED, "format %d has no texel block", (int)format);
+	// On the block: a block is 1 deep, so only width and height have a rule.
+	static const char side[2][7] = {"width", "height"};
+	const uint32_t block_side[2] = {block.width, block.height};
+	for (int i = 0; i < 2; ++i) {
+		if (offset[i] % block_side[i] != 0)
+			return rbtrend_fail(
+				error, RBT_RESULT_INVALID_ARGUMENT, "%s %u isn't a multiple of the format's block %s of %u", off[i], offset[i], side[i], block_side[i]);
+	}
+	for (int i = 0; i < 2; ++i) {
+		const uint32_t level = rbtrend_mip_size(size[i], mip_level);
+		if (extent[i] % block_side[i] == 0)
+			continue;
+		if (extent[i] != level - offset[i])
+			return rbtrend_fail(
+				error, RBT_RESULT_INVALID_ARGUMENT, "%s %u from %s %u is neither a multiple of the format's block %s of %u nor reaches the level's %s of %u",
+				axis[i], extent[i], off[i], offset[i], side[i], block_side[i], axis[i], level);
+	}
 	if (!data)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "data is NULL");
-	const uint64_t region_bytes = (uint64_t)extent[0] * extent[1] * extent[2] * texel_bytes;
+	const uint64_t region_bytes =
+		(uint64_t)rbtrend_blocks_across(extent[0], block.width) * rbtrend_blocks_across(extent[1], block.height) * extent[2] * block.bytes;
 	if (data_size != region_bytes)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "data_size is %llu, and the region is %llu bytes", (unsigned long long)data_size,
 		                   (unsigned long long)region_bytes);
-	*out_texel_bytes  = texel_bytes;
-	*out_region_bytes = region_bytes;
+	*out_block = block;
 	return RBT_RESULT_OK;
 }
 
+/* How a region's rows of blocks are laid out: [rows] rows of [tight_row]
+ * bytes in the caller's memory, [pitch] apart in staging, [depth] slices of
+ * them. */
+struct rbtrend_region_layout {
+	uint64_t tight_row{0};
+	uint64_t pitch{0};
+	uint32_t rows{0};
+	uint32_t depth{1};
+};
+
+static RBT_RESULT rbtrend_region_layout_make(
+	crgpu_image image,
+	const rbtrend_texel_block &block,
+	const uint32_t extent[3],
+	rbtrend_region_layout *out,
+	RBTREND_ERROR *error) {
+	uint64_t step = 0;
+	if (const RBT_RESULT result = rbtrend_row_pitch_step(image, block, &step, error))
+		return result;
+	out->tight_row = (uint64_t)rbtrend_blocks_across(extent[0], block.width) * block.bytes;
+	out->pitch     = rbtrend_row_pitch(out->tight_row, step);
+	out->rows      = rbtrend_blocks_across(extent[1], block.height);
+	out->depth     = extent[2];
+	return RBT_RESULT_OK;
+}
+
+/* The copy of a region [layout] lays out, from [buffer_offset]. A 3D
+ * texture's slices are given their height ([three_d]); a 2D one's 0, its
+ * rows of blocks. */
+static crgpu_image_buffer_copy_desc rbtrend_region_copy(
+	const rbtrend_texel_block &block,
+	const rbtrend_region_layout &layout,
+	bool three_d,
+	uint64_t buffer_offset,
+	uint32_t mip_level,
+	uint32_t array_layer,
+	const uint32_t offset[3],
+	const uint32_t extent[3]) {
+	crgpu_image_buffer_copy_desc copy_desc{};
+	copy_desc.buffer_offset       = buffer_offset;
+	copy_desc.mip_level           = mip_level;
+	copy_desc.base_array_layer    = array_layer;
+	copy_desc.array_layer_count   = 1;
+	copy_desc.buffer_row_length   = (uint32_t)(layout.pitch / block.bytes * block.width);
+	copy_desc.buffer_image_height = three_d ? layout.rows * block.height : 0;
+	copy_desc.image_x             = offset[0];
+	copy_desc.image_y             = offset[1];
+	copy_desc.image_z             = offset[2];
+	copy_desc.width               = extent[0];
+	copy_desc.height              = extent[1];
+	copy_desc.depth               = extent[2];
+	return copy_desc;
+}
+
+/* Copies [layout]'s rows from [src], tight, to [dst], [layout].pitch apart
+ * (or the other way, [to_staging] false): one copy when the pitch is the
+ * tight row's. */
+static void rbtrend_region_repack(
+	const rbtrend_region_layout &layout,
+	uint8_t *staging,
+	uint8_t *caller,
+	bool to_staging) {
+	const uint64_t rows = (uint64_t)layout.rows * layout.depth;
+	if (layout.pitch == layout.tight_row) {
+		if (to_staging)
+			memcpy(staging, caller, (size_t)(rows * layout.tight_row));
+		else
+			memcpy(caller, staging, (size_t)(rows * layout.tight_row));
+		return;
+	}
+	for (uint64_t row = 0; row < rows; ++row) {
+		if (to_staging)
+			memcpy(staging + row * layout.pitch, caller + row * layout.tight_row, (size_t)layout.tight_row);
+		else
+			memcpy(caller + row * layout.tight_row, staging + row * layout.pitch, (size_t)layout.tight_row);
+	}
+}
+
 /* Writes a region of [texture]'s [image] from the caller's tightly packed
- * texels: staged with the backend's row pitch, then a copy recorded into the
- * frame's batch. A 2D texture has [extent][2] 1; a 3D one ([three_d])
- * [array_layer] 0, and its slices' height given to the copy. */
+ * rows of blocks: staged at the row pitch the copy takes, then a copy
+ * recorded into the frame's batch, its result read. A 2D texture has
+ * [extent][2] 1; a 3D one ([three_d]) [array_layer] 0, and its slices'
+ * height given to the copy. */
 template <typename Texture>
 static RBT_RESULT rbtrend_texture_upload(
-    Texture *texture,
-    bool three_d,
-    crgpu_command_queue queue,
-    uint32_t mip_level,
-    uint32_t array_layer,
-    const uint32_t offset[3],
-    const uint32_t extent[3],
-    uint32_t texel_bytes,
-    const void *data,
-    RBTREND_ERROR *error) {
-	const uint32_t tight_row_pitch   = extent[0] * texel_bytes;
-	const uint64_t tight_slice_pitch = (uint64_t)tight_row_pitch * extent[1];
-	// D3D12 requires the buffer-side row pitch to be 256-byte aligned; Vulkan
-	// doesn't care. Query the backend's actual required pitch rather than
-	// assuming tightly-packed rows work everywhere. Between depth slices the
-	// stride in the staging is whatever row pitch was used.
-	uint64_t aligned_row_pitch = 0, unused_full_mip_size = 0;
-	crgpu_image_get_buffer_copy_size(texture->image, mip_level, &aligned_row_pitch, &unused_full_mip_size);
-	const uint64_t aligned_slice_pitch = aligned_row_pitch * extent[1];
-	const uint64_t region_size         = aligned_slice_pitch * extent[2];
+	Texture *texture,
+	bool three_d,
+	crgpu_command_queue queue,
+	uint32_t mip_level,
+	uint32_t array_layer,
+	const uint32_t offset[3],
+	const uint32_t extent[3],
+	const rbtrend_texel_block &block,
+	const void *data,
+	RBTREND_ERROR *error) {
+	rbtrend_region_layout layout{};
+	if (const RBT_RESULT result = rbtrend_region_layout_make(texture->image, block, extent, &layout, error))
+		return result;
+	const uint64_t region_size = layout.pitch * layout.rows * layout.depth;
 
 	rbtrend_upload_staging staging{};
 	if (const RBT_RESULT result = rbtrend_upload_staging_begin(texture->instance, texture->image, region_size, &staging, error))
 		return result;
-	// Re-pack the caller's tightly-packed rows into the backend's (possibly padded) row pitch.
-	const uint8_t *src = (const uint8_t *)data;
-	for (uint32_t z = 0; z < extent[2]; ++z)
-		for (uint32_t row = 0; row < extent[1]; ++row)
-			memcpy(staging.data + z * aligned_slice_pitch + row * aligned_row_pitch, src + z * tight_slice_pitch + row * tight_row_pitch, tight_row_pitch);
+	rbtrend_region_repack(layout, staging.data, (uint8_t *)data, true);
 	rbtrend_upload_staging_end(&staging);
 
-	const uint32_t buffer_row_length_texels = (uint32_t)(aligned_row_pitch / texel_bytes);
-
 	// Recorded into the upload batch and not waited for: the copy runs ahead
-	// of anything submitted after it.
-	const RBT_RESULT result = rbtrend_immediate_on_texture(texture, queue, false, mip_level, array_layer, CRGPU_IMAGE_LAYOUT_TRANSFER_DST,
-	                                                    rbtrend_texture_upload_rest_layout(texture->desc.usage), error, [&](crgpu_command_list cmd) {
-		                                                    crgpu_image_buffer_copy_desc copy_desc{};
-		                                                    copy_desc.buffer_offset       = staging.offset;
-		                                                    copy_desc.mip_level           = mip_level;
-		                                                    copy_desc.base_array_layer    = array_layer;
-		                                                    copy_desc.array_layer_count   = 1;
-		                                                    copy_desc.buffer_row_length   = buffer_row_length_texels;
-		                                                    copy_desc.buffer_image_height = three_d ? extent[1] : 0;
-		                                                    copy_desc.image_x             = offset[0];
-		                                                    copy_desc.image_y             = offset[1];
-		                                                    copy_desc.image_z             = offset[2];
-		                                                    copy_desc.width               = extent[0];
-		                                                    copy_desc.height              = extent[1];
-		                                                    copy_desc.depth               = extent[2];
-		                                                    crgpu_command_list_copy_buffer_to_image(cmd, staging.buffer, texture->image, &copy_desc);
-	                                                    });
+	// of anything submitted after it. A refused copy records nothing; the
+	// barriers round it are recorded all the same, so the batch stays
+	// balanced.
+	CR_RESULT copied        = CR_SUCCESS;
+	const RBT_RESULT result = rbtrend_immediate_on_texture(
+		texture, queue, false, mip_level, array_layer, CRGPU_IMAGE_LAYOUT_TRANSFER_DST, rbtrend_texture_upload_rest_layout(texture->desc.usage), error,
+		[&](crgpu_command_list cmd) {
+			const crgpu_image_buffer_copy_desc copy_desc = rbtrend_region_copy(block, layout, three_d, staging.offset, mip_level, array_layer, offset, extent);
+			copied                                       = crgpu_command_list_copy_buffer_to_image(cmd, staging.buffer, texture->image, &copy_desc);
+		});
 
 	rbtrend_upload_staging_release(texture->instance, &staging);
-	return result;
+	if (result != RBT_RESULT_OK)
+		return result;
+	if (CR_FAILED(copied))
+		return rbtrend_fail_cr(error, copied, "copying level %u of layer %u failed", mip_level, array_layer);
+	return RBT_RESULT_OK;
 }
 
-/* Reads a region of [texture]'s [image] back into the caller's memory,
- * tightly packed: a copy recorded into the frame's batch, which is then
- * submitted and waited for. As rbtrend_texture_upload for the region. */
+/* Reads a region of [texture]'s [image] back into the caller's memory, its
+ * rows of blocks tightly packed: a copy recorded into the frame's batch,
+ * which is then submitted and waited for if the copy was recorded. As
+ * rbtrend_texture_upload for the region. */
 template <typename Texture>
 static RBT_RESULT rbtrend_texture_readback(
-    Texture *texture,
-    bool three_d,
-    crgpu_command_queue queue,
-    uint32_t mip_level,
-    uint32_t array_layer,
-    const uint32_t offset[3],
-    const uint32_t extent[3],
-    uint32_t texel_bytes,
-    void *out_data,
-    RBTREND_ERROR *error) {
-	const uint32_t tight_row_pitch   = extent[0] * texel_bytes;
-	const uint64_t tight_slice_pitch = (uint64_t)tight_row_pitch * extent[1];
-	uint64_t aligned_row_pitch = 0, unused_full_mip_size = 0;
-	crgpu_image_get_buffer_copy_size(texture->image, mip_level, &aligned_row_pitch, &unused_full_mip_size);
-	const uint64_t aligned_slice_pitch = aligned_row_pitch * extent[1];
-	const uint64_t region_size         = aligned_slice_pitch * extent[2];
+	Texture *texture,
+	bool three_d,
+	crgpu_command_queue queue,
+	uint32_t mip_level,
+	uint32_t array_layer,
+	const uint32_t offset[3],
+	const uint32_t extent[3],
+	const rbtrend_texel_block &block,
+	void *out_data,
+	RBTREND_ERROR *error) {
+	rbtrend_region_layout layout{};
+	if (const RBT_RESULT result = rbtrend_region_layout_make(texture->image, block, extent, &layout, error))
+		return result;
+	const uint64_t region_size = layout.pitch * layout.rows * layout.depth;
 
 	// A failed copy may still run with a later submission, so its buffer is
 	// then retired: the room for that is taken first.
@@ -441,28 +627,20 @@ static RBT_RESULT rbtrend_texture_readback(
 		return rbtrend_fail_cr(error, sr, "creating a readback buffer of %llu bytes failed", (unsigned long long)region_size);
 	}
 
-	const uint32_t buffer_row_length_texels = (uint32_t)(aligned_row_pitch / texel_bytes);
-
-	// Recorded into the upload batch, which is then submitted and waited
-	// for: the caller reads what the copy wrote.
-	const RBT_RESULT result = rbtrend_immediate_on_texture(texture, queue, true, mip_level, array_layer, CRGPU_IMAGE_LAYOUT_TRANSFER_SRC,
-	                                                    CRGPU_IMAGE_LAYOUT_TRANSFER_SRC, error, [&](crgpu_command_list cmd) {
-		                                                    crgpu_image_buffer_copy_desc copy_desc{};
-		                                                    copy_desc.mip_level           = mip_level;
-		                                                    copy_desc.base_array_layer    = array_layer;
-		                                                    copy_desc.array_layer_count   = 1;
-		                                                    copy_desc.buffer_row_length   = buffer_row_length_texels;
-		                                                    copy_desc.buffer_image_height = three_d ? extent[1] : 0;
-		                                                    copy_desc.image_x             = offset[0];
-		                                                    copy_desc.image_y             = offset[1];
-		                                                    copy_desc.image_z             = offset[2];
-		                                                    copy_desc.width               = extent[0];
-		                                                    copy_desc.height              = extent[1];
-		                                                    copy_desc.depth               = extent[2];
-		                                                    crgpu_command_list_copy_image_to_buffer(cmd, texture->image, staging_buffer, &copy_desc);
-	                                                    });
+	// Recorded into the upload batch; waited for only once the copy is
+	// recorded, since the caller reads what it wrote.
+	CR_RESULT copied  = CR_SUCCESS;
+	RBT_RESULT result = rbtrend_immediate_on_texture(
+		texture, queue, false, mip_level, array_layer, CRGPU_IMAGE_LAYOUT_TRANSFER_SRC, CRGPU_IMAGE_LAYOUT_TRANSFER_SRC, error, [&](crgpu_command_list cmd) {
+			const crgpu_image_buffer_copy_desc copy_desc = rbtrend_region_copy(block, layout, three_d, 0, mip_level, array_layer, offset, extent);
+			copied                                       = crgpu_command_list_copy_image_to_buffer(cmd, texture->image, staging_buffer, &copy_desc);
+		});
+	if (result == RBT_RESULT_OK && CR_FAILED(copied))
+		result = rbtrend_fail_cr(error, copied, "copying level %u of layer %u back failed", mip_level, array_layer);
+	if (result == RBT_RESULT_OK)
+		result = rbtrend_wait_immediate(texture->instance, error);
 	if (result != RBT_RESULT_OK) {
-		// The copy may be recorded and still run with a later submission.
+		// What was recorded may still run with a later submission.
 		rbtrend_instance_retire(texture->instance, staging_buffer, &rbtrend_release_crgpu_buffer);
 		return result;
 	}
@@ -475,13 +653,7 @@ static RBT_RESULT rbtrend_texture_readback(
 		return rbtrend_fail_cr(error, sr, "mapping the readback buffer failed");
 	}
 	crgpu_buffer_invalidate(staging_buffer, 0, region_size);
-
-	// Unpack rows from the backend's (possibly padded) pitch into the caller's tightly-packed destination.
-	const uint8_t *src = (const uint8_t *)mapped;
-	uint8_t *dst       = (uint8_t *)out_data;
-	for (uint32_t z = 0; z < extent[2]; ++z)
-		for (uint32_t row = 0; row < extent[1]; ++row)
-			memcpy(dst + z * tight_slice_pitch + row * tight_row_pitch, src + z * aligned_slice_pitch + row * aligned_row_pitch, tight_row_pitch);
+	rbtrend_region_repack(layout, (uint8_t *)mapped, (uint8_t *)out_data, false);
 	crgpu_buffer_unmap(staging_buffer);
 
 	crgpu_buffer_destroy(staging_buffer);
@@ -512,6 +684,30 @@ RBT_RESULT rbtrend_texture2d_create(
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "height is 0");
 	if (desc->format == CRGPU_FORMAT_UNKNOWN)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "format is CRGPU_FORMAT_UNKNOWN");
+	// A block-compressed format: Rend's own refusals of what Carrottus GPU
+	// would refuse, so the message names the caller's field.
+	if (const CRGPU_FEATURES block_feature = rbtrend_block_format_feature(desc->format)) {
+		if (!(instance->features & block_feature))
+			return rbtrend_fail(
+				out_error, RBT_RESULT_UNSUPPORTED, "format %d needs %s, which the instance's device was created without", (int)desc->format,
+				block_feature == CRGPU_FEATURE_TEXTURE_COMPRESSION_BC ? "CRGPU_FEATURE_TEXTURE_COMPRESSION_BC" : "CRGPU_FEATURE_TEXTURE_COMPRESSION_ASTC_LDR");
+		if (desc->usage != RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE)
+			return rbtrend_fail(
+				out_error, RBT_RESULT_INVALID_ARGUMENT,
+				"format %d is block-compressed, and usage is %u: a block-compressed texture's only usage is RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE",
+				(int)desc->format, (unsigned)desc->usage);
+		rbtrend_texel_block block{};
+		if (!rbtrend_format_texel_block(desc->format, &block))
+			return rbtrend_fail(out_error, RBT_RESULT_UNSUPPORTED, "format %d has no texel block", (int)desc->format);
+		if (desc->width % block.width != 0)
+			return rbtrend_fail(
+				out_error, RBT_RESULT_INVALID_ARGUMENT, "width %u isn't a whole number of format %d's blocks, %u texels wide", desc->width, (int)desc->format,
+				block.width);
+		if (desc->height % block.height != 0)
+			return rbtrend_fail(
+				out_error, RBT_RESULT_INVALID_ARGUMENT, "height %u isn't a whole number of format %d's blocks, %u texels tall", desc->height, (int)desc->format,
+				block.height);
+	}
 	if (desc->sample_count > 1)
 		return rbtrend_fail(out_error, RBT_RESULT_UNSUPPORTED, "sample_count is %u, and MSAA is not supported yet", desc->sample_count);
 	if (desc->cube_capable && desc->width != desc->height)
@@ -629,12 +825,12 @@ RBT_RESULT rbtrend_texture2d_update(
 	const uint32_t size[3]   = {texture->desc.width, texture->desc.height, 1};
 	const uint32_t offset[3] = {x_offset, y_offset, 0};
 	const uint32_t extent[3] = {width, height, 1};
-	uint32_t texel_bytes     = 0;
-	uint64_t region_bytes    = 0;
-	if (const RBT_RESULT result = rbtrend_texture_region_valid(queue, texture->desc.mip_levels, texture->desc.array_layers, mip_level, array_layer, size, offset,
-	                                                        extent, texture->desc.format, data, data_size, &texel_bytes, &region_bytes, out_error))
+	rbtrend_texel_block block{};
+	if (const RBT_RESULT result = rbtrend_texture_region_valid(
+			queue, texture->desc.mip_levels, texture->desc.array_layers, mip_level, array_layer, size, offset, extent, texture->desc.format, data, data_size,
+			&block, out_error))
 		return result;
-	return rbtrend_texture_upload(texture, false, queue, mip_level, array_layer, offset, extent, texel_bytes, data, out_error);
+	return rbtrend_texture_upload(texture, false, queue, mip_level, array_layer, offset, extent, block, data, out_error);
 }
 RBT_RESULT rbtrend_texture2d_get_data(
     rbtrend_texture2d texture,
@@ -657,12 +853,166 @@ RBT_RESULT rbtrend_texture2d_get_data(
 	const uint32_t size[3]   = {texture->desc.width, texture->desc.height, 1};
 	const uint32_t offset[3] = {x_offset, y_offset, 0};
 	const uint32_t extent[3] = {width, height, 1};
-	uint32_t texel_bytes     = 0;
-	uint64_t region_bytes    = 0;
-	if (const RBT_RESULT result = rbtrend_texture_region_valid(queue, texture->desc.mip_levels, texture->desc.array_layers, mip_level, array_layer, size, offset,
-	                                                        extent, texture->desc.format, out_data, data_size, &texel_bytes, &region_bytes, out_error))
+	rbtrend_texel_block block{};
+	if (const RBT_RESULT result = rbtrend_texture_region_valid(
+			queue, texture->desc.mip_levels, texture->desc.array_layers, mip_level, array_layer, size, offset, extent, texture->desc.format, out_data,
+			data_size, &block, out_error))
 		return result;
-	return rbtrend_texture_readback(texture, false, queue, mip_level, array_layer, offset, extent, texel_bytes, out_data, out_error);
+	return rbtrend_texture_readback(texture, false, queue, mip_level, array_layer, offset, extent, block, out_data, out_error);
+}
+// The levels' array, which the call walks.
+RBT_PLAIN_DATA(RBTREND_TEXTURE_LEVEL_DATA);
+
+RBT_RESULT rbtrend_texture2d_update_levels(
+	rbtrend_texture2d texture,
+	crgpu_command_queue queue,
+	uint32_t base_mip,
+	uint32_t base_layer,
+	uint32_t layer_count,
+	const RBTREND_TEXTURE_LEVEL_DATA *levels,
+	uint32_t level_count,
+	RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	if (!texture)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "texture is NULL");
+	if (RBT_STALE(texture, "rbtrend_texture2d_update_levels", "texture"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "texture is destroyed");
+	RBTREND_ENTER(texture->instance, "rbtrend_texture2d_update_levels");
+	rbtrend_instance instance = texture->instance;
+	if (!queue)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "queue is NULL");
+	// The instance's one queue, checked here before anything is staged, as
+	// rbtrend_instance_open_upload_batch checks it again.
+	if (instance->submit_queue && queue != instance->submit_queue)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the instance submits on one queue, and this is not the queue of its first submission");
+	if (instance->upload_batch && queue != instance->upload_batch_queue)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "updates or clears are waiting to go on another queue, and the instance submits on one");
+	const uint32_t mip_levels = texture->desc.mip_levels;
+	const uint32_t layers     = texture->desc.array_layers;
+	if (base_mip >= mip_levels)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "base_mip %u is not below the texture's %u mip levels", base_mip, mip_levels);
+	if (base_layer >= layers)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "base_layer %u is not below the texture's %u array layers", base_layer, layers);
+	if (layer_count == 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer_count is 0");
+	// By subtraction, so a count whose sum with the base wraps is refused.
+	if (layer_count > layers - base_layer)
+		return rbtrend_fail(
+			out_error, RBT_RESULT_INVALID_ARGUMENT, "layer_count %u from base_layer %u runs past the texture's %u array layers", layer_count, base_layer,
+			layers);
+	if (!levels)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "levels is NULL");
+	if (level_count == 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "level_count is 0");
+	if (level_count > mip_levels - base_mip)
+		return rbtrend_fail(
+			out_error, RBT_RESULT_INVALID_ARGUMENT, "level_count %u from base_mip %u runs past the texture's %u mip levels", level_count, base_mip, mip_levels);
+	rbtrend_texel_block block{};
+	if (!rbtrend_format_texel_block(texture->desc.format, &block))
+		return rbtrend_fail(out_error, RBT_RESULT_UNSUPPORTED, "format %d has no texel block", (int)texture->desc.format);
+	const uint32_t width  = texture->desc.width;
+	const uint32_t height = texture->desc.height;
+	for (uint32_t i = 0; i < level_count; ++i) {
+		if (!levels[i].data)
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "levels[%u].data is NULL", i);
+		// Under 2^46 for any texture the device can make: no overflow.
+		const uint64_t bytes = rbtrend_level_bytes(block, width, height, base_mip + i) * layer_count;
+		if (levels[i].data_size != bytes)
+			return rbtrend_fail(
+				out_error, RBT_RESULT_INVALID_ARGUMENT, "levels[%u].data_size is %llu, and level %u of %u layers is %llu bytes", i,
+				(unsigned long long)levels[i].data_size, base_mip + i, layer_count, (unsigned long long)bytes);
+	}
+
+	// The staging: each level's layers one after another, each a copy of its
+	// own starting at the copy offset alignment, its rows at the pitch the
+	// copy takes. Worked out with overflow checked, though no texture the
+	// device can make reaches 2^64 (its levels, padded, are under 2^46).
+	uint64_t offset_alignment = 0;
+	CR_RESULT sr              = crgpu_image_get_buffer_copy_offset_alignment(texture->image, &offset_alignment);
+	if (CR_FAILED(sr))
+		return rbtrend_fail_cr(out_error, sr, "reading the image's copy offset alignment failed");
+	if (offset_alignment == 0)
+		offset_alignment = 1;
+	uint64_t pitch_step = 0;
+	if (const RBT_RESULT result = rbtrend_row_pitch_step(texture->image, block, &pitch_step, out_error))
+		return result;
+	uint64_t staging_size = 0;
+	for (uint32_t i = 0; i < level_count; ++i) {
+		const uint32_t level = base_mip + i;
+		const uint64_t pitch = rbtrend_row_pitch((uint64_t)rbtrend_blocks_across(rbtrend_mip_size(width, level), block.width) * block.bytes, pitch_step);
+		uint64_t layer_size  = 0;
+		bool fits            = rbtrend_mul_u64(pitch, rbtrend_blocks_across(rbtrend_mip_size(height, level), block.height), &layer_size);
+		for (uint32_t l = 0; fits && l < layer_count; ++l)
+			fits = rbtrend_align_up_u64(staging_size, offset_alignment, &staging_size) && rbtrend_add_u64(staging_size, layer_size, &staging_size);
+		if (!fits)
+			return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "the staging for these levels would pass 2^64 bytes");
+	}
+
+	rbtrend_upload_staging staging{};
+	if (const RBT_RESULT result = rbtrend_upload_staging_begin(instance, texture->image, staging_size, &staging, out_error))
+		return result;
+	// The caller's blocks into staging, each layer of each level at the
+	// start its copy reads from, in the order the copies are recorded.
+	{
+		uint64_t cursor = 0;
+		for (uint32_t i = 0; i < level_count; ++i) {
+			const uint32_t level     = base_mip + i;
+			const uint32_t extent[3] = {rbtrend_mip_size(width, level), rbtrend_mip_size(height, level), 1};
+			rbtrend_region_layout layout{};
+			layout.tight_row           = (uint64_t)rbtrend_blocks_across(extent[0], block.width) * block.bytes;
+			layout.pitch               = rbtrend_row_pitch(layout.tight_row, pitch_step);
+			layout.rows                = rbtrend_blocks_across(extent[1], block.height);
+			const uint64_t layer_bytes = layout.tight_row * layout.rows;
+			const uint8_t *src         = (const uint8_t *)levels[i].data;
+			for (uint32_t l = 0; l < layer_count; ++l) {
+				(void)rbtrend_align_up_u64(cursor, offset_alignment, &cursor);
+				rbtrend_region_repack(layout, staging.data + cursor, (uint8_t *)(src + layer_bytes * l), true);
+				cursor += layout.pitch * layout.rows;
+			}
+		}
+	}
+	rbtrend_upload_staging_end(&staging);
+
+	// One copy per level and layer, between the range's moves into
+	// TRANSFER_DST and back. The first copy Carrottus GPU refuses stops the
+	// recording: its closing moves are recorded all the same, so the batch
+	// stays balanced, and it becomes the call's result. Rend's checks come
+	// first, so a refusal is the two layers disagreeing, never the caller's
+	// input.
+	CR_RESULT copied        = CR_SUCCESS;
+	uint32_t failed_level   = 0;
+	uint32_t failed_layer   = 0;
+	const RBT_RESULT result = rbtrend_immediate_on_texture_range(
+		texture, queue, false, base_mip, level_count, base_layer, layer_count, CRGPU_IMAGE_LAYOUT_TRANSFER_DST,
+		rbtrend_texture_upload_rest_layout(texture->desc.usage), out_error, [&](crgpu_command_list cmd) {
+			uint64_t cursor = 0;
+			for (uint32_t i = 0; i < level_count && !CR_FAILED(copied); ++i) {
+				const uint32_t level     = base_mip + i;
+				const uint32_t offset[3] = {0, 0, 0};
+				const uint32_t extent[3] = {rbtrend_mip_size(width, level), rbtrend_mip_size(height, level), 1};
+				rbtrend_region_layout layout{};
+				layout.tight_row = (uint64_t)rbtrend_blocks_across(extent[0], block.width) * block.bytes;
+				layout.pitch     = rbtrend_row_pitch(layout.tight_row, pitch_step);
+				layout.rows      = rbtrend_blocks_across(extent[1], block.height);
+				for (uint32_t l = 0; l < layer_count && !CR_FAILED(copied); ++l) {
+					(void)rbtrend_align_up_u64(cursor, offset_alignment, &cursor);
+					const crgpu_image_buffer_copy_desc copy_desc =
+						rbtrend_region_copy(block, layout, false, staging.offset + cursor, level, base_layer + l, offset, extent);
+					copied = crgpu_command_list_copy_buffer_to_image(cmd, staging.buffer, texture->image, &copy_desc);
+					if (CR_FAILED(copied)) {
+						failed_level = level;
+						failed_layer = base_layer + l;
+					}
+					cursor += layout.pitch * layout.rows;
+				}
+			}
+		});
+	rbtrend_upload_staging_release(instance, &staging);
+	if (result != RBT_RESULT_OK)
+		return result;
+	if (CR_FAILED(copied))
+		return rbtrend_fail_cr(out_error, copied, "copying level %u of layer %u failed", failed_level, failed_layer);
+	return RBT_RESULT_OK;
 }
 
 } // extern "C"
@@ -675,6 +1025,12 @@ RBT_RESULT rbtrend_generate_mips_valid(rbtrend_texture2d texture, uint32_t base_
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "base_mip %u, and the texture has %u levels", base_mip, texture->desc.mip_levels);
 	if (filter != CRGPU_FILTER_NEAREST && filter != CRGPU_FILTER_LINEAR)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "%d is not a CRGPU_FILTER", (int)filter);
+	// Before the usage bits, which a block-compressed texture never has all
+	// of: the reason is its format.
+	if (rbtrend_block_format_feature(texture->desc.format) != 0)
+		return rbtrend_fail(
+			error, RBT_RESULT_UNSUPPORTED, "format %d is block-compressed: no API renders into one, so each of its levels is written, never generated",
+			(int)texture->desc.format);
 	if (!(texture->desc.usage & RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE))
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "the texture was created without RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE");
 	if (!(texture->desc.usage & RBTREND_TEXTURE_USAGE_BIT_RENDER_TARGET))
@@ -877,10 +1233,23 @@ RBT_RESULT rbtrend_texture2d_resize(
 	if (RBT_STALE(texture, "rbtrend_texture2d_resize", "texture"))
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "texture is destroyed");
 	RBTREND_ENTER(texture->instance, "rbtrend_texture2d_resize");
+	// A block-compressed texture's level 0 is whole blocks; any other
+	// format's block is taken as one texel here, as its image is made.
+	rbtrend_texel_block block{};
+	if (rbtrend_block_format_feature(texture->desc.format) != 0)
+		(void)rbtrend_format_texel_block(texture->desc.format, &block);
 	if (new_width == 0)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "new_width is 0");
+	if (new_width % block.width != 0)
+		return rbtrend_fail(
+			out_error, RBT_RESULT_INVALID_ARGUMENT, "new_width %u isn't a whole number of format %d's blocks, %u texels wide", new_width,
+			(int)texture->desc.format, block.width);
 	if (new_height == 0)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "new_height is 0");
+	if (new_height % block.height != 0)
+		return rbtrend_fail(
+			out_error, RBT_RESULT_INVALID_ARGUMENT, "new_height %u isn't a whole number of format %d's blocks, %u texels tall", new_height,
+			(int)texture->desc.format, block.height);
 #if _DEBUG
 	// A view left alive would be released after the old image it was made
 	// of. Its mip chains' views are the texture's own, released below.
@@ -965,6 +1334,9 @@ RBT_RESULT rbtrend_texture3d_create(
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "depth is 0");
 	if (desc->format == CRGPU_FORMAT_UNKNOWN)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "format is CRGPU_FORMAT_UNKNOWN");
+	// Carrottus GPU makes block formats 2D only.
+	if (rbtrend_block_format_feature(desc->format) != 0)
+		return rbtrend_fail(out_error, RBT_RESULT_UNSUPPORTED, "format %d is block-compressed, and a block-compressed texture is 2D", (int)desc->format);
 	if (!out_texture)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_texture is NULL");
 
@@ -1085,12 +1457,11 @@ RBT_RESULT rbtrend_texture3d_update(
 	const uint32_t size[3]   = {texture->desc.width, texture->desc.height, texture->desc.depth};
 	const uint32_t offset[3] = {x_offset, y_offset, z_offset};
 	const uint32_t extent[3] = {width, height, depth};
-	uint32_t texel_bytes     = 0;
-	uint64_t region_bytes    = 0;
-	if (const RBT_RESULT result = rbtrend_texture_region_valid(queue, texture->desc.mip_levels, 1, mip_level, 0, size, offset, extent, texture->desc.format, data,
-	                                                        data_size, &texel_bytes, &region_bytes, out_error))
+	rbtrend_texel_block block{};
+	if (const RBT_RESULT result = rbtrend_texture_region_valid(
+			queue, texture->desc.mip_levels, 1, mip_level, 0, size, offset, extent, texture->desc.format, data, data_size, &block, out_error))
 		return result;
-	return rbtrend_texture_upload(texture, true, queue, mip_level, 0, offset, extent, texel_bytes, data, out_error);
+	return rbtrend_texture_upload(texture, true, queue, mip_level, 0, offset, extent, block, data, out_error);
 }
 RBT_RESULT rbtrend_texture3d_get_data(
     rbtrend_texture3d texture,
@@ -1114,12 +1485,11 @@ RBT_RESULT rbtrend_texture3d_get_data(
 	const uint32_t size[3]   = {texture->desc.width, texture->desc.height, texture->desc.depth};
 	const uint32_t offset[3] = {x_offset, y_offset, z_offset};
 	const uint32_t extent[3] = {width, height, depth};
-	uint32_t texel_bytes     = 0;
-	uint64_t region_bytes    = 0;
-	if (const RBT_RESULT result = rbtrend_texture_region_valid(queue, texture->desc.mip_levels, 1, mip_level, 0, size, offset, extent, texture->desc.format,
-	                                                        out_data, data_size, &texel_bytes, &region_bytes, out_error))
+	rbtrend_texel_block block{};
+	if (const RBT_RESULT result = rbtrend_texture_region_valid(
+			queue, texture->desc.mip_levels, 1, mip_level, 0, size, offset, extent, texture->desc.format, out_data, data_size, &block, out_error))
 		return result;
-	return rbtrend_texture_readback(texture, true, queue, mip_level, 0, offset, extent, texel_bytes, out_data, out_error);
+	return rbtrend_texture_readback(texture, true, queue, mip_level, 0, offset, extent, block, out_data, out_error);
 }
 RBT_RESULT rbtrend_texture3d_resize(
     rbtrend_texture3d texture,

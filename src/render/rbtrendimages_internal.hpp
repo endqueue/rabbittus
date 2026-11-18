@@ -100,7 +100,8 @@ inline bool rbtrend_texture_ranges_overlap(const rbtrend_texture_range &a, const
 }
 
 /* The kind of number a shader reads from or writes to a texel of [format]:
- * FLOAT for float, normalized and sRGB formats and the compressed ones,
+ * FLOAT for float, normalized and sRGB formats and the compressed ones (BC
+ * and ASTC),
  * UINT and INT for the unsigned and signed integer formats. NONE for
  * UNKNOWN, a typeless format, and a depth or stencil format, whose aspect
  * says what is read. */
@@ -161,8 +162,39 @@ inline RBTREND_SHADER_SCALAR_TYPE rbtrend_format_scalar_type(CRGPU_FORMAT format
 	case CRGPU_FORMAT_BC6H_TYPELESS:
 	case CRGPU_FORMAT_BC7_TYPELESS:
 		return RBTREND_SHADER_SCALAR_TYPE_NONE;
+	// The ASTC LDR formats, numbered from 1000, past the video formats:
+	// sampled as floats, as the BC formats (below 100, float by the default).
+	case CRGPU_FORMAT_ASTC_4X4_UNORM:
+	case CRGPU_FORMAT_ASTC_4X4_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_5X4_UNORM:
+	case CRGPU_FORMAT_ASTC_5X4_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_5X5_UNORM:
+	case CRGPU_FORMAT_ASTC_5X5_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_6X5_UNORM:
+	case CRGPU_FORMAT_ASTC_6X5_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_6X6_UNORM:
+	case CRGPU_FORMAT_ASTC_6X6_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_8X5_UNORM:
+	case CRGPU_FORMAT_ASTC_8X5_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_8X6_UNORM:
+	case CRGPU_FORMAT_ASTC_8X6_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_8X8_UNORM:
+	case CRGPU_FORMAT_ASTC_8X8_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_10X5_UNORM:
+	case CRGPU_FORMAT_ASTC_10X5_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_10X6_UNORM:
+	case CRGPU_FORMAT_ASTC_10X6_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_10X8_UNORM:
+	case CRGPU_FORMAT_ASTC_10X8_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_10X10_UNORM:
+	case CRGPU_FORMAT_ASTC_10X10_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_12X10_UNORM:
+	case CRGPU_FORMAT_ASTC_12X10_UNORM_SRGB:
+	case CRGPU_FORMAT_ASTC_12X12_UNORM:
+	case CRGPU_FORMAT_ASTC_12X12_UNORM_SRGB:
+		return RBTREND_SHADER_SCALAR_TYPE_FLOAT;
 	default:
-		// The video formats (AYUV and on) are read through a conversion,
+		// The video formats (AYUV to V408) are read through a conversion,
 		// not as the texel is; say nothing of them.
 		if ((uint32_t)format >= (uint32_t)CRGPU_FORMAT_AYUV && format != CRGPU_FORMAT_B4G4R4A4_UNORM)
 			return RBTREND_SHADER_SCALAR_TYPE_NONE;
@@ -218,42 +250,119 @@ inline CRGPU_IMAGE_LAYOUT rbtrend_texture_upload_rest_layout(RBTREND_TEXTURE_USA
 	return CRGPU_IMAGE_LAYOUT_TRANSFER_DST;
 }
 
-/* rbtrend_record_immediate for work on one mip of one layer of a texture
- * (rbtrend_texture2d_t or rbtrend_texture3d_t): moves that subresource into
- * [working], runs [record], and moves it to rbtrend_immediate_final_layout.
- * The rest of the texture is not touched. The tracked layout is written once
- * the barriers are recorded, since the batch that holds them goes ahead of
- * every later submission. With [wait], rbtrend_wait_immediate follows. */
-template <typename Texture, typename Fn>
-static RBT_RESULT rbtrend_immediate_on_texture(
-    Texture *texture,
-    crgpu_command_queue queue,
-    bool wait,
-    uint32_t mip,
-    uint32_t layer,
-    CRGPU_IMAGE_LAYOUT working,
-    CRGPU_IMAGE_LAYOUT if_undefined,
-    RBTREND_ERROR *error,
-    Fn &&record) {
-	CRGPU_IMAGE_LAYOUT *tracked           = texture->tracking.at(mip, layer);
-	const CRGPU_IMAGE_LAYOUT found        = *tracked;
-	const CRGPU_IMAGE_LAYOUT final_layout = rbtrend_immediate_final_layout(found, if_undefined);
-
-	crgpu_image_view_desc_subresource_range range{};
-	range.base_mip_level    = mip;
-	range.mip_level_count   = 1;
-	range.base_array_layer  = layer;
-	range.array_layer_count = 1;
+/* rbtrend_record_immediate for work on [mip_count] levels from [base_mip] of
+ * [layer_count] layers from [base_layer] of a texture (rbtrend_texture2d_t or
+ * rbtrend_texture3d_t): moves the range into [working], runs [record], and
+ * moves each subresource to rbtrend_immediate_final_layout of the layout it
+ * was found in. Each run of subresources found in one layout moves with one
+ * barrier each way: within a layer, the levels in a row found in one
+ * layout; and layers in a row whose levels were all found as the first's,
+ * together. So a range nothing has written moves with one barrier, and a
+ * cube some of whose faces were written with a few. The rest of the
+ * texture is not touched. The tracked layouts are written once the barriers
+ * are recorded, since the batch that holds them goes ahead of every later
+ * submission. With [wait], rbtrend_wait_immediate follows. The range is the
+ * caller's to have checked against the texture. */
+template <
+	typename Texture,
+	typename Fn>
+static RBT_RESULT rbtrend_immediate_on_texture_range(
+	Texture *texture,
+	crgpu_command_queue queue,
+	bool wait,
+	uint32_t base_mip,
+	uint32_t mip_count,
+	uint32_t base_layer,
+	uint32_t layer_count,
+	CRGPU_IMAGE_LAYOUT working,
+	CRGPU_IMAGE_LAYOUT if_undefined,
+	RBTREND_ERROR *error,
+	Fn &&record) {
+	const rbtrend_texture_layouts &tracking = texture->tracking;
+	const uint32_t mip_end                  = base_mip + mip_count;
+	const uint32_t layer_end                = base_layer + layer_count;
+	// Whether layer [other] was found in layer [first]'s layouts over the
+	// range's levels.
+	auto same_layouts = [&](uint32_t first, uint32_t other) {
+		for (uint32_t mip = base_mip; mip < mip_end; ++mip)
+			if (*tracking.at(mip, first) != *tracking.at(mip, other))
+				return false;
+		return true;
+	};
+	// [barrier](range, found) for each run, in the order of the layouts.
+	auto each_run = [&](auto &&barrier) {
+		for (uint32_t layer = base_layer; layer < layer_end;) {
+			uint32_t group_end = layer + 1;
+			while (group_end < layer_end && same_layouts(layer, group_end))
+				++group_end;
+			for (uint32_t mip = base_mip; mip < mip_end;) {
+				const CRGPU_IMAGE_LAYOUT found = *tracking.at(mip, layer);
+				uint32_t run_end               = mip + 1;
+				while (run_end < mip_end && *tracking.at(run_end, layer) == found)
+					++run_end;
+				crgpu_image_view_desc_subresource_range range{};
+				range.base_mip_level    = mip;
+				range.mip_level_count   = run_end - mip;
+				range.base_array_layer  = layer;
+				range.array_layer_count = group_end - layer;
+				barrier(range, found);
+				mip = run_end;
+			}
+			layer = group_end;
+		}
+	};
 
 	if (const RBT_RESULT result = rbtrend_record_immediate(texture->instance, queue, error, [&](crgpu_command_list cmd) {
-		    crgpu_command_list_image_barrier_subresource(cmd, texture->image, &range, found, working);
-		    record(cmd);
-		    if (final_layout != working)
-			    crgpu_command_list_image_barrier_subresource(cmd, texture->image, &range, working, final_layout);
-	    }))
+			each_run([&](const crgpu_image_view_desc_subresource_range &range, CRGPU_IMAGE_LAYOUT found) {
+				crgpu_command_list_image_barrier_subresource(cmd, texture->image, &range, found, working);
+			});
+			record(cmd);
+			each_run([&](const crgpu_image_view_desc_subresource_range &range, CRGPU_IMAGE_LAYOUT found) {
+				const CRGPU_IMAGE_LAYOUT final_layout = rbtrend_immediate_final_layout(found, if_undefined);
+				if (final_layout != working)
+					crgpu_command_list_image_barrier_subresource(cmd, texture->image, &range, working, final_layout);
+			});
+		}))
 		return result;
-	*tracked = final_layout;
+	for (uint32_t layer = base_layer; layer < layer_end; ++layer) {
+		for (uint32_t mip = base_mip; mip < mip_end; ++mip) {
+			CRGPU_IMAGE_LAYOUT *tracked = tracking.at(mip, layer);
+			*tracked                    = rbtrend_immediate_final_layout(*tracked, if_undefined);
+		}
+	}
 	return wait ? rbtrend_wait_immediate(texture->instance, error) : RBT_RESULT_OK;
+}
+
+/* rbtrend_immediate_on_texture_range for one mip of one layer. */
+template <
+	typename Texture,
+	typename Fn>
+static RBT_RESULT rbtrend_immediate_on_texture(
+	Texture *texture,
+	crgpu_command_queue queue,
+	bool wait,
+	uint32_t mip,
+	uint32_t layer,
+	CRGPU_IMAGE_LAYOUT working,
+	CRGPU_IMAGE_LAYOUT if_undefined,
+	RBTREND_ERROR *error,
+	Fn &&record) {
+	return rbtrend_immediate_on_texture_range(texture, queue, wait, mip, 1, layer, 1, working, if_undefined, error, static_cast<Fn &&>(record));
+}
+
+/* The device feature a block-compressed format needs to be sampled: BC1 to
+ * BC7 (their TYPELESS forms too) CRGPU_FEATURE_TEXTURE_COMPRESSION_BC, the
+ * ASTC LDR formats CRGPU_FEATURE_TEXTURE_COMPRESSION_ASTC_LDR; 0 for every
+ * other format, a packed 4:2:2 one's 2 x 1 block included. */
+inline CRGPU_FEATURES rbtrend_block_format_feature(CRGPU_FORMAT format) {
+	const uint32_t value = (uint32_t)format;
+	if (value >= (uint32_t)CRGPU_FORMAT_BC1_TYPELESS && value <= (uint32_t)CRGPU_FORMAT_BC5_SNORM)
+		return CRGPU_FEATURE_TEXTURE_COMPRESSION_BC;
+	if (value >= (uint32_t)CRGPU_FORMAT_BC6H_TYPELESS && value <= (uint32_t)CRGPU_FORMAT_BC7_UNORM_SRGB)
+		return CRGPU_FEATURE_TEXTURE_COMPRESSION_BC;
+	if (value >= (uint32_t)CRGPU_FORMAT_ASTC_4X4_UNORM && value <= (uint32_t)CRGPU_FORMAT_ASTC_12X12_UNORM_SRGB)
+		return CRGPU_FEATURE_TEXTURE_COMPRESSION_ASTC_LDR;
+	return 0;
 }
 
 /* One level of one layer of a mip generation: a view of the level above to

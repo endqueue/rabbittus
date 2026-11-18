@@ -3,6 +3,7 @@
 
 #include "rbtrendcommands.h"
 #include "rbtrendmaterial.h"
+#include "../rbtmath.h"
 
 #if __cplusplus
 extern "C" {
@@ -76,7 +77,10 @@ extern "C" {
  * Positions and directions are in any one space of the
  * caller's choosing - world space, the eye at the origin, any other - and
  * every position, direction and matrix an rbtrend_lit_scene is given is in
- * that same space. The push constants are all the caller's; Rend's
+ * that same space. A caller whose places are far from its origin draws
+ * with the eye at the origin, each place taken from the eye's in its own
+ * precision before Rend sees it, and chains an RBTREND_LIT_CASCADE_ANCHOR
+ * onto its cascade fits. The push constants are all the caller's; Rend's
  * shaders declare none.
  *
  * @par Colors and light
@@ -1161,6 +1165,32 @@ typedef struct RBTREND_LIT_CASCADE_FIT {
 } RBTREND_LIT_CASCADE_FIT;
 
 /**
+ * @brief Where a cascade fit's scene space is, in a space that doesn't
+ * move, so that its cascades are snapped there (rbtrend_lit_fit_cascades()).
+ *
+ * A caller drawing relative to the eye (so that places far from its origin
+ * stay exact) has a scene space that moves every frame; snapped there,
+ * cascades shimmer as the view moves. With this chained onto an
+ * RBTREND_LIT_CASCADE_FIT, once, they are snapped where the fixed space's
+ * origin lands, worked out in double, and stay still at any distance from
+ * it under a still light. Under a light that turns between fits, the grid
+ * near the view slides by the view's distance from the fixed space's origin
+ * times the turn: the nearer that origin is to the view, the less.
+ */
+typedef struct RBTREND_LIT_CASCADE_ANCHOR {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR, and its chain (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/**
+	 * Where the scene's origin is in the fixed space, in the scene's units:
+	 * for a scene whose origin is the eye, the eye's place in the fixed
+	 * space. Finite: x, then y, then z, each its own check. The fixed
+	 * space's origin is where the cascades are snapped.
+	 */
+	RbtDVec3 scene_origin;
+} RBTREND_LIT_CASCADE_ANCHOR;
+
+
+/**
  * @brief Frames a directional light's cascades for a view: for each, the
  * matrix its view is rendered through and how far along the view it
  * reaches, into @p out_maps's `_view_count`, `_view_projection` and
@@ -1176,8 +1206,14 @@ typedef struct RBTREND_LIT_CASCADE_FIT {
  * clip space's y negated, as rbtrend_lit_point_shadow_view_projection()'s),
  * and is moved by whole texels of its rectangle, so as the view moves its
  * shadows stay still: the stable cascades of Valient's "Stable Rendering of
- * Cascaded Shadow Maps", as Unreal and Hazel have them. Depth runs 0 at the
- * light's end to 1 (or reversed).
+ * Cascaded Shadow Maps", as Unreal and Hazel have them. Moved where the
+ * scene's origin lands; or, with an RBTREND_LIT_CASCADE_ANCHOR chained on
+ * @p fit, where the origin of the space it names lands, worked out in
+ * double: what a caller drawing relative to the eye chains, so its shadows
+ * stay still as the eye moves under a still light. A light that turns
+ * between fits moves the grid near the view by the view's distance from the
+ * snapped origin times the turn. Depth runs 0 at the light's end to 1 (or
+ * reversed).
  *
  * @param[in]  fit       The view and how its cascades are framed. Only read
  *                       during the call.
@@ -1189,7 +1225,10 @@ typedef struct RBTREND_LIT_CASCADE_FIT {
  *         written, if an argument is NULL, a value is not finite, a direction
  *         is 0, up runs along the view, the depths or the field of view are
  *         out of their ranges, the cascade count is 0 or too many, the map
- *         size is 0, or either struct's base is wrong.
+ *         size is 0, a chained anchor's scene_origin is not finite, or
+ *         either struct's base or chain is wrong
+ *         (RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN for the anchor chained on
+ *         twice).
  */
 RBT_RESULT rbtrend_lit_fit_cascades(const RBTREND_LIT_CASCADE_FIT *fit, RBTREND_LIT_SHADOW_MAPS *out_maps, RBTREND_ERROR *out_error);
 

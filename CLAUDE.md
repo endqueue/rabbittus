@@ -28,7 +28,7 @@ so in its opening comment, along with what the module deliberately does *not* do
 |---|---|---|---|
 | Core | `rbtcore.h` | `RBT_RESULT`, `RBT_`, `rbt_`, `RABBITTUS_VERSION` | The version, the shared result enum, struct bases and debug names |
 | Rend | `render/rbtrend*.h` | `rbtrend_` / `RBTREND_` | Renderer over Carrottus GPU. Older code, mid-overhaul. Atmospheres round a sphere (Hillaire's model over Rabbittus Math's shell medium: the tables, the sky from inside, aerial perspective; `rbtrendatmosphere.h`, `RBTREND_TODO.md` item 52's stages 2 and 3, 2026-11-16 on macOS, D3D12 and Vulkan never built) |
-| Rabbittus Math | `rbtmath.h`, `math/rbtmathbvh.h`, `math/rbtmathpoly.h`, `math/rbtmathmedium.h`, `math/rbtmatherror.h` | `Rbt*` types, `rbtmath_` / `RBTMATH_` | CPU ray casting, convex-volume tests, and spheres, capsules and boxes overlapped and swept (one GJK), against meshes, instance BVHs changed in place (set, refit, rebuild) and BVHs of solid boxes, double precision (2026-11-06); exact plane polygons on an integer grid (booleans, checks, per-edge offsets, weighted straight skeletons, triangulation); layered media in a spherical shell (density, transmittance along a ray, phase functions; the same bits everywhere, its own exponential; 2026-11-16 on macOS, card L62: the pure maths of Rend's atmosphere, which takes its struct); unrelated to Rend's drawing |
+| Rabbittus Math | `rbtmath.h`, `math/rbtmathbvh.h`, `math/rbtmathpoly.h`, `math/rbtmathmedium.h`, `math/rbtmathnoise.h`, `math/rbtmatherror.h` | `Rbt*` types, `rbtmath_` / `RBTMATH_` | CPU ray casting, convex-volume tests, and spheres, capsules and boxes overlapped and swept (one GJK), against meshes, instance BVHs changed in place (set, refit, rebuild) and BVHs of solid boxes, double precision (2026-11-06); exact plane polygons on an integer grid (booleans, checks, per-edge offsets, weighted straight skeletons, triangulation); layered media in a spherical shell (density, transmittance along a ray, phase functions; the same bits everywhere, its own exponential; 2026-11-16 on macOS, card L62: the pure maths of Rend's atmosphere, which takes its struct); coherent noise from double places (gradient, OpenSimplex2 summed whole, cellular; fBm, ridged, eroded; warps and nearest cells; the same bits everywhere by a written definition; 2026-11-17 on macOS, card A56, Windows and Linux owed); unrelated to Rend's drawing |
 | Rabbittus Archive | `archive/rbtarchive.h` | `rbtarchive_` / `RBTARCHIVE_` | ZIP through caller callbacks; no I/O of its own. Entries whole or streamed (zlib-ng for streamed DEFLATE, libdeflate for whole), raw entries, updating, strict reading (`RBTARCHIVE_TODO.md`, items 1-10, 2026-10-30 on macOS) |
 | Rabbittus Audio | `audio/rbtaudio.h`, `audio/rbtaudiocues.h` | `rbtaudio_` / `RBTAUDIO_` | Mixer (with a lookahead limiter and dithered 16-bit output), cues and sound banks; WAV, FLAC, Ogg Vorbis and Ogg Opus decoding; resampling and Ogg Opus encoding offline (item 17, 2026-11-06 on Windows); streamed sounds (FLAC, Vorbis, Opus through a caller's source, each real voice decoding into its own ring on the caller's scheduler; built 2026-10-31 on Windows, `RBTAUDIO_TODO.md` item 15); spatial audio (voices placed in the caller's world, heard from the nearest of its listeners through shared attenuations - distance curves, cones, doppler, a priority offset - worked out in the update; built 2026-11-08 on Windows, item 16) |
 | Rabbittus Sync | `sync/rbtsyncnet.h` | `rbtsync_` / `RBTSYNC_` | Sessions, channels, snapshots over Carrottus Net |
@@ -314,6 +314,20 @@ heap.
 - `rbtrendbuffers.h` is one `rbtrend_buffer` for every use (card A14, rewritten
   2026-10-30): a usage mask, `RBTREND_BUFFER_WRITES`, and per-frame copies in
   place of buffer sets. Mesh types are a caller's, never Rend's.
+- Textures in block-compressed formats (BC1 to BC7, ASTC LDR; card A54,
+  `rbtrendimages.h`, built 2026-11-17 on the Mac, D3D12 and Vulkan owed):
+  `rbtrend_texture2d_create()` checks the format's feature on the device
+  (`CRGPU_FEATURE_TEXTURE_COMPRESSION_BC`, `_ASTC_LDR`), a sampled usage
+  alone and level 0 whole blocks, each with Rend's own message; their
+  levels are written, never generated (`generate_mips` refuses them).
+  Every update and readback works in Carrottus GPU's texel block
+  (`crgpu_format_get_texel_block()`: a region on the block, data in tight
+  rows of blocks), staged at a pitch from
+  `crgpu_image_get_buffer_copy_row_pitch_alignment()`, each copy's
+  `CR_RESULT` read; Rend keeps no table of formats but which feature a
+  format needs. `rbtrend_texture2d_update_levels()` writes whole levels of
+  a range of layers in any format with one staging and one barrier per
+  run of subresources in one layout (`rbtrend_immediate_on_texture_range`).
 - Ray tracing (`rbtrendraytracing.h`, the approved
   `rbtrend_raytracing_draft.h`; built 2026-11-01 on Windows, `RBTREND_TODO.md`
   item 24): BLASes and TLASes are resources, named in instances by slot;

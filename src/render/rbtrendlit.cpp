@@ -2502,14 +2502,84 @@ RBT_RESULT rbtrend_lit_scene_set_bent_normals(rbtrend_lit_scene scene, bool read
 
 // ---- Fitting shadows --------------------------------------------------------------
 
+// The offset, in clip units, that moves a cascade's matrix by under a
+// texel so that the fixed space's origin (the scene place -o) lands on a
+// whole texel (RBTREND_LIT_CASCADE_ANCHOR). Its landing is the matrix's x and
+// y rows applied to -o, scaled to texels: products of a float entry (24
+// bits) and the half map size (at most 2^31) are exact in double; each
+// product with a coordinate of o is made exact as a pair (Dekker's product,
+// Veltkamp's split, no fused multiply-add), and the pairs summed exactly
+// (Knuth's two-sum), so the texel's fraction is exact to about 2^-50 of a
+// texel however far o is, the same bits everywhere (contraction off).
+namespace {
+struct rbtrend_two {
+	double hi, lo;
+};
+inline rbtrend_two rbtrend_two_sum(double a, double b) {
+	const double s  = a + b;
+	const double bb = s - a;
+	return {s, (a - (s - bb)) + (b - bb)};
+}
+inline void rbtrend_split(double a, double &hi, double &lo) {
+	const double c = 134217729.0 * a; // 2^27 + 1
+	hi             = c - (c - a);
+	lo             = a - hi;
+}
+inline rbtrend_two rbtrend_two_product(double a, double b) {
+	const double p = a * b;
+	double ah, al, bh, bl;
+	rbtrend_split(a, ah, al);
+	rbtrend_split(b, bh, bl);
+	return {p, ((ah * bh - p) + ah * bl + al * bh) + al * bl};
+}
+// A sum of pairs kept as an unevaluated sum: hi carries, lo collects.
+inline rbtrend_two rbtrend_add(rbtrend_two a, double b) {
+	const rbtrend_two s = rbtrend_two_sum(a.hi, b);
+	return rbtrend_two_sum(s.hi, s.lo + a.lo);
+}
+} // namespace
+
+static glm::vec2 rbtrend_anchored_offset(const glm::mat4 &matrix, const RbtDVec3 &o, uint32_t map_size) {
+	const double half = (double)map_size * 0.5;
+	const double neg[3] = {-o.x, -o.y, -o.z};
+	glm::vec2 offset(0.0f);
+	for (int r = 0; r < 2; ++r) {
+		// at = sum_j (M[j][r] half) (-o_j) + M[3][r] half, exactly as a pair.
+		rbtrend_two at = {(double)matrix[3][r] * half, 0.0};
+		for (int j = 0; j < 3; ++j) {
+			const rbtrend_two p = rbtrend_two_product((double)matrix[j][r] * half, neg[j]);
+			at                  = rbtrend_add(at, p.hi);
+			at                  = rbtrend_add(at, p.lo);
+		}
+		// round(at) - at, from the pair: hi's whole part is exact (|hi| far
+		// below 2^52 for any finite cascade), its fraction and lo summed.
+		const double whole = std::floor(at.hi + 0.5);
+		double fraction    = (at.hi - whole) + at.lo;
+		const double nudge = std::floor(fraction + 0.5); // lo may carry the pair past a half
+		fraction           = fraction - nudge;
+		offset[r]          = (float)(-fraction / half);
+	}
+	return offset;
+}
+
 RBT_RESULT rbtrend_lit_fit_cascades(const RBTREND_LIT_CASCADE_FIT *fit, RBTREND_LIT_SHADOW_MAPS *out_maps, RBTREND_ERROR *out_error) {
 	rbtrend_error_clear(out_error);
 	if (!fit)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fit is NULL");
 	if (!out_maps)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_maps is NULL");
-	if (const RBT_RESULT base = rbtrend_base_check(out_error, "fit", &fit->base, RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT))
-		return base;
+	// The fit's chain: an RBTREND_LIT_CASCADE_ANCHOR, once, and nothing else.
+	if (fit->base.type != RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT)
+		return rbtrend_fail(out_error, RBT_RESULT_STRUCT_WRONG_TYPE, "fit %s", rbt_struct_check_message(RBT_RESULT_STRUCT_WRONG_TYPE));
+	const RBTREND_LIT_CASCADE_ANCHOR *anchor = nullptr;
+	for (const RBT_STRUCT_BASE *link = fit->base.next; link; link = link->next) {
+		if (link->type != RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR)
+			return rbtrend_fail(out_error, RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN,
+			                    "fit has a struct chained on other than RBTREND_LIT_CASCADE_ANCHOR, the one it takes");
+		if (anchor)
+			return rbtrend_fail(out_error, RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN, "fit has RBTREND_LIT_CASCADE_ANCHOR chained on twice");
+		anchor = (const RBTREND_LIT_CASCADE_ANCHOR *)link;
+	}
 	if (const RBT_RESULT base = rbtrend_base_check(out_error, "out_maps", &out_maps->base, RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS))
 		return base;
 	const RBTREND_LIT_CASCADE_FIT &f = *fit;
@@ -2568,6 +2638,14 @@ RBT_RESULT rbtrend_lit_fit_cascades(const RBTREND_LIT_CASCADE_FIT *fit, RBTREND_
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "caster_distance is negative");
 	if (f.map_size == 0)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "map_size is 0");
+	if (anchor) {
+		if (!std::isfinite(anchor->scene_origin.x))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the anchor's scene_origin.x is not finite");
+		if (!std::isfinite(anchor->scene_origin.y))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the anchor's scene_origin.y is not finite");
+		if (!std::isfinite(anchor->scene_origin.z))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the anchor's scene_origin.z is not finite");
+	}
 
 	const glm::vec3 eye = vec3_of(f.eye_position);
 	const glm::vec3 sun = glm::normalize(sun_in);
@@ -2614,14 +2692,22 @@ RBT_RESULT rbtrend_lit_fit_cascades(const RBTREND_LIT_CASCADE_FIT *fit, RBTREND_
 		const float depth        = back + radius;
 		glm::mat4 projection     = rbtrend_flip_clip_y(f.reversed_depth ? glm::orthoRH_ZO(-radius, radius, -radius, radius, depth, 0.0f)
 		                                                               : glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, depth));
-		// Moved by whole texels: where the scene's origin lands, rounded.
+		// Moved by whole texels: where the scene's origin lands, rounded; or,
+		// with an anchor, where the fixed space's origin lands (the scene
+		// place -scene_origin), in double: rbtrend_anchored_offset().
 		glm::mat4 matrix        = projection * view;
 		const float half_texels = (float)f.map_size * 0.5f;
-		const glm::vec4 origin  = matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-		const glm::vec2 at      = glm::vec2(origin.x, origin.y) * half_texels;
-		const glm::vec2 offset  = (glm::round(at) - at) / half_texels;
-		projection[3][0] += offset.x;
-		projection[3][1] += offset.y;
+		if (anchor) {
+			const glm::vec2 offset = rbtrend_anchored_offset(matrix, anchor->scene_origin, f.map_size);
+			projection[3][0] += offset.x;
+			projection[3][1] += offset.y;
+		} else {
+			const glm::vec4 origin = matrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+			const glm::vec2 at     = glm::vec2(origin.x, origin.y) * half_texels;
+			const glm::vec2 offset = (glm::round(at) - at) / half_texels;
+			projection[3][0] += offset.x;
+			projection[3][1] += offset.y;
+		}
 		matrix = projection * view;
 		memcpy(out_maps->_view_projection[c], &matrix, sizeof(float) * 16);
 		out_maps->_split_depths[c] = end;
