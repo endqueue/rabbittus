@@ -133,11 +133,105 @@ static void test_reproject(void)
     CHECK(!rbtrend_history_reproject(vp, shift, behind, ndc));
 }
 
+// The clouds' order (rbtrend_clouds_draft.h version 2, section 4, card
+// A70): each march texel's 4 x 4 target texels each marched once in
+// sixteen frames, each history texel's four once in its four visits, the
+// history texels of frames 0 to 3 {0, 3, 1, 2}; each history texel's step
+// offsets over its first sixteen visits J's sixteen values.
+static void test_clouds_order(void)
+{
+    current_test = "test_clouds_order";
+    bool seen[16] = {false};
+    bool seen_in[4][4] = {{false}};
+    for (uint32_t f = 0; f < 16; ++f)
+    {
+        float place[2];
+        rbtrend_history_clouds_place(f, place);
+        CHECK(place[0] > 0.0f && place[0] < 4.0f && place[1] > 0.0f && place[1] < 4.0f);
+        const uint32_t x = (uint32_t)place[0], y = (uint32_t)place[1];
+        if (x > 3 || y > 3)
+            continue;
+        // Through a target texel's centre.
+        CHECK(place[0] == (float)x + 0.5f && place[1] == (float)y + 0.5f);
+        CHECK(!seen[y * 4 + x]);
+        seen[y * 4 + x] = true;
+        // The history texel it lies in, and where in it.
+        const uint32_t texel = rbtrend_history_clouds_texel(f);
+        CHECK(texel == (x >> 1) + 2u * (y >> 1));
+        const uint32_t within = (x & 1u) + 2u * (y & 1u);
+        CHECK(!seen_in[texel][within]);
+        seen_in[texel][within] = true;
+    }
+    for (uint32_t i = 0; i < 16; ++i)
+        CHECK(seen[i]);
+    for (uint32_t t = 0; t < 4; ++t)
+        for (uint32_t w = 0; w < 4; ++w)
+            CHECK(seen_in[t][w]);
+    // Frames 0 to 3 as built: top left, bottom right, top right, bottom left.
+    const uint32_t first[4] = {0u, 3u, 1u, 2u};
+    for (uint32_t f = 0; f < 4; ++f)
+        CHECK(rbtrend_history_clouds_texel(f) == first[f]);
+    // Each history texel is marched once in every four frames, and its step
+    // offsets over its first sixteen visits are J's sixteen values.
+    for (uint32_t t = 0; t < 4; ++t)
+    {
+        bool offsets[RBTREND_HISTORY_JITTERS] = {false};
+        uint32_t visits = 0;
+        for (uint32_t f = 0; f < 4 * RBTREND_HISTORY_JITTERS; ++f)
+        {
+            if (rbtrend_history_clouds_texel(f) != t)
+                continue;
+            CHECK(f / 4 == visits);
+            ++visits;
+            const float z = rbtrend_history_clouds_step(f);
+            for (uint32_t j = 0; j < RBTREND_HISTORY_JITTERS; ++j)
+                if (z == rbtrend_history_jitter(j))
+                {
+                    CHECK(!offsets[j]);
+                    offsets[j] = true;
+                }
+        }
+        CHECK(visits == RBTREND_HISTORY_JITTERS);
+        for (uint32_t j = 0; j < RBTREND_HISTORY_JITTERS; ++j)
+            CHECK(offsets[j]);
+    }
+    // Every texel marched in one frame is on the same visit, so the step's
+    // offset is the visit's: the same in each run of four frames.
+    for (uint32_t f = 0; f < 64; ++f)
+        CHECK(rbtrend_history_clouds_step(f) == rbtrend_history_clouds_step(f - f % 4));
+}
+
+// The weights: the clouds' marched texel by its visit, 1, 1/2, 1/3, then
+// the floor; the fog's history share by its frames as built (an even share
+// while below its weight), bit for bit.
+static void test_weights(void)
+{
+    current_test = "test_weights";
+    const float want[5] = {1.0f, 0.5f, 1.0f / 3.0f, 0.25f, 0.25f};
+    for (uint32_t v = 0; v < 5; ++v)
+        for (uint32_t f = 4 * v; f < 4 * v + 4; ++f)
+            CHECK(fabsf(rbtrend_history_clouds_weight(f) - want[v]) < 1e-6f);
+    for (uint32_t f = 20; f < 1000; ++f)
+        CHECK(rbtrend_history_clouds_weight(f) == RBTREND_HISTORY_CLOUDS_WEIGHT_FLOOR);
+    const float weights[5] = {0.0f, 0.5f, 0.9f, 0.95f, 0.999f};
+    for (uint32_t w = 0; w < 5; ++w)
+        for (uint32_t n = 0; n < 2000; ++n)
+        {
+            // rbtrendcommands.cpp's fog block before the module took it.
+            const float even = (float)n / (float)(n + 1);
+            const float built = weights[w] < even ? weights[w] : even;
+            const float got = rbtrend_history_share(n, weights[w]);
+            CHECK(memcmp(&got, &built, sizeof(float)) == 0);
+        }
+}
+
 int main(void)
 {
     test_take();
     test_jitter();
     test_reproject();
+    test_clouds_order();
+    test_weights();
     if (failures)
     {
         printf("rbtrendhistory_tests: %d failure(s)\n", failures);

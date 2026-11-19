@@ -36,9 +36,14 @@
  * one, its atmosphere's transmittance (a deck at sunset is lit red; a
  * shell's night side is dark), Wrenninge's octaves of multiple scattering,
  * and the scene's ambient light; integrated by Hillaire's energy-conserving
- * step. Each half-resolution texel of the history is then the march's where
- * it marched this frame and last frame's history reprojected by the cloud's
- * depth elsewhere, clamped to the march's neighbourhood. The history is put
+ * step. Each half-resolution texel of the history is then last frame's
+ * history reprojected by the cloud's depth and clipped to the march's
+ * neighbourhood (its mean and spread), into which the texel marched this
+ * frame blends its march by a weight of its visit (a half on its second, a
+ * third on its third, a quarter after): so each texel averages its marches,
+ * taken through each of its target texels and at every step offset in
+ * turn. Where no history covers a texel, or the history is reset, the
+ * march's own value. The history is put
  * over the picture at full resolution against its depth, with the scene's
  * aerial volume and its height fog in front of the clouds' depth:
  * picture x T + L.

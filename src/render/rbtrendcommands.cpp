@@ -5421,8 +5421,7 @@ static bool rbtrend_cmd_lit_fog(rbtrend_command_list cmd_list, const RBTREND_COM
 	if (history) {
 		memcpy(b.last_view_projection, fog->records[index].view_projection, sizeof(b.last_view_projection));
 		memcpy(b.last_eye, view.last_eye, sizeof(float) * 3);
-		const float even = (float)view.frames / (float)(view.frames + 1);
-		b.last_eye[3]    = p._history_weight < even ? p._history_weight : even;
+		b.last_eye[3] = rbtrend_history_share(view.frames, p._history_weight);
 		memcpy(b.last_range, view.last_range, sizeof(b.last_range));
 	}
 	memcpy(b.shift, p._space_shift, sizeof(float) * 3);
@@ -5720,9 +5719,13 @@ static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_
 	const bool fresh       = view.frames == 0;
 	const uint32_t qw      = (width + 3) / 4, qh = (height + 3) / 4;
 	const uint32_t hw      = (width + 1) / 2, hh = (height + 1) / 2;
-	static const uint32_t order[4] = {0u, 3u, 1u, 2u};
-	const uint32_t sub     = order[view.frames % 4u];
-	const uint32_t cycle   = view.frames / 4u;
+	// This frame's place in each march texel's 4 x 4 block, its history
+	// texel, the visit's step offset and the marched texel's weight
+	// (rbtrend_clouds_draft.h section 4, card A70).
+	float place[2];
+	rbtrend_history_clouds_place(view.frames, place);
+	const uint32_t sub     = rbtrend_history_clouds_texel(view.frames);
+	const float weight     = rbtrend_history_clouds_weight(view.frames);
 
 	rbtrend_compute_pipeline march       = lit.clouds_march_pipeline;
 	rbtrend_compute_pipeline reconstruct = lit.clouds_reconstruct_pipeline;
@@ -5746,9 +5749,9 @@ static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_
 	mb.counts[1] = p._max_steps;
 	mb.counts[2] = p._light_steps;
 	mb.counts[3] = sub;
-	mb.jitter[0] = rbtrend_history_jitter(cycle);
-	mb.jitter[1] = rbtrend_history_jitter(cycle * 5u + 3u);
-	mb.jitter[2] = rbtrend_history_jitter(view.frames * 3u + 1u);
+	mb.jitter[0] = place[0];
+	mb.jitter[1] = place[1];
+	mb.jitter[2] = rbtrend_history_clouds_step(view.frames);
 	// Each layer's atmosphere's table: the layer's own binding, an unnamed
 	// one bound to the first named (or a placeholder where none is), unread.
 	rbtrend_texture_view tables[RBTREND_CLOUDS_MAX_LAYERS] = {};
@@ -5779,6 +5782,9 @@ static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_
 	hb.sizes[2] = hw;
 	hb.sizes[3] = hh;
 	hb.frame[0] = sub;
+	memcpy(&hb.frame[1], &weight, sizeof(float));
+	const float gamma = RBTREND_HISTORY_CLOUDS_CLIP_GAMMA;
+	memcpy(&hb.frame[2], &gamma, sizeof(float));
 	rbtrend_material history = view.reconstruct[way];
 	rbtrend_clouds_write_material_block(history, &hb, sizeof(hb));
 	if (!rbtrend_cmd_use_material(cmd_list, scene->material) || !rbtrend_cmd_use_material(cmd_list, clouds->material) ||

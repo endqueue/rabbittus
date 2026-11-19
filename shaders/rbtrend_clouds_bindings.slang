@@ -20,7 +20,7 @@ public struct RbtrendCloudsMarch {
     public uint4 sizes;   // x, y the march's texels; z, w the history's
     public float4 target; // xy the target's texels; z the max distance; w 1 where depth is reversed (near at 1)
     public uint4 counts;  // x layers, y max steps, z light steps, w this frame's texel of each 2 x 2 block (0 to 3)
-    public float4 jitter; // xy within the history texel, z along the march, 0 to 1
+    public float4 jitter; // xy the target texel's centre within the 4 x 4 block (0 to 4), z the visit's step offset (0 to 1), w spare
     public CloudLayer layers[CLOUDS_MAX_LAYERS];
 };
 

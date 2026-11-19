@@ -77,7 +77,7 @@ struct rbtrend_clouds_march_block {
 	uint32_t sizes[4];
 	float target[4];
 	uint32_t counts[4];
-	float jitter[4];
+	float jitter[4]; /* x, y the target texel's centre in the march texel's 4 x 4 block; z the visit's step offset; w spare */
 	rbtrend_clouds_layer_block layers[RBTREND_CLOUDS_MAX_LAYERS];
 };
 RBT_PLAIN_DATA(rbtrend_clouds_march_block);
@@ -88,7 +88,7 @@ struct rbtrend_clouds_history_block {
 	float last_view_projection[16];
 	float shift[4];
 	uint32_t sizes[4];
-	uint32_t frame[4];
+	uint32_t frame[4]; /* x the history texel marched (0 to 3); y the marched texel's weight and z the clip's gamma, a float's bits each; w spare */
 };
 RBT_PLAIN_DATA(rbtrend_clouds_history_block);
 static_assert(sizeof(rbtrend_clouds_history_block) == 112, "RbtrendCloudsHistory in rbtrend_clouds_reconstruct_comp.slang");

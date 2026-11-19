@@ -1,12 +1,13 @@
 // The clouds' march (RBTREND_COMMAND_LIT_CLOUDS, rbtrendclouds.h): a thread
 // a march texel, a quarter of the target each way. Its ray goes through
-// this frame's texel of its 2 x 2 block of the history (each history texel
-// two target texels a side), at this frame's jitter within it, from the
-// eye to the nearest of the max distance and the surface the depth holds.
+// the centre of this frame's target texel of its 4 x 4 block (a fixed order
+// of the sixteen, rbtrendhistory.hpp), from the eye to the nearest of the
+// max distance and the surface the depth holds.
 // Each layer's bounds meet it in at most two segments, sorted by their
 // start (ties by the layer's order); the samples, at most the max steps,
 // spread over their whole length (each segment at least one), the first of
-// each offset by the frame's jitter along it. At a sample: the layer's
+// each offset along it by the history texel's visit's offset, rotated by a
+// noise of the march texel. At a sample: the layer's
 // density (rbtrend_clouds_model, Math's definition), its extinction and
 // scattering; each of its lights marched towards over the light steps
 // (spaced growing by 2 over the layer's thickness, every layer's density
@@ -99,10 +100,16 @@ float3 clouds_up(CloudLayer l, float3 p) {
 void rbtrend_clouds_march_comp(uint3 id : SV_DispatchThreadID) {
     if (id.x >= u_clouds_march.sizes.x || id.y >= u_clouds_march.sizes.y)
         return;
-    uint sub     = u_clouds_march.counts.w;
-    uint2 h      = id.xy * 2u + uint2(sub & 1u, sub >> 1u);
+    // Through this frame's target texel of the 4 x 4 block (its centre,
+    // clamped to the target's last).
     float2 size  = u_clouds_march.target.xy;
-    float2 pixel = min((float2(h) + u_clouds_march.jitter.xy) * 2.0, size - 0.5);
+    float2 pixel = min(float2(id.xy * 4u) + u_clouds_march.jitter.xy, size - 0.5);
+    // The visit's step offset rotated by the march texel's interleaved
+    // gradient noise (Jimenez 2014), so neighbouring texels are offset
+    // differently within a frame.
+    float2 m       = float2(id.xy);
+    float rotation = frac(52.9829189 * frac(0.06711056 * m.x + 0.00583715 * m.y));
+    float offset   = frac(u_clouds_march.jitter.z + rotation);
     float2 uv    = pixel / size;
     float2 ndc   = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     float4 a     = mul(u_lit_scene.inverse_view_projection, float4(ndc, 1.0, 1.0));
@@ -203,7 +210,7 @@ void rbtrend_clouds_march_comp(uint3 id : SV_DispatchThreadID) {
         float thick  = l.bounds.y - l.bounds.x;
         for (uint q = 0u; q < n && through >= 0.0009765625; ++q) {
             ++taken;
-            float t  = seg[s].x + (float(q) + u_clouds_march.jitter.z) * dt;
+            float t  = seg[s].x + (float(q) + offset) * dt;
             float3 p = eye + dir * t;
             float3 lp = cloud_local(l, p);
             float rho = cloud_density(l, k, lp, clouds_base, clouds_detail, clouds_maps, clouds_repeat);

@@ -3970,6 +3970,10 @@ Left:
       material's offset (red), the emission map's identity reads where the
       material's puts it (green) until its own moves it back (red); three
       refusals. Fails with the per-map transform ignored.
+- [ ] **A lit surface's alpha mode** (a caller's transparency stage):
+      OPAQUE (its opacity ignored), MASK, BLEND (reading none of the view's
+      screen-space inputs). Drafted 2026-11-19: `rbtrend_transparency_draft.h`
+      (version 1, seven critique passes), not approved; nothing built.
 - [ ] **Variants**: branches on the encoding, the map bits, the shadows
       and the tiles are at run time; a shader per case, or specialization
       constants (item 22), when a measurement shows them.
@@ -5746,7 +5750,90 @@ at 1080p: over the budget). The levers are the caller's (`_max_steps`,
 the budget.
 Memory as the draft's: 23.7 MiB a record at 2560 x 1440. Stages 2 and 3
 not built.
-Card A70 decided 2026-11-18 (a): the draft's history rule revised (version 2), approved the same day, every question as recommended (Q8 to Q12 a); not built yet.
+Card A70 decided 2026-11-18 (a): the draft's history rule revised (version 2), approved the same day, every question as recommended (Q8 to Q12 a).
+
+**Version 2's history rule (card A70) built 2026-11-19 on the Mac (M5 Pro,
+macOS 27, Metal), Debug and Release under validation; D3D12 and Vulkan
+never built.** No C API change (abi.txt unchanged); `rbtrendclouds.h`'s
+opening comment says the new rule (the draft's section 8). The history
+module (`src/render/rbtrendhistory.hpp`) holds it: the march's place in
+each march texel's 4 x 4 block by the ordered-dither order of sixteen
+frames, through a target texel's centre (`rbtrend_history_clouds_place`;
+the history texel of frames 0 to 3 {0, 3, 1, 2} as before,
+`_clouds_texel`); the step offset of the visit, J(frame / 4)
+(`_clouds_step`), rotated in the march by the march texel's interleaved
+gradient noise (Q10 a); the marched texel's weight 1 / (v + 1), never
+below `RBTREND_HISTORY_CLOUDS_WEIGHT_FLOOR` a quarter (Q8 a,
+`_clouds_weight`); and the share a history keeps, one function both
+call (`rbtrend_history_share`): the fog's integrate with its frames and
+its caller's weight (bit for bit as built: card A72 undecided, the fog's
+behaviour unchanged, its tests as before), the clouds with their visits
+and one less their floor. The reconstruct (`rbtrend_clouds_reconstruct_comp`)
+runs the reprojection for every history texel, the marched one too;
+clips an accepted history towards the mean of the march's 3 x 3 texels to
+mean +- gamma sigma per channel (L's three and T, as stored; Karis's
+clip, Salvi's box; Q9 a), `RBTREND_HISTORY_CLOUDS_CLIP_GAMMA` **1.5**;
+blends the marched texel's march into it by the weight (its depth by
+each side's weight and opacity, the march's where both are clear), keeps
+the others; a refused texel or a reset frame the march's own, with no
+per-texel age (Q11 a); the history read bilinearly (Q12 a). The weight
+and gamma ride in the history block's spare `frame[1]` and `frame[2]`;
+the march block's `jitter` holds the place (x, y) and the visit's
+offset (z). No texture, record or block added.
+
+Tests, each seen failing first: `rbtrendhistory_tests`' `test_clouds_order`
+and `test_weights` (the draft's test 16), against today's sequence moved
+into the module's functions unchanged: 1,188 failed checks, both faults
+among them (each history texel's two diagonal target texels never
+marched, 8; each history texel's step offsets four of sixteen, 48), and
+the weight 1 at every visit. Test 11 restated (`test_clouds_history`,
+rabbittustests): against stage 1's rule it measured (a) flicker 5.35
+levels, (b) frame 64 against the mean of 64 to 127 1.12 levels, (c)
+frames 4 and 64 2.49 levels, the turn 3.19%; the bounds below fail all
+three. Measured with version 2 (Debug and Release, both devices, the
+same): **(a) 0.9961 levels, (b) 0.5447, (c) 1.2451 (recorded, no bound),
+the turn 2.5183%**, the still view's worst texels at the deck's row
+nearest the horizon. **Bounds, the measured rounded up to a tenth:
+`CLOUDS_STILL_FLICKER_LEVELS` 1.0, `CLOUDS_STILL_MEAN_LEVELS` 0.6,
+`CLOUDS_TURN_SHARE` 2.6%** (replacing `CLOUDS_STILL_LEVELS` 3 and
+`CLOUDS_TURN_SHARE` 4%). Against section 4's estimates: flicker 0.6 to 1
+(held, at its top), the mean 1 to 1.5 (better), frame 4 against 64 1.9
+to 2.5 (better: 1.25, frame 4's march now through a target texel's
+centre, its offsets spread), the turn 3 to 4% (better). Gamma measured
+at 1.0, 1.25, 1.5 and 2.0 (the draft's estimate 1 to 1.5): flicker 1.62,
+1.37, 1.00, 0.37 levels; mean 0.94, 0.77, 0.54, 0.21; the turn 2.41%
+(1.25) and 2.52% (1.5 and 2.0); 1.5 kept, the top of the approved
+estimate (a wider box lags a sun or weather change more, which no test
+measures yet). The other clouds tests moved within their bounds: a deck
+from below 0.55% off Beer's law (was 0.64%), a thin layer 0.416% (0.41%),
+two layers 0.551% (0.32%; bound 1%). `test_frame_allocations`' clouds
+scenario: none of Rend's (no allocation added).
+Measured again (`test_clouds_measure`, Release, no validation): at
+**2560 x 1440, 32 steps and 4 light steps 1.51 to 1.66 ms** (stage 1:
+1.34 to 1.47), 32 and 6 1.78 to 1.99, 64 and 4 2.38 to 2.58, 64 and 6
+2.85 to 3.16, 3 octaves 2.90 to 3.23; at 1920 x 1080 0.79 to 1.47 at 32
+steps (the run's first case once 1.79), 1.42 to 2.26 at 64. More than the draft's estimate (under 0.05
+ms, the reconstruct's): with the per-texel rotation set to 0 (a trial,
+not kept) 32 and 4 measured 1.39 to 1.52 and 64 and 6 2.71 to 2.93, so
+the reconstruct costs about 0.05 ms and the rotation of the step offset
+(neighbouring march texels sampling the volumes at different depths)
+about 0.1 to 0.15 ms at 32 steps and 0.2 to 0.3 at 64. 32 and 4 stays
+within the card's 1.5 to 2 ms budget at 1440p.
+**Found in a caller's tests:** a round world turned 30 degrees in one
+frame with its camera (the caller's space eye-relative, the clouds
+turning with their world) fell outside that test's bounds at six frames
+a picture under version 2 (4.25 levels apart on average, 2,387 of 4,096
+texels over 2 levels, the worst 24; bounds 1, 341, 10): a world turned
+that far in a frame is no move the reprojection follows, the depths agree
+inside a shell so the history is accepted, and it then takes the
+history's time to settle (stage 1's rule replaced every texel in four
+frames). Section 4's "no texel's visits restart (the clip, not a reset,
+bounds what the turn carries)" holds for a view's turn, not for a cut
+like this one. Its bounds were kept and each of its pictures is drawn
+from a settled history (64 frames each: 0.055 levels, 0 texels, the
+worst 1; at 32 frames 0.53, 190, 4). A caller that turns its world by a
+jump resets the history (`_history_reset`).
+
 
 ### 56. Volumetric fog near the eye (card A59, decided 2026-11-17)
 
