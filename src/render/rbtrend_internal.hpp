@@ -19,6 +19,7 @@
 #include "render/rbtrendtimer.h"
 
 #include "rbtrendbuiltin_internal.hpp"
+#include "rbtrendcopies_internal.hpp"
 #include "rbtrendpools_internal.hpp"
 #include "rbtrendrendertargets_internal.hpp"
 #include "rbtrendreflect_internal.hpp"
@@ -293,6 +294,12 @@ typedef struct rbtrend_instance_t {
 	 * release_mutex, with upload_batch_waiting. */
 	std::atomic<uint64_t> submit_serial{0};
 	uint64_t frame_last_serial[RBTREND_MAX_FRAMES_IN_FLIGHT]{};
+	/* The latest finished serial a write by its bytes has seen
+	 * (rbtrend_buffer_write_after(), card A62): a write naming a serial at
+	 * or below it is not refused and reads no fence. Never above
+	 * submit_serial. Written only by that call, which is under
+	 * rbtrendcontext.h's "Threads" with every other write, so plain data. */
+	uint64_t completed_serial{0};
 	/* The one queue everything of this instance is submitted on: the queue
 	 * of its first submission, NULL until then. The serials are only an
 	 * order of completion on a single queue, so rbtrend_instance_submit
@@ -524,6 +531,13 @@ RBT_RESULT rbtrend_instance_submit(
     crgpu_swap_chain swap_chain,
     uint64_t *out_serial,
     RBTREND_ERROR *error);
+/* The latest serial the GPU has finished, read without waiting: the
+ * fence's value, never above submit_serial, which is read first. A
+ * submission that finishes between the two reads, and D3D12's UINT64_MAX on
+ * a removed device, both come out at or below the truth, the safe side for
+ * every caller of it. Writes nothing, so it may overlap any call but the
+ * instance's destroy (rbtrend_instance_get_completed_submission()). */
+uint64_t rbtrend_instance_read_completed(rbtrend_instance instance);
 /* Blocks until the submission that took [serial], and every one before it,
  * has finished, or [timeout_ns] runs out (UINT64_MAX for no limit). Serial
  * 0 returns at once. */
@@ -632,6 +646,13 @@ struct rbtrend_buffer_store {
 	 * offset, and no two overlap or touch; a ONCE store's are in the order
 	 * they were written. */
 	std::vector<rbtrend_buffer_upload> uploads{};
+	/* A staged MANY store's writes copied by submissions not known to have
+	 * finished, each with its serial, in serial order
+	 * (rbtrendcopies_internal.hpp; card A62): what
+	 * rbtrend_buffer_write_after() refuses to write over. A write reserves
+	 * room for the ranges it may add, so the submission's append never
+	 * allocates. Empty on any other store. */
+	eq::array<rbtrend_copy_in_flight> copies_in_flight{};
 	/* The buffer is used in more than one state: a storage buffer that is
 	 * also an indirect argument buffer. A command list tracks the state of
 	 * such a store and moves it (rbtrend_command_list_t::buffer_states); a
@@ -662,9 +683,11 @@ CR_RESULT rbtrend_buffer_store_write(
     uint64_t offset,
     uint64_t size,
     const void *data);
-/* After a submission that copies [store]'s uploads has gone in: every
- * buffer an upload owns is retired, and the list emptied. */
-void rbtrend_buffer_store_uploads_submitted(rbtrend_buffer_store *store);
+/* After submission [serial], which copies [store]'s uploads, has gone in:
+ * every buffer an upload owns is retired, and the list emptied. A MANY
+ * store's ranges join its copies in flight with [serial], after those the
+ * fence has passed are dropped; their room was reserved by the writes. */
+void rbtrend_buffer_store_uploads_submitted(rbtrend_buffer_store *store, uint64_t serial);
 
 typedef struct rbtrend_gpu_timer_t {
 	char *debug_name{nullptr};

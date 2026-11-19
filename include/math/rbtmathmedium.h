@@ -39,9 +39,9 @@
  * @par Same bits
  * Every call gives the same bits on every platform, given the same input:
  * the source is built without floating-point contraction, and its
- * exponential is its own (a range reduction and a fixed polynomial in
- * doubles), not the platform's libm, whose rounding differs between
- * platforms. Its square roots are IEEE's, correctly rounded everywhere.
+ * exponential is Rabbittus Math's own (rbtmathfunctions.h's exp, a range
+ * reduction and a fixed polynomial in doubles), not the platform's libm,
+ * whose rounding differs between platforms. Its square roots are IEEE's, correctly rounded everywhere.
  *
  * @par Threads
  * Every call reads only its arguments and writes only its outputs, so any

@@ -178,6 +178,19 @@ CR_RESULT rbtrend_instance_wait_serial(
 	return crgpu_fence_wait(instance->desc.device, &instance->frame_fence, &serial, 1, true, timeout_ns);
 }
 
+uint64_t rbtrend_instance_read_completed(rbtrend_instance instance) {
+	// The last serial taken first: anything the fence reads past it (D3D12's
+	// UINT64_MAX on a removed device) is cut to it, and a submission taken
+	// after this read and finished before the fence read is not counted,
+	// which under-reports.
+	const uint64_t last = instance->submit_serial.load(std::memory_order_acquire);
+	if (last == 0)
+		return 0;
+	// 0 if the fence can't be read (crgpu_fence_get_value()).
+	const uint64_t fence = crgpu_fence_get_value(instance->frame_fence);
+	return fence < last ? fence : last;
+}
+
 CR_RESULT rbtrend_instance_take_command_list(
     rbtrend_instance instance,
     crgpu_command_list *out_list) {
@@ -554,6 +567,22 @@ uint32_t rbtrend_instance_get_frame_index(rbtrend_instance instance) {
 		return 0;
 	return instance->frame_index;
 }
+uint64_t rbtrend_instance_get_last_submission(rbtrend_instance instance) {
+	if (!instance)
+		return 0;
+	if (RBT_STALE(instance, "rbtrend_instance_get_last_submission", "instance"))
+		return 0;
+	return instance->submit_serial.load(std::memory_order_acquire);
+}
+
+uint64_t rbtrend_instance_get_completed_submission(rbtrend_instance instance) {
+	if (!instance)
+		return 0;
+	if (RBT_STALE(instance, "rbtrend_instance_get_completed_submission", "instance"))
+		return 0;
+	return rbtrend_instance_read_completed(instance);
+}
+
 RBT_RESULT rbtrend_instance_wait_idle(
     rbtrend_instance instance,
     RBTREND_ERROR *out_error) {

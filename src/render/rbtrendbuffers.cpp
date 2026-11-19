@@ -5,6 +5,8 @@
 
 #include <crgpu.h>
 
+#include <cassert>
+#include <cstdint>
 #include <new>
 
 // Each part is destroyed only as far as it was made: a buffer that failed
@@ -139,6 +141,7 @@ void rbtrend_buffer_store_destroy(rbtrend_buffer_store *store) {
 		++own;
 	}
 	store->uploads.clear();
+	store->copies_in_flight.free();
 	if (own > 0)
 		rbtrend_instance_unreserve_release(store->instance, own);
 	if (store->staging)
@@ -226,6 +229,12 @@ static CR_RESULT rbtrend_buffer_store_write_staging(
 	} catch (const std::bad_alloc &) {
 		return CR_RESULT_OUT_OF_MEMORY;
 	}
+	// And room for every waiting range to join the copies in flight at the
+	// submission that copies them, so the submission never allocates for
+	// it (card A62). Merging only shrinks the list, so one more than it
+	// holds now is enough.
+	if (!rbtrend_copies_reserve(store->copies_in_flight, store->uploads.size() + 1))
+		return CR_RESULT_OUT_OF_MEMORY;
 	CR_RESULT sr = rbtrend_buffer_write_mapped(store->staging, offset, size, data);
 	if (CR_FAILED(sr))
 		return sr;
@@ -278,7 +287,21 @@ CR_RESULT rbtrend_buffer_store_write(
 	return rbtrend_buffer_store_write_own(store, offset, size, data);
 }
 
-void rbtrend_buffer_store_uploads_submitted(rbtrend_buffer_store *store) {
+void rbtrend_buffer_store_uploads_submitted(rbtrend_buffer_store *store, uint64_t serial) {
+	// A MANY store's ranges are read from its staging buffer until [serial]
+	// finishes: they join the copies in flight, which a write by its bytes
+	// won't write over. What has finished goes first; the fence is read
+	// only if something is kept.
+	if (store->staging && !store->uploads.empty()) {
+		if (!store->copies_in_flight.empty())
+			rbtrend_copies_prune(store->copies_in_flight, rbtrend_instance_read_completed(store->instance));
+		for (const rbtrend_buffer_upload &upload : store->uploads) {
+			// Room was reserved by the write that made the range.
+			const bool appended = rbtrend_copies_append(store->copies_in_flight, upload.offset, upload.size, serial);
+			assert(appended);
+			(void)appended;
+		}
+	}
 	// Each retire was promised by the write that made the buffer.
 	for (const rbtrend_buffer_upload &upload : store->uploads)
 		if (upload.source != store->staging)
@@ -723,6 +746,61 @@ RBT_RESULT rbtrend_buffer_write(rbtrend_buffer buffer, uint64_t offset, const vo
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the %s was created RBTREND_BUFFER_WRITES_ONCE", rbtrend_buffer_label(buffer, label));
 	rbtrend_buffer_part *part = rbtrend_buffer_part_of(buffer, buffer->instance->frame_index);
 	const CR_RESULT sr      = rbtrend_buffer_store_write(&part->store, offset, data_size, data);
+	if (CR_FAILED(sr))
+		return rbtrend_fail_cr(out_error, sr, "the bytes can't be written to the %s", rbtrend_buffer_label(buffer, label));
+	return RBT_RESULT_OK;
+}
+
+RBT_RESULT rbtrend_buffer_write_after(rbtrend_buffer buffer, uint64_t offset, const void *data, uint64_t data_size, uint64_t last_reader, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	if (!buffer)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "buffer is NULL");
+	if (RBT_STALE(buffer, "rbtrend_buffer_write_after", "buffer"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "buffer is destroyed");
+	RBTREND_ENTER(buffer->instance, "rbtrend_buffer_write_after");
+	char label[96];
+	if (!data)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "data is NULL");
+	if (data_size == 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "data_size is 0");
+	const uint64_t size = buffer->desc.size;
+	if (offset > size)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "offset %llu is past the %s's %llu bytes", (unsigned long long)offset, rbtrend_buffer_label(buffer, label), (unsigned long long)size);
+	if (data_size > size - offset)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "%llu bytes at offset %llu run past the %s's %llu", (unsigned long long)data_size, (unsigned long long)offset, rbtrend_buffer_label(buffer, label), (unsigned long long)size);
+	if (buffer->desc.writes == RBTREND_BUFFER_WRITES_ONCE)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the %s was created RBTREND_BUFFER_WRITES_ONCE", rbtrend_buffer_label(buffer, label));
+	// Created per_frame, whatever frames_in_flight made of it: its copies
+	// are kept apart by the frame wait, and a second rule for it would
+	// only be a second way to write it.
+	if (buffer->desc.per_frame)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the %s has per-frame copies: rbtrend_buffer_write() writes the current one", rbtrend_buffer_label(buffer, label));
+	rbtrend_instance instance = buffer->instance;
+	const uint64_t taken      = instance->submit_serial.load(std::memory_order_acquire);
+	if (last_reader > taken)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "last_reader %llu is past the last submission the instance has made, %llu", (unsigned long long)last_reader, (unsigned long long)taken);
+	const unsigned long long first_byte = (unsigned long long)offset;
+	const unsigned long long last_byte  = (unsigned long long)(offset + (data_size - 1));
+	// The cache answers a caller that names frames the instance has
+	// waited for; the fence is read only past it.
+	if (last_reader > instance->completed_serial) {
+		instance->completed_serial = rbtrend_instance_read_completed(instance);
+		if (last_reader > instance->completed_serial)
+			return rbtrend_fail(out_error, RBT_RESULT_REND_IN_USE, "bytes %llu to %llu of the %s may be read by submission %llu, which hasn't finished (the GPU has finished %llu); nothing written", first_byte, last_byte, rbtrend_buffer_label(buffer, label), (unsigned long long)last_reader, (unsigned long long)instance->completed_serial);
+	}
+	rbtrend_buffer_part *part = &buffer->parts[0];
+	eq::array<rbtrend_copy_in_flight> &copies = part->store.copies_in_flight;
+	if (!copies.empty()) {
+		// Rend's own reads of the staging buffer: dropped as they finish,
+		// the fence read again only if one is past what is known.
+		if (copies[copies.size() - 1].serial > instance->completed_serial)
+			instance->completed_serial = rbtrend_instance_read_completed(instance);
+		rbtrend_copies_prune(copies, instance->completed_serial);
+		const size_t overlap = rbtrend_copies_find_overlap(copies, offset, data_size);
+		if (overlap != SIZE_MAX)
+			return rbtrend_fail(out_error, RBT_RESULT_REND_IN_USE, "bytes %llu to %llu of the %s are still being copied to the device by submission %llu (an earlier write of them, bytes %llu to %llu), which hasn't finished (the GPU has finished %llu); nothing written", first_byte, last_byte, rbtrend_buffer_label(buffer, label), (unsigned long long)copies[overlap].serial, (unsigned long long)copies[overlap].offset, (unsigned long long)(copies[overlap].offset + (copies[overlap].size - 1)), (unsigned long long)instance->completed_serial);
+	}
+	const CR_RESULT sr = rbtrend_buffer_store_write(&part->store, offset, data_size, data);
 	if (CR_FAILED(sr))
 		return rbtrend_fail_cr(out_error, sr, "the bytes can't be written to the %s", rbtrend_buffer_label(buffer, label));
 	return RBT_RESULT_OK;

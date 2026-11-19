@@ -144,6 +144,9 @@ static void test_null_instance(void)
     CHECK(index == 7);
     CHECK(strcmp(error.message, "instance is NULL") == 0);
     CHECK(rbtrend_instance_get_frame_index(NULL) == 0);
+    // The submissions' serials (card A62): 0 for no instance.
+    CHECK(rbtrend_instance_get_last_submission(NULL) == 0);
+    CHECK(rbtrend_instance_get_completed_submission(NULL) == 0);
     rbtrend_instance_destroy(NULL);
 }
 
@@ -535,6 +538,12 @@ static void test_buffers(void)
     CHECK(rbtrend_buffer_write(NULL, 0, bytes, sizeof(bytes), &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(strcmp(error.message, "buffer is NULL") == 0);
     CHECK(rbtrend_buffer_write(NULL, 0, bytes, sizeof(bytes), NULL) == RBT_RESULT_INVALID_ARGUMENT);
+    // A write by its bytes (card A62): the buffer first, as the plain write.
+    dirty(&error);
+    CHECK(rbtrend_buffer_write_after(NULL, 0, bytes, sizeof(bytes), 0, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "buffer is NULL") == 0);
+    CHECK(rbtrend_buffer_write_after(NULL, 0, bytes, sizeof(bytes), 0, NULL) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(RBT_RESULT_REND_IN_USE == 5005);
 
     // A block of a vec4, a float, a mat3 and an array of two vec2s, as
     // std140 lays them out: 16, 4, 48 (three columns of 16) and 32 (16 an
@@ -1190,11 +1199,95 @@ static void test_lit_scene_desc(void)
     CHECK(sizeof(RBTREND_LIT_SCENE_DESC) == (sizeof(void *) == 8 ? 24 : 12));
 }
 
+// Card A59's stage 2 (rbtrend_fog_draft.h, section 11): command 52, its
+// parameters within RBTREND_COMMAND's 120 bytes (72 on a 64-bit build), the
+// desc's struct type and layout, the frozen volume and the four limits; the
+// fog's calls with NULL, each its own message. Its refusals past these read
+// views and a scene, so need a device: rabbittustests' test_fog_records.
+static void test_fog_grid_contract(void)
+{
+    current_test = "fog_grid_contract";
+    RBTREND_COMMAND command;
+    CHECK(RBTREND_COMMAND_LIT_FOG == 52);
+    CHECK(sizeof(RBTREND_COMMAND) == 128);
+    if (sizeof(void *) == 8)
+        CHECK(sizeof(command._params._lit_fog) == 72);
+    CHECK(sizeof(command._params._lit_fog) <= sizeof(command._params._padding));
+    CHECK(RBT_STRUCT_TYPE_REND_FOG_DESC == 5042);
+    CHECK(offsetof(RBTREND_FOG_DESC, base) == 0);
+    CHECK(sizeof(RBTREND_FOG_DESC) == (sizeof(void *) == 8 ? 48 : 32));
+    CHECK(sizeof(RBTREND_FOG_VOLUME_INSTANCE) == sizeof(RBTMATH_FOG_VOLUME) + 18 * sizeof(float));
+    CHECK(RBTREND_FOG_MAX_VOLUMES == 64u);
+    CHECK(RBTREND_FOG_MAX_TILE_VOLUMES == 15u);
+    CHECK(RBTREND_FOG_MAX_VIEWS == 16u);
+    CHECK(RBTREND_FOG_MAX_GRID_SIDE == 512u);
+    CHECK(RBTREND_FOG_MAX_GRID_SLICES == 256u);
+    RBTREND_ERROR error;
+    rbtrend_fog fog = (rbtrend_fog)(uintptr_t)1;
+    dirty(&error);
+    CHECK(rbtrend_fog_create(NULL, NULL, &fog, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "instance is NULL") == 0);
+    CHECK(fog == NULL);
+    dirty(&error);
+    CHECK(rbtrend_fog_write_noise(NULL, NULL, 0, 1, NULL, 0, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "fog is NULL") == 0);
+    rbtrend_fog_destroy(NULL);
+}
+
+// Card A57's stage 1 (rbtrend_clouds_draft.h, section 11, test 14's headless
+// half): command 53, its parameters within RBTREND_COMMAND's 120 bytes (72 on
+// a 64-bit build), the two based structs' types and layouts, the frozen
+// layer and the limits; the clouds' calls with NULL, each its own message.
+// Its refusals past these need a device: rabbittustests' test_clouds_refusals.
+static void test_clouds_contract(void)
+{
+    current_test = "clouds_contract";
+    RBTREND_COMMAND command;
+    CHECK(RBTREND_COMMAND_LIT_CLOUDS == 53);
+    if (sizeof(void *) == 8)
+        CHECK(sizeof(command._params._lit_clouds) == 72);
+    CHECK(sizeof(command._params._lit_clouds) <= sizeof(command._params._padding));
+    CHECK(RBT_STRUCT_TYPE_REND_CLOUDS_DESC == 5043);
+    CHECK(RBT_STRUCT_TYPE_REND_CLOUD_LOOK == 5044);
+    CHECK(offsetof(RBTREND_CLOUDS_DESC, base) == 0);
+    CHECK(sizeof(RBTREND_CLOUDS_DESC) == (sizeof(void *) == 8 ? 56 : 44));
+    CHECK(offsetof(RBTREND_CLOUD_LOOK, base) == 0);
+    CHECK(offsetof(RBTREND_CLOUD_LOOK, shape) == sizeof(RBT_STRUCT_BASE));
+    CHECK(offsetof(RBTREND_CLOUD_LAYER, _bounds) == 8);
+    CHECK(offsetof(RBTREND_CLOUD_LAYER, _offsets) == 8 + sizeof(RBTMATH_CLOUD_BOUNDS) + 12 * sizeof(float));
+    CHECK(RBTREND_CLOUDS_MAX_LAYERS == 4u);
+    CHECK(RBTREND_CLOUDS_MAX_LOOKS == 16u);
+    CHECK(RBTREND_CLOUDS_MAX_COVERAGE_MAPS == 8u);
+    CHECK(RBTREND_CLOUDS_MAX_VIEWS == 16u);
+    CHECK(RBTREND_CLOUDS_MAX_STEPS == 256u);
+    CHECK(RBTREND_CLOUDS_MAX_LIGHT_STEPS == 16u);
+    CHECK(RBTREND_CLOUDS_MAX_LAYER_LIGHTS == 2u);
+    CHECK(RBTREND_CLOUDS_MAX_SCATTERING_OCTAVES == 4u);
+    RBTREND_ERROR error;
+    rbtrend_clouds clouds = (rbtrend_clouds)(uintptr_t)1;
+    dirty(&error);
+    CHECK(rbtrend_clouds_create(NULL, NULL, &clouds, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "instance is NULL") == 0);
+    CHECK(clouds == NULL);
+    dirty(&error);
+    CHECK(rbtrend_clouds_write_noise(NULL, NULL, RBTMATH_NOISE_VOLUME_KIND_WORLEY, 0, 1, NULL, 0, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "clouds is NULL") == 0);
+    dirty(&error);
+    CHECK(rbtrend_clouds_write_coverage(NULL, NULL, 0, 0, 0, 0, 1, 1, NULL, 0, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "clouds is NULL") == 0);
+    dirty(&error);
+    CHECK(rbtrend_clouds_set_look(NULL, 0, NULL, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "clouds is NULL") == 0);
+    rbtrend_clouds_destroy(NULL);
+}
+
 int main(int argc, char **argv)
 {
     print_anchor = argc > 1 && strcmp(argv[1], "--print-anchor") == 0;
     test_instance_create();
     test_atmosphere_shell_command();
+    test_fog_grid_contract();
+    test_clouds_contract();
     test_lit_scene_desc();
     test_null_instance();
     test_images_null();

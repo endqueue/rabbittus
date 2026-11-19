@@ -8,7 +8,7 @@
 //
 // Handle types with no factory, not called with a destroyed handle:
 // - A Rend handle needs a GPU device, which these tests never make; rabbittustests/tests/rbtrend_gpu_tests.c, test_destroyed_handles, calls these.
-//   Not covered: rbtrend_atmosphere, rbtrend_batch, rbtrend_binding_layout, rbtrend_binding_set, rbtrend_blas, rbtrend_buffer, rbtrend_command_list, rbtrend_compute_pass, rbtrend_compute_pipeline, rbtrend_draw_list, rbtrend_exposure, rbtrend_framebuffer, rbtrend_gpu_timer, rbtrend_graphics_pipeline, rbtrend_index_pool, rbtrend_instance, rbtrend_lit_environment, rbtrend_lit_scene, rbtrend_material, rbtrend_render_pass, rbtrend_sampler, rbtrend_shader, rbtrend_swap_chain, rbtrend_texture2d, rbtrend_texture3d, rbtrend_texture_view, rbtrend_tlas, rbtrend_vertex_pool.
+//   Not covered: rbtrend_atmosphere, rbtrend_batch, rbtrend_binding_layout, rbtrend_binding_set, rbtrend_blas, rbtrend_buffer, rbtrend_clouds, rbtrend_command_list, rbtrend_compute_pass, rbtrend_compute_pipeline, rbtrend_draw_list, rbtrend_exposure, rbtrend_fog, rbtrend_framebuffer, rbtrend_gpu_timer, rbtrend_graphics_pipeline, rbtrend_index_pool, rbtrend_instance, rbtrend_lit_environment, rbtrend_lit_scene, rbtrend_material, rbtrend_render_pass, rbtrend_sampler, rbtrend_shader, rbtrend_swap_chain, rbtrend_texture2d, rbtrend_texture3d, rbtrend_texture_view, rbtrend_tlas, rbtrend_vertex_pool.
 
 #include "rbtrend.h"
 #include "archive/rbtarchive.h"
@@ -16,6 +16,8 @@
 #include "audio/rbtaudiocues.h"
 #include "jobs/rbtjobs.h"
 #include "math/rbtmathbvh.h"
+#include "math/rbtmathclouds.h"
+#include "math/rbtmathfunctions.h"
 #include "math/rbtmathmedium.h"
 #include "math/rbtmathnoise.h"
 #include "math/rbtmathpoly.h"
@@ -1586,6 +1588,26 @@ int main(void)
     calls++;
     (void)rbtmath_box_bvh_sweep_all((rbtmath_box_bvh){0}, (const RBTMATH_SWEEP *){0}, (const RBTMATH_CAST_DESC *){0}, (RBTMATH_BOX_HIT *){0}, (uint32_t){0});
     calls++;
+    expect_error("rbtmath_cloud_compute_density", rbtmath_cloud_compute_density((const RBTMATH_CLOUD_SHAPE *){0}, (const RBTMATH_CLOUD_BOUNDS *){0}, (const RBTMATH_CLOUD_TEXELS *){0}, (const RBTMATH_CLOUD_OFFSETS *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    (void)rbtmath_compute_atan((const double *){0}, (uint32_t){0}, (double *){0}, (RBTMATH_ERROR *){0}); // zeroes are valid: a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)
+    calls++;
+    (void)rbtmath_compute_atan2((const double *){0}, (const double *){0}, (uint32_t){0}, (double *){0}, (RBTMATH_ERROR *){0}); // zeroes are valid: a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)
+    calls++;
+    (void)rbtmath_compute_exp((const double *){0}, (uint32_t){0}, (double *){0}, (RBTMATH_ERROR *){0}); // zeroes are valid: a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)
+    calls++;
+    (void)rbtmath_compute_exp2((const double *){0}, (uint32_t){0}, (double *){0}, (RBTMATH_ERROR *){0}); // zeroes are valid: a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)
+    calls++;
+    (void)rbtmath_compute_log2((const double *){0}, (uint32_t){0}, (double *){0}, (RBTMATH_ERROR *){0}); // zeroes are valid: a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)
+    calls++;
+    (void)rbtmath_compute_tan((const double *){0}, (uint32_t){0}, (double *){0}, (RBTMATH_ERROR *){0}); // zeroes are valid: a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)
+    calls++;
+    expect_error("rbtmath_fog_volume_compute_density", rbtmath_fog_volume_compute_density((const RBTMATH_FOG_VOLUME *){0}, (const uint8_t *){0}, (uint32_t){0}, (const float *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_height_fog_compute_density", rbtmath_height_fog_compute_density((const RBTMATH_HEIGHT_FOG *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_height_fog_compute_transmittance", rbtmath_height_fog_compute_transmittance((const RBTMATH_HEIGHT_FOG *){0}, (const float *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
     (void)rbtmath_instance_bvh_cast((rbtmath_instance_bvh){0}, (const RBTMATH_RAY *){0}, (const RBTMATH_CAST_DESC *){0}, (RBTMATH_INSTANCE_HIT *){0});
     calls++;
     (void)rbtmath_instance_bvh_cast_all((rbtmath_instance_bvh){0}, (const RBTMATH_RAY *){0}, (const RBTMATH_CAST_DESC *){0}, (RBTMATH_INSTANCE_HIT *){0}, (uint32_t){0});
@@ -1639,6 +1661,10 @@ int main(void)
     expect_error("rbtmath_noise_compute_offsets", rbtmath_noise_compute_offsets((const RBTMATH_NOISE_DESC *){0}, (const double *){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
     calls++;
     expect_error("rbtmath_noise_compute_points", rbtmath_noise_compute_points((const RBTMATH_NOISE_DESC *){0}, (const double *){0}, (uint32_t){0}, (float *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_noise_volume_bake", rbtmath_noise_volume_bake((RBTMATH_NOISE_VOLUME_KIND){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint8_t *){0}, (RBTMATH_ERROR *){0}));
+    calls++;
+    expect_error("rbtmath_noise_volume_sample", rbtmath_noise_volume_sample((const uint8_t *){0}, (uint32_t){0}, (const float *){0}, (uint32_t){0}, (float *){0}, (RBTMATH_ERROR *){0}));
     calls++;
     expect_error("rbtmath_noise_warp_points", rbtmath_noise_warp_points((const RBTMATH_NOISE_WARP_DESC *){0}, (const double *){0}, (uint32_t){0}, (double *){0}, (float *){0}, (RBTMATH_ERROR *){0}));
     calls++;
@@ -1736,7 +1762,19 @@ int main(void)
     calls++;
     expect_error("rbtrend_buffer_write", rbtrend_buffer_write((rbtrend_buffer){0}, (uint64_t){0}, (const void *){0}, (uint64_t){0}, (RBTREND_ERROR *){0}));
     calls++;
+    expect_error("rbtrend_buffer_write_after", rbtrend_buffer_write_after((rbtrend_buffer){0}, (uint64_t){0}, (const void *){0}, (uint64_t){0}, (uint64_t){0}, (RBTREND_ERROR *){0}));
+    calls++;
     expect_error("rbtrend_buffer_write_uniform", rbtrend_buffer_write_uniform((rbtrend_buffer){0}, (const RBTREND_UNIFORM_LAYOUT *){0}, (uint32_t){0}, (const void *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_clouds_create", rbtrend_clouds_create((rbtrend_instance){0}, (const RBTREND_CLOUDS_DESC *){0}, (rbtrend_clouds *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    rbtrend_clouds_destroy((rbtrend_clouds){0});
+    calls++;
+    expect_error("rbtrend_clouds_set_look", rbtrend_clouds_set_look((rbtrend_clouds){0}, (uint32_t){0}, (const RBTREND_CLOUD_LOOK *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_clouds_write_coverage", rbtrend_clouds_write_coverage((rbtrend_clouds){0}, (crgpu_command_queue){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (uint32_t){0}, (const void *){0}, (uint64_t){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_clouds_write_noise", rbtrend_clouds_write_noise((rbtrend_clouds){0}, (crgpu_command_queue){0}, (RBTMATH_NOISE_VOLUME_KIND){0}, (uint32_t){0}, (uint32_t){0}, (const void *){0}, (uint64_t){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_command_list_compile", rbtrend_command_list_compile((rbtrend_command_list){0}, (RBTREND_ERROR *){0}));
     calls++;
@@ -1777,6 +1815,12 @@ int main(void)
     expect_error("rbtrend_exposure_create", rbtrend_exposure_create((rbtrend_instance){0}, (const RBTREND_EXPOSURE_DESC *){0}, (rbtrend_exposure *){0}, (RBTREND_ERROR *){0}));
     calls++;
     rbtrend_exposure_destroy((rbtrend_exposure){0});
+    calls++;
+    expect_error("rbtrend_fog_create", rbtrend_fog_create((rbtrend_instance){0}, (const RBTREND_FOG_DESC *){0}, (rbtrend_fog *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    rbtrend_fog_destroy((rbtrend_fog){0});
+    calls++;
+    expect_error("rbtrend_fog_write_noise", rbtrend_fog_write_noise((rbtrend_fog){0}, (crgpu_command_queue){0}, (uint32_t){0}, (uint32_t){0}, (const void *){0}, (uint64_t){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_framebuffer_clear_colors", rbtrend_framebuffer_clear_colors((rbtrend_framebuffer){0}, (crgpu_command_queue){0}, (float){0}, (float){0}, (float){0}, (float){0}, (RBTREND_ERROR *){0}));
     calls++;
@@ -1836,11 +1880,15 @@ int main(void)
     calls++;
     rbtrend_instance_destroy((rbtrend_instance){0});
     calls++;
+    (void)rbtrend_instance_get_completed_submission((rbtrend_instance){0});
+    calls++;
     expect_error("rbtrend_instance_get_desc", rbtrend_instance_get_desc((rbtrend_instance){0}, (RBTREND_INSTANCE_DESC *){0}));
     calls++;
     (void)rbtrend_instance_get_frame_index((rbtrend_instance){0});
     calls++;
     expect_error("rbtrend_instance_get_fullscreen_vertex_shader", rbtrend_instance_get_fullscreen_vertex_shader((rbtrend_instance){0}, (rbtrend_shader *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    (void)rbtrend_instance_get_last_submission((rbtrend_instance){0});
     calls++;
     expect_error("rbtrend_instance_get_render_target_pool", rbtrend_instance_get_render_target_pool((rbtrend_instance){0}, (RBTREND_RENDER_TARGET_POOL_INFO *){0}));
     calls++;
@@ -1899,6 +1947,8 @@ int main(void)
     expect_error("rbtrend_lit_scene_set_atmosphere", rbtrend_lit_scene_set_atmosphere((rbtrend_lit_scene){0}, (const RBTREND_LIT_ATMOSPHERE *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_scene_set_bent_normals", rbtrend_lit_scene_set_bent_normals((rbtrend_lit_scene){0}, (_Bool){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_scene_set_fog", rbtrend_lit_scene_set_fog((rbtrend_lit_scene){0}, (const RBTREND_LIT_FOG *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_scene_set_light_shadow", rbtrend_lit_scene_set_light_shadow((rbtrend_lit_scene){0}, (uint32_t){0}, (const RBTREND_LIT_LIGHT_SHADOW *){0}, (RBTREND_ERROR *){0}));
     calls++;

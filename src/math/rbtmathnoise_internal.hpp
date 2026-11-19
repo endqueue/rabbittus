@@ -15,6 +15,7 @@
 #include "../rbtplaindata.hpp"
 #include <cfloat>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 static_assert(FLT_EVAL_METHOD == 0, "rbtmathnoise's bits need every float operation rounded to binary32 once");
@@ -502,5 +503,59 @@ struct Octave
 };
 RBT_PLAIN_DATA(Octave);
 RBT_HOT_RECORD(Octave, 64);
+
+// ---- Reading a baked volume (rbtmathnoise.h, "Reading a volume") -----------------------
+//
+// The trilinear, repeating read every density over a baked volume is
+// defined by: rbtmath_noise_volume_sample() and rbtmathfog.cpp's fog
+// volumes call it, so both read the same bits. q in tiles, checked by the
+// caller (finite, within RBTMATH_NOISE_VOLUME_MAX_COORDINATE); n the side.
+
+inline void volume_axis(float q, uint32_t n, uint32_t &i0, uint32_t &i1, float &t)
+{
+    const float u   = (q * (float)n) - 0.5f;
+    const float fl  = std::floor(u);
+    const int64_t i = (int64_t)fl;
+    t               = u - (float)i;
+    const int64_t m = (int64_t)n;
+    int64_t r       = i % m;
+    if (r < 0)
+        r += m;
+    i0 = (uint32_t)r;
+    i1 = (uint32_t)((r + 1) % m);
+}
+
+inline void volume_read(const uint8_t *texels, uint32_t n, const float q[3], float out[4])
+{
+    uint32_t x0, x1, y0, y1, z0, z1;
+    float tx, ty, tz;
+    volume_axis(q[0], n, x0, x1, tx);
+    volume_axis(q[1], n, y0, y1, ty);
+    volume_axis(q[2], n, z0, z1, tz);
+    const std::size_t row   = (std::size_t)n * 4;
+    const std::size_t slice = row * n;
+    const uint8_t *c000 = texels + z0 * slice + y0 * row + (std::size_t)x0 * 4;
+    const uint8_t *c100 = texels + z0 * slice + y0 * row + (std::size_t)x1 * 4;
+    const uint8_t *c010 = texels + z0 * slice + y1 * row + (std::size_t)x0 * 4;
+    const uint8_t *c110 = texels + z0 * slice + y1 * row + (std::size_t)x1 * 4;
+    const uint8_t *c001 = texels + z1 * slice + y0 * row + (std::size_t)x0 * 4;
+    const uint8_t *c101 = texels + z1 * slice + y0 * row + (std::size_t)x1 * 4;
+    const uint8_t *c011 = texels + z1 * slice + y1 * row + (std::size_t)x0 * 4;
+    const uint8_t *c111 = texels + z1 * slice + y1 * row + (std::size_t)x1 * 4;
+    for (int c = 0; c < 4; c++)
+    {
+        const float v000 = (float)c000[c] / 255.0f, v100 = (float)c100[c] / 255.0f;
+        const float v010 = (float)c010[c] / 255.0f, v110 = (float)c110[c] / 255.0f;
+        const float v001 = (float)c001[c] / 255.0f, v101 = (float)c101[c] / 255.0f;
+        const float v011 = (float)c011[c] / 255.0f, v111 = (float)c111[c] / 255.0f;
+        const float x00  = v000 + (tx * (v100 - v000));
+        const float x10  = v010 + (tx * (v110 - v010));
+        const float x01  = v001 + (tx * (v101 - v001));
+        const float x11  = v011 + (tx * (v111 - v011));
+        const float y_0  = x00 + (ty * (x10 - x00));
+        const float y_1  = x01 + (ty * (x11 - x01));
+        out[c]           = y_0 + (tz * (y_1 - y_0));
+    }
+}
 
 } // namespace rbtnoise

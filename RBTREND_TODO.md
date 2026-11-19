@@ -4649,12 +4649,22 @@ the same thing everywhere, and offers neither.
 **Decided 2026-10-28 with the user (card A15): indirect dispatch is taken,** in Carrottus GPU
 first (`../carrottus/CRGPU_DEVICE_TODO.md`, "Later"), then as a Rend
 command. A draw count from the GPU and task shaders stay deferred.
+Drafted 2026-11-18: `carrottus/crgpu_dispatch_indirect_draft.h` (version 1, seven critique passes), not approved; nothing built. **Approved 2026-11-18 with the user**, every question as recommended.
+**Carrottus GPU's half built on the Mac 2026-11-18, compute only:**
+`crgpu_command_list_dispatch_indirect()` and `crgpu_dispatch_indirect_args`
+(Windows and Fedora owed; `../carrottus/CRGPU_DEVICE_TODO.md`, "Indirect
+dispatch"). The mesh call was stopped there: Metal has indirect mesh draws
+from Apple9 only, and every Metal adapter reports mesh shading; it waits on
+a card. Carrottus GPU's rule on a direct or indirect mesh dispatch is now
+each count at most 65535 and their product at most 1024. Rend's command
+comes with particles.
 
 Numbered out of order, as item 31. Each is a call or a path Carrottus GPU doesn't
 have on every backend:
 
 - **Indirect dispatch**, for compute and for mesh shaders: the group counts
-  read from a buffer. Carrottus GPU has no such call.
+  read from a buffer. Carrottus GPU has the compute call since 2026-11-18;
+  the mesh call waits (above).
 - **A draw count from the GPU.** `DRAW_INDIRECT`'s `_draw_count` is fixed
   when the command is recorded, so a compute pass that culls can zero an
   entry's instance count and can't shorten the list. Carrottus GPU has no
@@ -5174,7 +5184,14 @@ along a ray, the two phase functions; built 2026-11-16 on macOS with
 contraction off and an exponential of its own, `rbtmathmedium_tests`
 passing: brute force within 1e-4, the zenith's closed form, the phases
 integrating to 1, 10,000 rays the same bytes alone and on 1 and 4
-threads, CRC-32 7d88a849 on the M5 Pro for other platforms to match);
+threads, CRC-32 7d88a849 on the M5 Pro for other platforms to match;
+since 2026-11-18 its exponential is `rbtmathfunctions.h`'s exp, card
+A61, and the CRC is still 7d88a849: the medium writes floats, and no
+float moved, over the 10,000 rays nor over 10^8 arguments in [-30, 0]
+compared alone; rabbittustests' atmosphere figures, Debug and Release
+under Metal's validation, are the ones recorded below, Rabbittus Math's
+0.887, 0.550, 0.847, 0.622, (0.925, 0.870, 0.745) and (0.792, 0.659,
+0.415) among them, and nothing was re-recorded; `RBTMATH_TODO.md`, A61);
 Rend's atmosphere takes that struct and draws it. Stage 4 (the shell
 from space) needs a blended full-screen march of Rend's own, not L7's
 transparency, so it moves before L7 as its own session (B4).
@@ -5558,6 +5575,14 @@ neutral 1 x 1 sixteen-layer arrays per instance (ORMH's height the byte
 128); fragment sampled images 14 on the layered shader, 15 on the lit,
 against Vulkan's floor of 16. Tests 13 and 14 added.
 
+**The cover stage (snow, wetness; card L74's, which this item's draft
+carded as "a cover input"):** drafted 2026-11-18 as
+`rbtrend_weather_draft.h` (version 1, seven critique passes), not
+approved; nothing built: `rbtrend_lit_scene_set_cover()` for both lit
+surfaces, a material's or layer's `RBTREND_LIT_COVER_RESPONSE` chained
+on; Q1 to Q3, each recommended a. Its caller's half is drafted beside
+the caller's headers.
+
 ### 54. A view-model pass: a second pass with its own field of view, depth cleared (card A58, decided 2026-11-17: drafted when wanted)
 
 Asked for by you on 2026-11-17: a draft, when wanted, for drawing chosen
@@ -5594,6 +5619,135 @@ atmosphere's stage 4 is built, and a GPU test of a 3D texture written by
 compute and sampled on three backends first. No version raise while 0.3
 is untagged.
 
+Drafted 2026-11-18: `rbtrend_clouds_draft.h` and `rbtmath_clouds_draft.h`
+(version 1, seven critique passes), approved 2026-11-18 with the user, every question as recommended; nothing built. Stage 1
+(from under and inside) whole, stages 2 and 3 said as additions; seven
+questions in Rend's half (the history a record a view inside the object;
+its resolution half each way; the volumes and maps the object's own; a
+shell's map read by hand from a 2D array; grey extinction; directional
+lights by index; a shell layer seen from outside drawn as from inside
+until stage 2), five in Math's. Its prerequisite test, a 3D texture
+sampled on three backends, is its test 1.
+
+**Stage 1 built 2026-11-18 on the Mac (M5 Pro, macOS 27, Metal), Debug and
+Release; D3D12 and Vulkan never built** (`rbtrend_clouds_draft.h` as
+approved, every question as recommended: Q1 a, Q2 a, Q3 a, Q4 a, Q5 a, Q6
+a, Q7 a). `render/rbtrendclouds.h` (twenty headers in `rbtrend.h` now):
+`rbtrend_clouds` (`rbtrend_clouds_create`, `_destroy`, `_write_noise`,
+`_write_coverage`, `_set_look`), `RBTREND_CLOUDS_DESC` (struct type
+**5043**), `RBTREND_CLOUD_LOOK` (**5044**), the frozen
+`RBTREND_CLOUD_LAYER`, nine limits; **`RBTREND_COMMAND_LIT_CLOUDS` = 53**
+(52 was taken by LIT_FOG), its parameters 72 bytes of the 120;
+`RBTREND_LIT_SCENE_DESC::max_view_sets`' comment names it (it takes one set
+from the scene's records). `src/render/rbtrendclouds.cpp`,
+`rbtrendclouds_internal.hpp`, the compile in `rbtrendcommands.cpp`
+(`rbtrend_cmd_lit_clouds`), the pipelines in `rbtrendlit.cpp`
+(`rbtrend_lit_clouds_prepare`); shaders `rbtrend_clouds_model.slang` (the
+density, Math's steps 1 to 7, no bindings), `_input`, `_bindings`,
+`rbtrend_clouds_march_comp`, `_reconstruct_comp`, `_composite_frag`.
+Set 0 untouched (the march and reconstruct shaders join the shaders the
+scene's layout is made from, which widens stages and changes no binding);
+the lit scene block untouched. The record's history is
+`rbtrendhistory.hpp` unchanged. Passes: the march (compute, a thread a
+quarter-resolution texel: sets 0 the scene's, 1 a view-set record over the
+depth and the four layers' transmittance tables, 2 the clouds' own
+material, 3 the record's march material), the reconstruct (compute, a
+thread a half-resolution texel: the scene's set and a material a way the
+history runs), the composite (a full-target pass, blend ONE / SRC_ALPHA,
+over the scene's set, the same view-set and the record's composite set a
+way). Shapes chosen alone (none in the draft): `RBTREND_CLOUDS_MAX_TARGET_SIDE`
+(16384, the desc's "1 to 16384" named); a look block of 160 bytes (the
+draft said 256 an entry; ten float4 are all a look needs), a layer of 256;
+the composite's air and then the scene's height fog in front of the
+clouds' depth (`rbtrend_fog_draft.h` section 6's [CHANGED], built here as
+the second of the two to be built); a jitter sequence of the history
+module's van der Corput values (the texel within its history texel by the
+4-frame cycle, the march's offset by the frame); an atmosphere never built
+is taken as none silently (the draft said "the compile's Debug report
+saying so": not written, no report channel that doesn't fail a compile).
+
+Tests, each seen failing: `rbtrend_contract_tests`' `test_clouds_contract`
+(9 failed checks against stubs returning NOT_IMPLEMENTED); in
+rabbittustests (on Metal under API and shader validation, warnings fatal,
+Debug and Release), run against a build whose LIT_CLOUDS compile returned
+NOT_IMPLEMENTED and whose density returned 0, written after the code
+(order of work, said here): `test_texture3d_sampled` (test 1; written
+with the prerequisite's shader, passing first time), `test_clouds_density_probe`
+(8 failed), `_refusals` (8), `_deck_from_below` (4), `_thin_layer_transmittance`
+(10), `_shell_and_slab` (6), `_layers` (4), `_depth` (12), `_atmosphere`
+(14), `_air_in_front` (4), `_records` (16), `_writes_in_flight` (12),
+`test_frame_allocations` (4); `_history` hung in that build (below). Results:
+- test 1: a texel's place read by the GPU's trilinear filter with repeat
+  within 0.00227 of Math's `rbtmath_noise_volume_sample` (0.58 of a
+  byte; bound 1/255), exact at texel centres.
+- test 2: the march's density within 0.0002 of Math's over 4,096 points
+  of shells of both warps and slabs of both addresses (estimate 0.02;
+  `CLOUDS_PROBE_TOLERANCE` recorded at 0.001).
+- tests 4 to 10: a stratus deck's T within 0.64% of Beer's law of Math's
+  optical depth (bound 5%), its middle smooth; a thin layer within 0.41%
+  of exp(-sigma_t x path) (1%; at 70 degrees on a reset frame, every
+  texel of a 4 x 4 block showing one ray, the corners were 1.49% off: the
+  test draws four frames at 50 degrees); a 1,000 km shell against a slab
+  0.087% (2%); two layers the near over the far within 0.32% (1%),
+  swapped bit for bit; a surface in front unchanged bit for bit, one
+  behind dimmed within 1%; a deck at a 2 degree sun red over blue 2.51
+  with the atmosphere, 1.00 without, and black (0) under the horizon with
+  it; the air in front by the composite's own formula within 0.2% each
+  channel (L_air from an opaque deck, T_air from a second).
+- test 11: **two of the draft's bounds didn't hold, held at the measured**:
+  a still view's frames 4 and 64 2.49 levels apart (the draft: 1), a view
+  turned 10 degrees a frame with the world moved under the eye within
+  3.19% of a still view after 4 frames (the draft: 3%), both at the
+  deck's texels nearest the horizon. Section 4 keeps each history texel's
+  last march (the marched texel takes the fresh value), so the history
+  doesn't average the jitters as section 3's step 2 expects; blending the
+  marched texel into its reprojected history (a share 1 / n, at least a
+  quarter) was tried and changed the still case by 0.25 levels, so wasn't
+  kept. Bounds `CLOUDS_STILL_LEVELS` 3 and `CLOUDS_TURN_SHARE` 4%. A reset
+  frame bit for bit a record's first.
+- tests 12 to 14: the third scene of three over two views takes the least
+  used record; three in one list refused with RBT_RESULT_LIMIT naming
+  max_views; one scene twice refused; a look and a map region set while
+  a frame is in flight: that frame as before, bit for bit, the next with
+  them; `test_frame_allocations`' clouds scenario (two layers lit by a sun
+  through four light steps, a look and a map region written a frame, the
+  history carried): none of Rend's, 100 frames; `test_destroyed_handles`
+  189 calls (five the clouds', the factory `dead_rbtrend_clouds`).
+- **Found:** a compile refused after a pass or a dispatch was recorded
+  keeps its Metal command buffer for good (Carrottus' Metal backend: the
+  encoders are autoreleased and a plain C caller has no pool that drains,
+  so the never-committed buffer is never freed); a queue's 64 run out and
+  `-commandBuffer` blocks. The sabotaged run hung so in test 11, and the
+  first full run hung in `test_block_texture_sampling`'s second device
+  after the clouds' refusals added theirs (and, with those cut down, a
+  later run in `test_frame_allocations`' clouds scenario). The clouds'
+  refusals now send the command alone where they can, and rabbittustests'
+  `RUN` drains an autorelease pool of its own round every test
+  (`objc_autoreleasePoolPush`/`Pop` on Apple; `REFUSAL_POOL_PUSH`), after
+  which the whole suite runs on both devices under validation. The
+  backend's leak is Carrottus' to fix (`crgpumetal___internal_acquire_command_buffer`'s
+  comment says the buffer itself is handled, not its encoders), not
+  touched here. **Fixed there 2026-11-18 (card S53; item 63's note):**
+  `RUN`'s pool and `REFUSAL_POOL_PUSH` are gone, and the suite passes
+  without them; the clouds' refusals still send the command alone.
+Measured (`test_clouds_measure`, Release, no validation): the clouds' cost, submit to idle less the same frame with none, means of
+50 after 10, on both devices' passes (the second pass's numbers in
+brackets), over Nubis's 128 and 32 volumes and a 512 map. At **2560 x
+1440**: 32 steps and 4 light steps 1.39 to 1.45 ms (1.34 to 1.47); 32 and
+6, 1.61 to 1.79 (1.59 to 1.75); 64 and 4, 2.26 to 2.40 (2.22 to 2.45); 64
+and 6, 2.66 to 2.85 (2.64 to 2.85); 64 and 6 with 3 octaves 2.66 to 2.90
+(2.72 to 2.89), over a broken deck from under, inside a deck and two
+layers. At **1920 x 1080**: 0.84 to 1.11 at 32 steps, 1.35 to 1.89 at 64.
+The draft's estimate, 1.3 to 2.6 ms at 1440p and 0.8 to 1.5 at 1080p,
+held at its low end (32 steps: inside the card's 1.5 to 2 ms budget at
+1440p) and was passed at 64 steps and 6 light steps (2.9 ms at 1440p, 1.9
+at 1080p: over the budget). The levers are the caller's (`_max_steps`,
+`_light_steps`): 64 and 6 cost 2.9 ms at 1440p, 32 and 4 or 6 are within
+the budget.
+Memory as the draft's: 23.7 MiB a record at 2560 x 1440. Stages 2 and 3
+not built.
+Card A70 decided 2026-11-18 (a): the draft's history rule revised (version 2), approved the same day, every question as recommended (Q8 to Q12 a); not built yet.
+
 ### 56. Volumetric fog near the eye (card A59, decided 2026-11-17)
 
 Opened and decided 2026-11-17 with you, every question as recommended,
@@ -5608,6 +5762,216 @@ internals with item 55's clouds, each its own public object (Q4a). To be
 drafted; needs the 3D-texture GPU test, A39's history, the transparency
 stage for transparents.
 
+Drafted 2026-11-18: `rbtrend_fog_draft.h` and `rbtmath_fog_draft.h`
+(version 1, seven critique passes), approved 2026-11-18 with the user, every question as recommended; nothing built. Stage 1
+(an analytic height fog, a scene setting the lit shaders apply to
+surfaces, transparents and the sky) and stage 2 (`rbtrend_fog`, its grid,
+history and command) whole, stage 3 said as additions with one binding
+plan for set 0 shared with item 55's cloud shadows; seven questions in
+Rend's half, three in Math's (a sphere's transmittance by Schüler's
+approximation of the Chapman function recommended). The history is a
+record a view inside the object, as item 55's, not A39's handle (its
+Q4).
+
+**Stage 1 built 2026-11-18 on the Mac (M5 Pro, macOS 27, Metal), Debug and
+Release; D3D12 and Vulkan never built.** `RBTREND_LIT_FOG` (struct type
+5041, the next free: 5039 is planned by `rbtrend_lit_layers_draft.h`),
+`rbtrend_lit_scene_set_fog()` (NULL clears; Math's checks of its fog, its
+message prefixed `fog->fog:`), `RBTREND_LIT_FOG_MAX_SUNS`. The scene block
+gains five float4 (`fog_up_base`, `fog_eye`, `fog_albedo`, `fog_range`,
+`fog_light`: 80 bytes, not the draft's estimated 64; the block 16,208 of
+the 16,384 Vulkan guarantees) and flag 4096; a sphere is told by its up
+of 0, so no second flag. The eye less the fog's origin is taken in double
+at each commit. `shaders/rbtrend_lit_fog.slang` (a module, in
+`RABBITTUS_SHADER_MODULES`) is Math's definition in float: a plane's
+closed form with g's series, a sphere's parts split at the closest point
+and the base's crossings (no arrays: Metal's cross-compile refused the
+unused constants an array's initialiser left), the outward depths by the
+Chapman function's large-x form (Math's, fixed the same day: Hastings'
+erfcx below 2 and an 8-term continued fraction above, within 3e-5);
+the light its albedo times the suns' (pi x radiance x Henyey-Greenstein x
+the atmosphere's transmittance at the eye) and the ambient light at the
+middle of the part seen. Applied after the aerial volume in
+`rbtrend_lit_surface.slang` (the specular target's weight times T, so
+reflections added later are fogged too: a choice of the build's) and over
+the sky and its discs in `rbtrend_lit_sky_frag.slang` (to the fog's end).
+LIT_CLOUDS's composition (section 6) not built: LIT_CLOUDS isn't.
+Tests in `../rabbittustests` (each seen failing first, against a stub
+returning NOT_IMPLEMENTED: 52, 62, 16, 22 and 6 failed checks):
+`test_fog_refusals`, `test_fog_against_math` (a black face at 10, 100 and
+1,000 under a plane's and a sphere's fog: every one within a count of
+Math's; the sphere's, with the Chapman fix, T 0.9845, 0.8665 and 0.7581
+and texels 3, 27 and 49, were 0.9797, 0.8562 and 0.7581 and 4, 29 and
+49), `test_fog_distances`, `test_fog_sky_and_transparent` (the sky
+124 against Math's 123.9, a disc dimmed 128 to 50 against 50.3, a
+half-transparent face 27 against 27.3), `test_fog_none_unchanged`;
+`test_fog_measure` (RABBITTUSTESTS_MEASURE, Release, no validation; the
+lit faces over every texel once, one ambient light, submit to idle): at
+2048 x 2048 a plane's fog adds 0.21 to 0.24 ms and a sphere's 0.60 to 0.61
+ms (0.45 to 0.47 before the Chapman fix), at 1024 x 1024 0.04 and 0.13 to
+0.18 ms: about 0.20 and 0.53 ms at 1440p, against the
+draft's estimate of under 0.05 ms (not met; the cost a texel grows with
+the target, 6 to 7 times for 4 times the texels). Stage 1 allocates
+nothing (a scene setting staged at the submit).
+Stage 2's first step, `test_texture3d_compute` (test 6): a 4 x 4 x 4
+R16G16B16A16_FLOAT texture written by compute through a 3D storage view
+(`volume_write_comp.slang`) and read back exactly, then written and
+sampled by a fragment shader (`volume_slice_frag.slang`) in one list:
+passes on Metal with no change to Rend (so never seen failing: nothing in
+Rend was missing). The rest of stage 2 is below; stage 3 isn't built.
+The history records module, shared with item 55's clouds, built
+2026-11-18 as both drafts describe it (`src/render/rbtrendhistory.hpp`:
+a record a view, its scene by handle, the least recently used one no
+list holds taken else none, a reset when a record changes hands or was
+never written; a 16-step van der Corput jitter, each at its step's
+middle; a place carried into last frame's clip space through the space's
+shift), with `tests/rbtrendhistory_tests.cpp` (seen failing first against
+a stub: it crashed on the stub's UINT32_MAX index; one expectation of the
+test's own was wrong and fixed). Nothing uses it yet.
+What stage 2 needs that the code showed (for its build):
+- Its inject pass reads the scene's set 0 (the block, the shadow atlas and
+  its comparison samplers, the atmosphere's tables, the environment's
+  irradiance) from compute. The lit scene layout is made from the surface
+  and sky shaders alone (`rbtrend_lit_scene_layout()`), so its bindings
+  aren't visible to compute on Vulkan; the inject shader joins the shaders
+  it is made from (the same handle, its stages wider, no caller's layout
+  changed) and binds `scene->material->set` at set 0, as the shells'
+  pass does from a fragment shader.
+- The per-frame data (last frame's view-projection, the grid's distances
+  and weight, the jitter, up to RBTREND_FOG_MAX_VOLUMES volumes resolved)
+  is a uniform block of a record's own material (two a record, one a
+  history direction), copied into the frame's arena when bound: about
+  64 x 128 bytes of volumes (the draft's 96 a volume leaves out the
+  bounding sphere the cull reads), 8.3 KiB. The tiles' lists are a
+  storage buffer of RBTREND_BUFFER_WRITES_NONE, 0.9 MiB at 160 x 90.
+- `rbtrend_cmd_own_dispatch()` dispatches in two dimensions; the grid's
+  passes need a third (an internal variant).
+- **Room in the scene block:** none needed by stage 2 (the grid's data is
+  the record's material's, the fog's the scene's existing members). Stage
+  3's transparents reading the grid need a set-0 binding, not block room;
+  set 0 holds sixteen bindings, all taken. The block is at 16,208 of the
+  16,384 bytes Vulkan guarantees (176 free): item 55's clouds as drafted
+  add nothing there; anything else that would must be weighed against it.
+
+**Stage 2 built 2026-11-18 on the Mac (M5 Pro, macOS 27, Metal), Debug and
+Release; D3D12 and Vulkan never built. Stage 3 not built.** From the
+approved draft:
+- **Public:** `render/rbtrendfog.h` (new; `rbtrend.h` reaches it, nineteen
+  headers): `RBTREND_FOG_DESC` (struct type 5042), `rbtrend_fog_create()`,
+  `_destroy()`, `_write_noise()`, the frozen `RBTREND_FOG_VOLUME_INSTANCE`
+  (104 bytes) and the five limits the draft declares (its "four" counts
+  one fewer). `RBTREND_COMMAND_LIT_FOG` = 52 (`_lit_fog`, 72 bytes of the
+  120); the `rbtrend_fog` typedef and `struct RBTREND_FOG_VOLUME_INSTANCE`
+  forward-declared in `rbtrendcommands.h`, as `rbtrend_atmosphere`'s are.
+  `max_view_sets`' comment names LIT_FOG (five commands). `./check.sh
+  --update-abi rabbittus`: additions only (the constant, the struct type,
+  three functions, five macros, the opaque handle, the command's
+  parameters, the two structs and their typedefs), no break.
+- **Shaders** (Slang, listed by hand): `rbtrend_fog_cull_comp` (8 x 8
+  tiles: each volume's bounding sphere against the tile's four side planes
+  from the eye and within the far distance, the first 15 kept in the
+  command's order), `rbtrend_fog_inject_comp` (4 x 4 x 4 froxels),
+  `rbtrend_fog_integrate_comp` (8 x 8 columns), `rbtrend_fog_apply_frag`
+  (blend ONE, SRC_ALPHA; alpha ZERO, ONE); modules `rbtrend_fog_grid`
+  (slice distances) and `rbtrend_fog_bindings` (the record's set 1 and its
+  block, `RbtrendFog`, checked member by member at the layout). Stage 1's
+  `rbtrend_lit_fog.slang` gains public `lit_fog_density()` (Math's
+  DENSITY), `lit_fog_up()` and `lit_fog_ambient()` (taken out of
+  `lit_fog_along()`, which now calls them: the same arithmetic) and makes
+  `fog_phase()` public.
+- **Set 0 from compute:** the inject shader joined the shaders the lit
+  scene layout is made from (five; the same handle, its stages wider, no
+  caller's layout changed); cull and inject bind `scene->material->set`
+  at set 0, the scene's material taken by the compile's material pass.
+- **Internals** (`src/render/rbtrendfog.cpp`, `rbtrendfog_internal.hpp`):
+  a record a view: three R16G16B16A16_FLOAT 3D grids (the history two, the
+  integrated one), each with a sampled and a storage view; its tiles' lists
+  (a storage buffer of `RBTREND_BUFFER_WRITES_ONCE` made with no bytes:
+  item 56's note above said WRITES_NONE, which `rbtrend_buffer_create`
+  refuses; ONCE with no bytes is the header's "right for one only a shader
+  writes"); two materials of the fog layout, one a way the history runs,
+  each owning the 8,336-byte block (144 + 64 x 128; a volume with its
+  bounding sphere), staged at the submit as every material's; two
+  integrate sets. The apply's set (the depth, the integrated grid, the
+  clamping sampler) comes from the scene's view-set records. The history
+  module (`rbtrendhistory.hpp`) is used as it was, unchanged: its record
+  keeps the scene and last frame's view-projection; what else last frame
+  was drawn with (its eye, for the ray distance its slices are by; its
+  range; which grid it wrote; its frames) is the fog's own, by the same
+  index. `rbtrend_cmd_own_dispatch()` gains `groups_z` (1 by default) and
+  pushes nothing for a size of 0. Same scene twice: refused while its
+  record's materials are held by this compile or a list compiled and not
+  yet submitted.
+- **Shapes chosen alone (open for review):** slice i spans n (f / n)^(i /
+  S) to n (f / n)^((i + 1) / S), the first from the eye (the draft's "from
+  the eye to each slice's far side"); each frame's point is the jitter's
+  share of its slice by distance (found: by slice coordinate it leans to
+  the near end); the history is read at the froxel's middle (slice
+  coordinate i + 1/2), not at the jittered point (found: reading at the
+  point blends the neighbouring slices in each frame: a box of fog was
+  3.8 to 4.4% off Math's, 0.26 to 0.64% after); while the history holds
+  n frames fewer than its weight averages, it weighs n / (n + 1) (frames 4
+  and 64 of a still view were 3.7% apart, 0.78% after); with a weight of
+  0 every frame samples its slice's middle (no history to average a
+  jitter); the jitter's step starts again with the history (a reset frame
+  is a fresh record's, bit for bit); `_to_volume` refused unless its 3 x 3
+  rows are unit and square to each other within 1e-3; a volume's noise
+  place checked by Math with noise, and by Rend (finite, within Math's
+  limit) always; the grid applies neither the scene fog's
+  `end_distance` nor its `max_opacity` (beyond the grid the lit shaders
+  do); every medium takes the scene fog's phase, suns and ambient share,
+  the atmosphere's transmittance read at the froxel's point (stage 1's at
+  the eye); a sun's shadow one comparison, no softness or normal offset,
+  no cascade blend, its strength applied.
+- **Not built, the draft against the code:** `RBTREND_FOG_MAX_TILE_VOLUMES`'
+  "the compile's Debug report saying which tile": the cull runs on the
+  GPU, and nothing it finds reaches the CPU in a compile. The header now
+  says what happens (the later volumes left out, as the lit scene's tiles
+  leave out lights). Alternatives: (a) in Debug, the compile counts each
+  volume's screen rectangle in tiles on the CPU and reports a tile past
+  15; (b) the cull writes an overflow count read back a frame later and
+  reported at the next compile; (c) leave it as the lights' tiles are.
+  Recommended (c), a card to decide.
+- **Tests, each seen failing first** (none passed against a stub that
+  returned NOT_IMPLEMENTED): `rbtrend_contract_tests`' `fog_grid_contract`
+  (4 failed checks: the NULL calls' results and messages); in
+  `../rabbittustests`, a device's run, each doubled over the two devices:
+  `test_fog_grid_uniform` (1), `_shadow` (2), `test_fog_volume` (1),
+  `test_fog_meets_analytic` (1), `test_fog_history` (2), `test_fog_records`
+  (27), `test_frame_allocations` (2), each at `rbtrend_fog_create`. Passing:
+  test 7, T at each of 16 slices' far sides within 0.060% of exp(-density
+  x distance); test 8, a roof's shadow in a sun-lit fog: the lit half
+  0.1956 against the unshadowed 0.1995, the shadowed at most 0.0112; test
+  9, a box (and the box broken by a WORLEY volume of 32 written with
+  `rbtrend_fog_write_noise`) against Math's density marched along the
+  columns the texel reads: 0.64, 0.39, 0.26% (0.56, 0.33, 0.23% noisy),
+  its edge fading, 1.0000 past it; test 10, the grid to 100 and the sky's
+  analytic fog past it against the sky's alone: 0.198% at worst; test 11
+  (64 x 64 x 64 froxels), a still view's frames 4 and 64 0.78% apart, a
+  view turned 10 degrees and climbing 0.2 a frame (the climb as
+  `_space_shift`) 2.15% at worst (0.17% on average) from the still view of
+  its pose after 8 frames, a jump with `_history_reset` the same as a fresh
+  record's to 0.000000; test 12, every create, write_noise, send and
+  compile refusal by its message, three scenes over two records, the
+  three in one list refused (RBT_RESULT_LIMIT naming max_views), a scene
+  twice in one list and in two unsubmitted lists refused, a scene with no
+  view-set records refused; `test_frame_allocations`, 100 frames of a lit
+  height fog and eight noisy volumes moved a frame, the history carried:
+  none of ours on either device. `rbt_misuse_tests` and
+  `test_destroyed_handles` regenerated (184 calls on the device with
+  features, 174 on the bare one). Every ctest (51), Debug and Release;
+  `rbtrend_gpu_tests` on both devices, Debug under Metal's API and shader
+  validation (warnings as asserts) and Release.
+- **Measured** (`test_fog_grid_measure`, `RABBITTUSTESTS_MEASURE`, Release,
+  no validation; a 2560 x 1440 picture and depth, a sun and the ambient
+  light, submit to idle, 50 runs, LIT_FOG against none): 160 x 90 x 64,
+  +0.39 to 0.40 ms with 0, 8 or 32 volumes (the draft's estimate 0.25 to
+  0.55 ms: met); 160 x 90 x 128, +0.52 to 0.58 ms. Memory as the draft's
+  section 7: 22,118,400 bytes of grids a view (21.1 MiB), 921,600 of tiles,
+  two blocks of 8,336, the noise volume (128 KiB at 32).
+- **Owed:** D3D12 and Vulkan (the grid's compute over set 0, 3D storage
+  images, the tiles' raw buffer); stage 3.
+
 ### 57. GPU particles (card L73, decided 2026-11-17)
 
 Decided 2026-11-17 with you: particles simulated on the GPU in compute
@@ -5620,6 +5984,10 @@ graph (Q2a); each system's particles relative to an anchor whose
 eye-relative offset is given each frame (Q3a). Needs item 34's indirect
 dispatch (Carrottus GPU's, a draft first), a compute sort, depth reads for
 soft particles. To be drafted, for approval, with its caller's emitter.
+Drafted 2026-11-18: `rbtrend_particles_draft.h`, with its caller's half
+beside the caller's headers (version 1, seven critique passes), approved 2026-11-18 with the user, every question as recommended; nothing built. Its questions Q1 to Q4 (each
+recommended a); it waits on Carrottus GPU's indirect dispatch (item 34,
+its draft not yet written).
 
 ### 58. A directional light given a place (card L78, decided 2026-11-17)
 
@@ -5653,6 +6021,12 @@ and the large-worlds anchor's drafts, 2026-11-17):
   crawl as the eye moves) or at a fixed place (off by the distance over
   the source's distance). Card A60 (open) covers the slide of cascades
   under any turning light, a placed one among them.
+
+Drafted 2026-11-18: `rbtrend_placed_light_draft.h`, with its caller's half
+beside the caller's headers (version 1, seven critique passes), approved 2026-11-18 with the user, every question as recommended; nothing built. It answers the five questions above
+(section 4) and asks Q1 to Q3 (each recommended a); it turns on
+`test_atmosphere_shell_placed_light` and the refusal of a placed light
+inside a shell's top sphere (item 52's stage 4).
 
 ### 59. Block-compressed textures: created, uploaded with their levels, read back (card A54, decided 2026-11-17)
 
@@ -5804,11 +6178,71 @@ Linux owed.
 
 ### 61. Writing some bytes of a buffer while submitted work reads others (card A62, decided 2026-11-17: b)
 
-Found 2026-11-17 by a caller's third critique round: `rbtrendbuffers.h` forbids any write to a buffer while submitted work that uses it is unfinished, so a large `RBTREND_BUFFER_WRITES_MANY` pool drawn every frame can never be written. The draft is `rbtrend_buffer_ranges_draft.h` (2026-11-17, version 1, seven critique passes, not approved). It drafts the card's recommendation b: `rbtrend_buffer_write_after()` names the serial of the last submission that may read the bytes, and is refused in every build with a new `RBT_RESULT_REND_IN_USE` while that submission is unfinished. Two getters, `rbtrend_instance_get_last_submission()` and `rbtrend_instance_get_completed_submission()`, make the instance's submission serials public. Rend tracks its own staging copies in flight per range. Questions Q1 to Q7 are open; Q1 adds an option d, a queue write in the style of WebGPU's `writeBuffer`. Nothing is built. It is approved and built before the renderer half of the caller that needs it.
+Found 2026-11-17 by a caller's third critique round: `rbtrendbuffers.h` forbids any write to a buffer while submitted work that uses it is unfinished, so a large `RBTREND_BUFFER_WRITES_MANY` pool drawn every frame can never be written. The draft is `rbtrend_buffer_ranges_draft.h` (2026-11-17, version 1, seven critique passes, approved below). It drafts the card's recommendation b: `rbtrend_buffer_write_after()` names the serial of the last submission that may read the bytes, and is refused in every build with a new `RBT_RESULT_REND_IN_USE` while that submission is unfinished. Two getters, `rbtrend_instance_get_last_submission()` and `rbtrend_instance_get_completed_submission()`, make the instance's submission serials public. Rend tracks its own staging copies in flight per range. Q1 adds an option d, a queue write in the style of WebGPU's `writeBuffer`.
 
 **Approved 2026-11-17 with the user, every question as recommended (Q1 b,
-not d).** Not built (the meta repo's `ROADMAP.md` names the session),
-before the caller's renderer half that needs it.
+not d).**
+
+**Built 2026-11-18 on the Mac (Apple M5 Pro, Metal); D3D12 and Vulkan
+never built** (no backend branch in it; the staged path's real run is a
+device with memory of its own, the RTX A2000). As the draft names:
+- **Public:** `RBT_RESULT_REND_IN_USE` (5005); `rbtrendcontext.h`'s
+  "Submissions and their serials", `rbtrend_instance_get_last_submission()`
+  and `rbtrend_instance_get_completed_submission()` (both `Thread:`, and
+  listed among "Threads"' exceptions); `rbtrendbuffers.h`'s rule paragraph,
+  "Writing while the buffer is in use", `rbtrend_buffer_write_after()`, and
+  `rbtrend_buffer_write()`'s rule line. `./check.sh --update-abi`: three
+  functions and the code added, no break.
+- **Inside:** `rbtrend_instance_read_completed()` (`submit_serial` read
+  first, the fence clamped to it; the getter and every new check use it;
+  `rbtrend_instance_collect()` and `rbtrend_pool_reclaim()` not moved to
+  it); the instance's `completed_serial`, written only by the write;
+  `copies_in_flight` on each store, an `eq::array` of
+  `rbtrend_copy_in_flight {offset, size, serial}` (`RBT_PLAIN_DATA`) in
+  `src/render/rbtrendcopies_internal.hpp` (reserve, append that refuses
+  rather than allocate, prune from the front, first overlap); its room
+  reserved by `rbtrend_buffer_store_write_staging()` (size + uploads + 1,
+  `CR_RESULT_OUT_OF_MEMORY` with nothing written otherwise);
+  `rbtrend_buffer_store_uploads_submitted(store, serial)` prunes (reading
+  the fence only when something is kept) and appends; the store's destroy
+  frees it.
+- **Shapes not in the draft, recorded:** a per-frame buffer is refused by
+  its desc's `per_frame`, not by `part_count > 1`, so the refusal is the
+  same at `frames_in_flight` 1 ("the buffer has per-frame copies:
+  rbtrend_buffer_write() writes the current one"); the serial past the
+  last taken reads "last_reader N is past the last submission the
+  instance has made, M"; the copy refusal also names the earlier write's
+  bytes; the submit reads the fence only with copies already in flight.
+  Q6's sentence is in `carrottus/include/crgpu.h`, `crgpu_buffer_map()`.
+- **Tests, each seen failing first** (none compiled before the code):
+  `rbtrend_contract_tests` (the three calls with NULL, the code's value);
+  `rbtrendcopies_tests` (new: append and prune, overlap against touch, a
+  reserve keeping 100 rounds allocation-free, 20,000 steps against brute
+  force); `rbt_misuse_tests` regenerated (19 lines). In `rabbittustests`:
+  `test_submission_serials`, `test_buffer_write_after` (a second instance
+  of three frames in flight, 40 frames, every write accepted with no wait
+  of the test's, every target read back), `_staged`, `_contract`,
+  `_cost`, `test_frame_allocations`' pool scenario and
+  `test_destroyed_handles` regenerated (180 calls on the device with
+  features, 170 on the bare one). Every ctest (47) passes, Debug and
+  Release; `rbtrend_gpu_tests` passes on both devices, Debug and Release,
+  under Metal's API and shader validation with warnings as asserts; the
+  workspace's other callers' suites pass, Debug and Release.
+- **Runs:** the in-use refusal was reached on every run: 20 of 20 writes
+  naming a running submission refused on both devices, Debug and Release,
+  and the staged device's second write over a copy in flight refused each
+  time. `test_frame_allocations`: 100 frames of a write by its bytes and a
+  read, none of ours, direct (the device with
+  `CRGPU_FEATURE_DEVICE_MAPPABLE_MEMORY`) and staged (the bare one).
+- **Measured** (Release, the M5 Pro, three runs): a 24 KiB write, 4,000
+  each, `rbtrend_buffer_write()` then `rbtrend_buffer_write_after()` naming
+  a finished submission: direct 213 to 242 ns then 197 to 214; staged 226
+  to 258 then 204 to 226 (the second loop runs warm; the check is within
+  the noise). Staged, 16 KiB writes into the gaps between 48 of Rend's
+  copies in flight (768 KiB of staging bytes counted, the copy still
+  running): 232 to 273 ns a write, the 48 ranges checked and the fence
+  read each time. No staging memory is added: the count is ranges of the
+  staging buffer a `MANY` store already had.
 
 ### 62. Cascades anchored in a space that doesn't move (card L66, built 2026-11-17)
 
@@ -5906,9 +6340,21 @@ no backend branch), with its caller's half the same session.
   `crgpumetal___internal_acquire_command_buffer`), and a queue hands out
   a fixed number, so enough of them in one process block a later compile
   for good. The two-thread test hung at 20 rounds in the whole suite (a
-  compile waiting in `-commandBuffer`), alone it passed; it runs 3 now.
+  compile waiting in `-commandBuffer`), alone it passed; it ran 3.
   Rend could commit an abandoned recording empty, or Carrottus give a
   reset list's buffer back: a card for you.
+- **Fixed in Carrottus GPU, 2026-11-18 (card S53, decided a;
+  `../carrottus/CRGPU_DEVICE_TODO.md`, "A recording dropped without a
+  submit"):** the Metal backend makes each encoder in a pool of its own,
+  takes a list's command buffer at each begin, and lets go of a recording
+  (open encoder ended, buffer released, never committed) at the list's
+  next begin, its allocator's reset and its destroy. Nothing changed in
+  Rend. The two-thread test runs its 20 rounds again (a frame a round,
+  as before), and rabbittustests' `RUN` no longer drains a pool round
+  each test (`REFUSAL_POOL_PUSH` and its uses removed): the whole GPU
+  suite passed on both devices under Metal's API and shader validation
+  with warnings as asserts, Debug and Release, three times each in a row
+  (the M5 Pro; rabbittus' 53 ctests Debug and Release with it).
 - **Measured** (Release, no validation, `RABBITTUSTESTS_MEASURE`,
   `test_view_sets_many_shells`): the compile of a list of 64 tables'
   sends, LIT_ATMOSPHERE, a clear and 64 shells, every set found, 0.044 to

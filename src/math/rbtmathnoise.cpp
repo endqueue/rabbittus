@@ -856,3 +856,171 @@ extern "C" RBT_RESULT rbtmath_noise_compute_nearest_cells(const RBTMATH_NOISE_DE
     }
     return RBT_RESULT_OK;
 }
+
+
+// ---- Baked volumes (rbtmathnoise.h, "Baked volumes" and "Reading a volume") -----------
+//
+// A row of texels at a time: its places (at most RBTMATH_NOISE_VOLUME_MAX_SIZE
+// of them) and one value a noise for each, on the stack; each noise run
+// through run() as rbtmath_noise_compute_points() runs it, so a texel's
+// bits are the definition's whatever slices a call bakes.
+
+namespace
+{
+
+constexpr uint32_t VOLUME_CELLULAR_FREQUENCIES = 5; // W_f for five f, from the kind's lowest
+
+RBTMATH_NOISE_DESC volume_gradient_desc(uint32_t seed)
+{
+    RBTMATH_NOISE_DESC d = {};
+    d.base.type          = RBT_STRUCT_TYPE_MATH_NOISE_DESC;
+    d.dimensions         = 3;
+    d.kind               = RBTMATH_NOISE_KIND_GRADIENT;
+    d.fractal            = RBTMATH_NOISE_FRACTAL_FBM;
+    d.seed               = seed ^ 0x243F6A88u;
+    d.octaves            = 4;
+    d.frequency          = 4.0;
+    d.lacunarity         = 2.0;
+    d.gain               = 0.5f;
+    d.period[0] = d.period[1] = d.period[2] = 4;
+    return d;
+}
+
+RBTMATH_NOISE_DESC volume_cellular_desc(uint32_t seed, uint32_t f)
+{
+    RBTMATH_NOISE_DESC d = {};
+    d.base.type          = RBT_STRUCT_TYPE_MATH_NOISE_DESC;
+    d.dimensions         = 3;
+    d.kind               = RBTMATH_NOISE_KIND_CELLULAR;
+    d.fractal            = RBTMATH_NOISE_FRACTAL_SINGLE;
+    d.seed               = (seed ^ 0x85A308D3u) ^ f;
+    d.octaves            = 1;
+    d.frequency          = (double)f;
+    d.cell_distance      = RBTMATH_NOISE_CELL_DISTANCE_EUCLIDEAN;
+    d.cell_return        = RBTMATH_NOISE_CELL_RETURN_F1;
+    d.cell_jitter        = 1.0f;
+    d.period[0] = d.period[1] = d.period[2] = f;
+    return d;
+}
+
+inline float sat(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
+inline uint8_t to_byte(float v) { return (uint8_t)((v * 255.0f) + 0.5f); }
+inline float worley_fbm(float w1, float w2, float w4) { return ((w1 * 0.625f) + (w2 * 0.25f)) + (w4 * 0.125f); }
+
+} // namespace
+
+extern "C" RBT_RESULT rbtmath_noise_volume_bake(RBTMATH_NOISE_VOLUME_KIND kind, uint32_t seed, uint32_t size, uint32_t first_slice,
+                                                uint32_t slice_count, uint8_t *out_texels, RBTMATH_ERROR *error)
+{
+    clear(error);
+    if (kind != RBTMATH_NOISE_VOLUME_KIND_PERLIN_WORLEY && kind != RBTMATH_NOISE_VOLUME_KIND_WORLEY)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "kind, %u, is not one of RBTMATH_NOISE_VOLUME_KIND's", (unsigned)kind);
+    if (size < 1)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "size is 0");
+    if (size > RBTMATH_NOISE_VOLUME_MAX_SIZE)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "size, %u, is above RBTMATH_NOISE_VOLUME_MAX_SIZE (%u)", size,
+                    RBTMATH_NOISE_VOLUME_MAX_SIZE);
+    if (first_slice >= size)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "first_slice, %u, is not below size, %u", first_slice, size);
+    if (slice_count < 1)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "slice_count is 0");
+    if (slice_count > size - first_slice)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "slice_count, %u, is above size - first_slice, %u", slice_count, size - first_slice);
+    if (!out_texels)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "out_texels is NULL");
+
+    const bool perlin_worley = kind == RBTMATH_NOISE_VOLUME_KIND_PERLIN_WORLEY;
+    // The cellular frequencies: 4 to 64 for PERLIN_WORLEY, 2 to 32 for WORLEY.
+    const uint32_t lowest = perlin_worley ? 4u : 2u;
+    RBTMATH_NOISE_DESC cellular[VOLUME_CELLULAR_FREQUENCIES];
+    Octave cellular_table[VOLUME_CELLULAR_FREQUENCIES];
+    for (uint32_t k = 0; k < VOLUME_CELLULAR_FREQUENCIES; k++)
+    {
+        cellular[k] = volume_cellular_desc(seed, lowest << k);
+        make_octaves(cellular[k], &cellular_table[k]);
+    }
+    const RBTMATH_NOISE_DESC gradient = volume_gradient_desc(seed);
+    Octave gradient_table[4];
+    make_octaves(gradient, gradient_table);
+
+    double places[RBTMATH_NOISE_VOLUME_MAX_SIZE][3];
+    float w[VOLUME_CELLULAR_FREQUENCIES][RBTMATH_NOISE_VOLUME_MAX_SIZE];
+    float P[RBTMATH_NOISE_VOLUME_MAX_SIZE];
+    for (uint32_t z = first_slice; z < first_slice + slice_count; z++)
+    {
+        for (uint32_t y = 0; y < size; y++)
+        {
+            for (uint32_t x = 0; x < size; x++)
+            {
+                places[x][0] = ((double)x + 0.5) / (double)size;
+                places[x][1] = ((double)y + 0.5) / (double)size;
+                places[x][2] = ((double)z + 0.5) / (double)size;
+            }
+            for (uint32_t k = 0; k < VOLUME_CELLULAR_FREQUENCIES; k++)
+                for (uint32_t x = 0; x < size; x++)
+                {
+                    float F1 = 0.0f;
+                    place_value<3>(cellular[k], &cellular_table[k], places[x], F1, nullptr);
+                    w[k][x] = 1.0f - (F1 < 1.0f ? F1 : 1.0f);
+                }
+            if (perlin_worley)
+                for (uint32_t x = 0; x < size; x++)
+                    place_value<3>(gradient, gradient_table, places[x], P[x], nullptr);
+            uint8_t *row = out_texels + (((size_t)(z - first_slice) * size + y) * size) * 4;
+            for (uint32_t x = 0; x < size; x++)
+            {
+                // V for the kind's lowest f, then 2f and 4f, from W at f to 16f.
+                const float v1 = worley_fbm(w[0][x], w[1][x], w[2][x]);
+                const float v2 = worley_fbm(w[1][x], w[2][x], w[3][x]);
+                const float v4 = worley_fbm(w[2][x], w[3][x], w[4][x]);
+                uint8_t *t     = row + (size_t)x * 4;
+                if (perlin_worley)
+                {
+                    const float p = sat((P[x] * 0x1.111112p-2f) + 0.5f);
+                    t[0]          = to_byte(sat(v1 + (p * (1.0f - v1))));
+                    t[1]          = to_byte(v1);
+                    t[2]          = to_byte(v2);
+                    t[3]          = to_byte(v4);
+                }
+                else
+                {
+                    t[0] = to_byte(v1);
+                    t[1] = to_byte(v2);
+                    t[2] = to_byte(v4);
+                    t[3] = 0;
+                }
+            }
+        }
+    }
+    return RBT_RESULT_OK;
+}
+
+extern "C" RBT_RESULT rbtmath_noise_volume_sample(const uint8_t *texels, uint32_t size, const float *coordinates, uint32_t count,
+                                                  float *out_values, RBTMATH_ERROR *error)
+{
+    clear(error);
+    if (!texels && count > 0)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "texels is NULL with a count of %u", count);
+    if (size < 1)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "size is 0");
+    if (size > RBTMATH_NOISE_VOLUME_MAX_SIZE)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "size, %u, is above RBTMATH_NOISE_VOLUME_MAX_SIZE (%u)", size,
+                    RBTMATH_NOISE_VOLUME_MAX_SIZE);
+    if (!coordinates && count > 0)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "coordinates is NULL with a count of %u", count);
+    if (!out_values && count > 0)
+        return fail(error, RBT_RESULT_INVALID_ARGUMENT, "out_values is NULL with a count of %u", count);
+    for (uint32_t i = 0; i < count; i++)
+        for (uint32_t a = 0; a < 3; a++)
+        {
+            const float q = coordinates[(size_t)i * 3 + a];
+            if (!std::isfinite(q))
+                return fail(error, RBT_RESULT_INVALID_ARGUMENT, "coordinate %u's axis %u is not finite", i, a);
+            if (std::fabs(q) > RBTMATH_NOISE_VOLUME_MAX_COORDINATE)
+                return fail(error, RBT_RESULT_INVALID_ARGUMENT, "coordinate %u's axis %u, %g, is past RBTMATH_NOISE_VOLUME_MAX_COORDINATE", i, a,
+                            (double)q);
+        }
+    for (uint32_t i = 0; i < count; i++)
+        volume_read(texels, size, coordinates + (size_t)i * 3, out_values + (size_t)i * 4);
+    return RBT_RESULT_OK;
+}

@@ -5,10 +5,12 @@
  * @file rbtmathnoise.h
  * @brief Rabbittus Math's coherent noise: gradient and simplex noise,
  * their fractal sums, cellular noise and its nearest features, and domain
- * warping, in 2D and 3D, evaluated at many places a call.
+ * warping, in 2D and 3D, evaluated at many places a call; and tiling
+ * volumes of it baked into bytes, with the read that defines them.
  *
  * Built in src/math/rbtmathnoise.cpp, with headless tests in
- * tests/rbtmathnoise_tests.c and tests/rbtmathnoise_bits_tests.c. Not part
+ * tests/rbtmathnoise_tests.c, tests/rbtmathnoise_volume_tests.c and
+ * tests/rbtmathnoise_bits_tests.c. Not part
  * of rbtrend.h, which is Rend's alone.
  *
  * A noise is described by an RBTMATH_NOISE_DESC: a kind (gradient,
@@ -233,6 +235,40 @@
  *   octave's frequency; for a warp, (|p[a]| + (amplitude * M)) * f_(n-1),
  *   M the largest magnitude of the field's range (its octave's range times
  *   S, the sum of its amplitudes in double).
+ *
+ * BAKED VOLUMES (rbtmath_noise_volume_bake()). A cube of N^3 texels, x
+ *   fastest, then y, then z, each four bytes (RGBA; WORLEY's fourth 0).
+ *   Texel (i, j, k)'s place, in tile units, in double: ((i + 0.5) / N,
+ *   (j + 0.5) / N, (k + 0.5) / N). With the volume's seed s:
+ *   P   = rbtmath_noise_compute_points() with { dimensions 3, GRADIENT,
+ *         FBM, seed s ^ 0x243F6A88, octaves 4, frequency 4, lacunarity 2,
+ *         gain 0.5, period {4, 4, 4} }: in [-1.875, 1.875];
+ *         p = sat((P * 0x1.111112p-2) + 0.5f)   (4/15, F: P / 3.75 + 0.5).
+ *   W_f = 1 - min(F1, 1), F1 from { dimensions 3, CELLULAR, SINGLE,
+ *         seed (s ^ 0x85A308D3) ^ f, octaves 1, frequency f, cell_distance
+ *         EUCLIDEAN, cell_return F1, cell_jitter 1, period {f, f, f} }, for
+ *         f a power of two: in [0, 1], 1 at a feature.
+ *   V_f = ((W_f * 0.625f) + (W_2f * 0.25f)) + (W_4f * 0.125f).
+ *   PERLIN_WORLEY: R = sat(V_4 + (p * (1 - V_4))) (Perlin dilated by
+ *   Worley: remap(p, 0, 1, V_4, 1)); G = V_4; B = V_8; A = V_16.
+ *   WORLEY: R = V_2; G = V_4; B = V_8; A = 0.
+ *   A channel's byte: (uint8_t)((v * 255.0f) + 0.5f), v in [0, 1], the
+ *   conversion truncating. "sat(x)" is min(max(x, 0), 1). Every W_f and P
+ *   tiles at 1 (frequency f, period f), so the volume tiles. A size N
+ *   below the finest frequency (64 for PERLIN_WORLEY, 32 for WORLEY)
+ *   aliases it: allowed, the bytes still defined.
+ *
+ * READING A VOLUME (rbtmath_noise_volume_sample()). At q (tile units, three
+ *   floats), each channel: per axis a, u_a = (q_a * N) - 0.5f;
+ *   i_a = floor(u_a) (an int64 from the float), t_a = u_a - (float)i_a; the
+ *   two texels on the axis (i_a mod N) and ((i_a + 1) mod N), the Euclidean
+ *   remainder. Values b / 255.0f (correctly rounded division). Lerp
+ *   lerp(x, y, t) = x + (t * (y - x)), along x first, then y, then z.
+ *   Every |q_a| at most RBTMATH_NOISE_VOLUME_MAX_COORDINATE (2^16 tiles),
+ *   so q_a * N keeps 1/128 of a texel at the largest size: refused past
+ *   it. A GPU's trilinear filter with repeat addressing reads the same
+ *   function, its weights in the GPU's own fixed point: a GPU copy agrees
+ *   to a tolerance.
  * @endverbatim
  *
  * @par Same bits
@@ -591,6 +627,90 @@ RBT_RESULT rbtmath_noise_compute_nearest_cells(
 	float *out_distances,
 	uint32_t *out_ids,
 	float *out_offsets,
+	RBTMATH_ERROR *error);
+
+/** @brief The largest size of a baked noise volume's side, in texels. */
+#define RBTMATH_NOISE_VOLUME_MAX_SIZE 256u
+
+/** @brief The largest |coordinate| rbtmath_noise_volume_sample() takes, in
+ * tiles: 2^16, so a coordinate times the largest size keeps 1/128 of a
+ * texel. */
+#define RBTMATH_NOISE_VOLUME_MAX_COORDINATE 65536.0f
+
+/** @brief The kinds of tiling noise volume rbtmath_noise_volume_bake()
+ * makes: four bytes a texel, RGBA, each channel's meaning the kind's
+ * (the Definition's "Baked volumes"). */
+typedef enum RBTMATH_NOISE_VOLUME_KIND RBT_ENUM_BASE {
+	/** Not chosen: refused. */
+	RBTMATH_NOISE_VOLUME_KIND_UNKNOWN = 0,
+	/** R: Perlin-Worley (gradient fBm dilated by Worley's); G, B, A:
+	 * Worley fBms at 4, 8 and 16 cells a tile. A cloud's base shape. */
+	RBTMATH_NOISE_VOLUME_KIND_PERLIN_WORLEY = 1,
+	/** R, G, B: Worley fBms at 2, 4 and 8 cells a tile; A: 0. Erosion
+	 * detail, and the noise of a fog's volume. */
+	RBTMATH_NOISE_VOLUME_KIND_WORLEY = 2,
+} RBTMATH_NOISE_VOLUME_KIND;
+
+/**
+ * @brief Bakes slices of a tiling noise volume: texels of a cube of @p size
+ * texels a side, slices @p first_slice to @p first_slice + @p slice_count
+ * - 1, x fastest, then y, then each slice, four bytes a texel. The volume
+ * tiles: its texel (size, j, k) would be (0, j, k).
+ *
+ * The bytes are the same on every platform, however a volume is split
+ * over calls. A volume is baked by any number of calls at once, each its
+ * own slices (a caller's jobs).
+ *
+ * @param[in]  kind        Its recipe.
+ * @param[in]  seed        Any value; each seed a different volume. Two
+ *                         volumes read together are given different seeds.
+ * @param[in]  size        1 to RBTMATH_NOISE_VOLUME_MAX_SIZE.
+ * @param[in]  first_slice Below @p size.
+ * @param[in]  slice_count 1 to @p size - @p first_slice.
+ * @param[out] out_texels  size x size x slice_count x 4 bytes.
+ * @param[out] error       Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a kind not one of
+ *         RBTMATH_NOISE_VOLUME_KIND's, a size, slice or count out of range,
+ *         or a NULL @p out_texels, each its own check and message. Nothing
+ *         is written on failure.
+ */
+RBT_RESULT rbtmath_noise_volume_bake(
+	RBTMATH_NOISE_VOLUME_KIND kind,
+	uint32_t seed,
+	uint32_t size,
+	uint32_t first_slice,
+	uint32_t slice_count,
+	uint8_t *out_texels,
+	RBTMATH_ERROR *error);
+
+/**
+ * @brief Reads a baked volume at places, trilinear, repeating: four floats
+ * a place, each channel's byte / 255 interpolated (the Definition's
+ * "Reading a volume"), as a GPU's linear filter with repeat reads it, to
+ * its filter's precision.
+ *
+ * @param[in]  texels      The volume: size^3 x 4 bytes, as
+ *                         rbtmath_noise_volume_bake() writes. Only read
+ *                         during the call.
+ * @param[in]  size        Its side: 1 to RBTMATH_NOISE_VOLUME_MAX_SIZE.
+ * @param[in]  coordinates @p count places in tiles, three floats each,
+ *                         each finite, |each| at most
+ *                         RBTMATH_NOISE_VOLUME_MAX_COORDINATE.
+ * @param[in]  count       How many; 0 writes nothing.
+ * @param[out] out_values  4 x @p count floats, each 0 to 1.
+ * @param[out] error       Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a NULL array with a
+ *         count above 0, a size out of range, or a coordinate not finite or
+ *         past the limit (its index named). Nothing is written on failure.
+ */
+RBT_RESULT rbtmath_noise_volume_sample(
+	const uint8_t *texels,
+	uint32_t size,
+	const float *coordinates,
+	uint32_t count,
+	float *out_values,
 	RBTMATH_ERROR *error);
 
 #if __cplusplus

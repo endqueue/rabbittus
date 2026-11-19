@@ -103,6 +103,19 @@ struct rbtrend_lit_scene_block {
 	float atmosphere_sizes[4];
 	float atmosphere_aerial[4];
 	float atmosphere_array[4];
+	/* The scene's height fog, where RBTREND_LIT_SCENE_FLAG_FOG is set
+	 * (rbtrend_lit_scene_set_fog()): worked out from the fog as set and
+	 * the eye by each commit. fog_up_base: a plane's up (0 for a sphere),
+	 * its base; fog_eye: the eye less the fog's origin (in double, then
+	 * float), its density; fog_albedo: its albedo, its phase's g;
+	 * fog_range: its start and end, its least transmittance (1 - max
+	 * opacity), its scale height; fog_light: its sun count, its ambient
+	 * share. */
+	float fog_up_base[4];
+	float fog_eye[4];
+	float fog_albedo[4];
+	float fog_range[4];
+	float fog_light[4];
 };
 
 /* Bits of rbtrend_lit_scene_block::flags, as the shader has them. */
@@ -117,6 +130,7 @@ enum : uint32_t {
 	RBTREND_LIT_SCENE_FLAG_ATMOSPHERE      = 512u,
 	RBTREND_LIT_SCENE_FLAG_AERIAL          = 1024u,
 	RBTREND_LIT_SCENE_FLAG_SKY             = 2048u,
+	RBTREND_LIT_SCENE_FLAG_FOG             = 4096u,
 };
 
 /* RbtrendLitShadowPass in shaders/rbtrend_lit_shadow_pass.slang. */
@@ -457,6 +471,46 @@ struct rbtrend_lit_builtins {
 	rbtrend_shader shell_frag{nullptr};
 	rbtrend_binding_layout shell_input_layout{nullptr};
 	std::vector<format_pipeline> shell_pipelines{};
+	/* RBTREND_COMMAND_LIT_FOG's passes (rbtrendfog_internal.hpp): the cull
+	 * and inject shaders over set 0 (the scene's own; the inject shader is
+	 * among those the scene layout is made from) and set 1 (a view record's,
+	 * fog_layout); the integrate shader over its own set 0
+	 * (fog_integrate_layout); the apply over set 0 and set 1 (the depth and
+	 * the integrated grid, fog_apply_layout, a set from the scene's view-set
+	 * records); a pipeline each, the apply's for each target format. */
+	rbtrend_shader fog_cull_comp{nullptr};
+	rbtrend_shader fog_inject_comp{nullptr};
+	rbtrend_shader fog_integrate_comp{nullptr};
+	rbtrend_shader fog_apply_frag{nullptr};
+	rbtrend_binding_layout fog_layout{nullptr};
+	rbtrend_binding_layout fog_integrate_layout{nullptr};
+	rbtrend_binding_layout fog_apply_layout{nullptr};
+	rbtrend_compute_pipeline fog_cull_pipeline{nullptr};
+	rbtrend_compute_pipeline fog_inject_pipeline{nullptr};
+	rbtrend_compute_pipeline fog_integrate_pipeline{nullptr};
+	std::vector<format_pipeline> fog_apply_pipelines{};
+	/* RBTREND_COMMAND_LIT_CLOUDS's passes (rbtrendclouds_internal.hpp): the
+	 * march over set 0 (the scene's own; the march and reconstruct shaders
+	 * are among those the scene layout is made from), set 1 (the depth and
+	 * the layers' atmospheres' tables, clouds_input_layout, a set from the
+	 * scene's view-set records, shared with the composite), set 2 (the
+	 * clouds' own, clouds_layout) and set 3 (a view record's,
+	 * clouds_march_layout); the reconstruct over set 0 and set 1 (a view
+	 * record's for the way its history runs, clouds_reconstruct_layout); the
+	 * composite over set 0, set 1 (the input) and set 2 (the history written,
+	 * clouds_composite_layout); a pipeline each, the composite's for each
+	 * target format. */
+	rbtrend_shader clouds_march_comp{nullptr};
+	rbtrend_shader clouds_reconstruct_comp{nullptr};
+	rbtrend_shader clouds_composite_frag{nullptr};
+	rbtrend_binding_layout clouds_input_layout{nullptr};
+	rbtrend_binding_layout clouds_layout{nullptr};
+	rbtrend_binding_layout clouds_march_layout{nullptr};
+	rbtrend_binding_layout clouds_reconstruct_layout{nullptr};
+	rbtrend_binding_layout clouds_composite_layout{nullptr};
+	rbtrend_compute_pipeline clouds_march_pipeline{nullptr};
+	rbtrend_compute_pipeline clouds_reconstruct_pipeline{nullptr};
+	std::vector<format_pipeline> clouds_composite_pipelines{};
 };
 
 /* Destroys what rbtrend_lit_builtins holds, pipelines before layouts, from
@@ -657,6 +711,10 @@ typedef struct rbtrend_lit_scene_t {
 	bool aerial_filled{false};
 	/* The width, height and layers the array was made at. */
 	uint32_t atmosphere_array_size[3]{};
+	/* The height fog as last set (rbtrend_lit_scene_set_fog()), and
+	 * whether there is one: resolved into the block by each commit. */
+	RBTREND_LIT_FOG fog{};
+	bool has_fog{false};
 	/* The view-set records (rbtrendviewsets_internal.hpp; the desc's
 	 * max_view_sets, card A67): calloc'd at creation, `view_set_count` of
 	 * them, NULL for 0; read and written only by a compile (which enters

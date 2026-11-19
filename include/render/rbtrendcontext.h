@@ -64,6 +64,9 @@
  * - Reading a handle, with its get_ calls, while no call that changes or
  *   destroys that handle runs. rbtrend_instance_get_frame_index() is not one
  *   of these while rbtrend_instance_next_frame() may run.
+ * - rbtrend_instance_get_last_submission() and
+ *   rbtrend_instance_get_completed_submission(), which write nothing and
+ *   may overlap any call on the instance but its destroy.
  * - Destroying. A destroy call may overlap other calls on the instance, for
  *   every handle but the instance itself, a swap chain and a command list.
  *   It only queues the object: nothing is released by the destroy call
@@ -137,6 +140,21 @@
  * lets it overlap other calls on the instance; with no later submission,
  * what was destroyed waits for rbtrend_instance_wait_idle() or
  * rbtrend_instance_destroy().
+ *
+ * @par Submissions and their serials
+ * Every submission through the instance takes a serial: a command list's
+ * submit (rbtrend_command_list_submit()), and the batch of texture updates,
+ * readbacks and clears when rbtrend_instance_next_frame(),
+ * rbtrend_instance_wait_idle() or a readback submits it on its own. The
+ * first takes 1 and each the next; a submission that fails takes none.
+ * The instance submits on one queue, so they finish in that order: once a
+ * serial has finished, every one before it has.
+ * rbtrend_instance_get_last_submission() reads the latest taken and
+ * rbtrend_instance_get_completed_submission() the latest finished. A
+ * caller keeps the serial of the last submission that reads something, and
+ * knows from the second when the GPU is done with it:
+ * rbtrend_buffer_write_after() (rbtrendbuffers.h) takes one. Work the
+ * caller submits to Carrottus GPU itself takes no serial.
  *
  * @par Texture updates and clears
  * A texture update or readback and a framebuffer clear are not each a
@@ -406,6 +424,51 @@ RBT_RESULT rbtrend_instance_next_frame(
  * @return The frame index, or 0 if @p instance is NULL.
  */
 uint32_t rbtrend_instance_get_frame_index(rbtrend_instance instance);
+
+/**
+ * @brief Gets the serial of the latest submission made through an
+ * instance ("Submissions and their serials", at the top of this header).
+ *
+ * Read right after rbtrend_command_list_submit() returns RBT_RESULT_OK, it
+ * is that submission's serial: under "Threads", no other call submits in
+ * between. A caller that keeps it as the last submission reading
+ * something can later name it to rbtrend_buffer_write_after().
+ *
+ * Thread: may overlap any call on the instance but
+ * rbtrend_instance_destroy(); one made while a submission runs gives the
+ * serial from before it or after it.
+ *
+ * @param[in] instance Instance to read.
+ *
+ * @return The serial, from 1; 0 if nothing has been submitted yet or
+ *         @p instance is NULL (or destroyed, in Debug).
+ */
+uint64_t rbtrend_instance_get_last_submission(rbtrend_instance instance);
+
+/**
+ * @brief Gets the serial of the latest submission the GPU has finished,
+ * with every one before it, without waiting.
+ *
+ * Read from the instance's fence (a timeline semaphore's counter, a
+ * fence's completed value, a shared event's signaled value). It never goes
+ * down, and is never above rbtrend_instance_get_last_submission(). Once
+ * rbtrend_instance_next_frame() has returned, it has reached the last
+ * serial of the frame `frames_in_flight` frames ago.
+ *
+ * On a lost device it is whatever the fence then reads, kept at or below
+ * the last serial taken; the loss is reported by
+ * rbtrend_instance_next_frame().
+ *
+ * Thread: may overlap any call on the instance but
+ * rbtrend_instance_destroy(). It writes nothing.
+ *
+ * @param[in] instance Instance to read.
+ *
+ * @return The serial; 0 if nothing has finished, nothing has been
+ *         submitted, the fence can't be read, or @p instance is NULL (or
+ *         destroyed, in Debug).
+ */
+uint64_t rbtrend_instance_get_completed_submission(rbtrend_instance instance);
 
 /**
  * @brief Blocks until everything submitted through an instance so far has

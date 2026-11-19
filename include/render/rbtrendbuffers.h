@@ -54,14 +54,17 @@
  * that copies them has run; one created with no bytes has no staging at
  * all.
  *
- * The rule for the caller is one rule: a write (at creation or by
- * rbtrend_buffer_write()) is seen by any submission made after it, and must
- * not be made while submitted work that uses the buffer has yet to finish.
- * A buffer written and never used by a submitted list is never copied, and
- * keeps its staging copy until it is. A uniform buffer's write lands in the
- * memory the GPU reads, so the rule holds more sharply there: written while
- * a submitted frame still reads it, it changes what that frame sees. A
- * buffer rewritten every frame is made of per-frame copies.
+ * The rule for the caller: a write (at creation, by rbtrend_buffer_write()
+ * or by rbtrend_buffer_write_after()) is seen by any submission made after
+ * it. rbtrend_buffer_write() must not be made while submitted work that
+ * uses the buffer has yet to finish. rbtrend_buffer_write_after() may be,
+ * into bytes no unfinished submission reads ("Writing while the buffer is
+ * in use", below). A buffer written and never used by a submitted list is
+ * never copied, and keeps its staging copy until it is. A uniform buffer's
+ * write lands in the memory the GPU reads, so the rule holds more sharply
+ * there: written while a submitted frame still reads it, it changes what
+ * that frame sees. A buffer rewritten every frame is made of per-frame
+ * copies.
  *
  * @par Per-frame copies
  * A buffer that is rewritten every frame can only be written once the GPU
@@ -76,6 +79,20 @@
  * it, which was `frames_in_flight` frames ago, not last frame: a write is
  * not carried from one copy to the next. Write, each frame, everything that
  * frame reads. With `frames_in_flight` 1 there is one copy.
+ *
+ * @par Writing while the buffer is in use
+ * A buffer drawn every frame and written a part at a time (a pool of
+ * slots, a ring) is written with rbtrend_buffer_write_after(), which
+ * names the last submission that may read the bytes it writes
+ * (rbtrendcontext.h, "Submissions and their serials"). It may be made
+ * while submitted work reads other bytes of the buffer. It is refused, in
+ * every build, with RBT_RESULT_REND_IN_USE and nothing written, while that
+ * submission hasn't finished, or while Rend's own copy of an earlier write
+ * of any of those bytes to the device is in a submission that hasn't (a
+ * buffer with a staging copy). Which submissions read which bytes is the
+ * caller's to know: an indirect draw, a storage slot or a shader reads
+ * them on the GPU, where Rend never sees which. Rend checks that the GPU
+ * has passed the submission named, not that it was the right one to name.
  */
 
 #if __cplusplus
@@ -271,7 +288,8 @@ RBT_RESULT rbtrend_buffer_get_desc(
  * of per-frame copies.
  *
  * Not while a submission that reads that copy is unfinished ("Where a
- * buffer is kept", at the top of this header).
+ * buffer is kept", at the top of this header); to write some bytes while
+ * others are in use, rbtrend_buffer_write_after().
  *
  * @param[in]  buffer    Buffer to write.
  * @param[in]  offset    Where in the buffer the bytes go.
@@ -291,6 +309,76 @@ RBT_RESULT rbtrend_buffer_write(
 	uint64_t offset,
 	const void *data,
 	uint64_t data_size,
+	RBTREND_ERROR *out_error);
+
+/**
+ * @brief Writes bytes into a buffer that submitted work may be reading
+ * elsewhere, naming the last submission that may read these bytes.
+ *
+ * As rbtrend_buffer_write() in where the bytes go and when they are seen
+ * (a submission made after the call reads them: written in place and
+ * flushed, or staged and copied ahead of the next submission of a list
+ * that uses the buffer), but made while other bytes of the buffer are in
+ * use ("Writing while the buffer is in use", at the top of this header).
+ *
+ * @p last_reader is the serial of the last submission that may read any of
+ * the bytes from @p offset to `offset + data_size - 1`
+ * (rbtrend_instance_get_last_submission() when it was made), or 0 if no
+ * submission has read them. The write is refused with
+ * RBT_RESULT_REND_IN_USE, and nothing is written, while
+ * rbtrend_instance_get_completed_submission() is below it; and on a buffer
+ * with a staging copy, while Rend's copy of an earlier write of any of
+ * those bytes is in a submission that hasn't finished. A caller that names
+ * only submissions of frames rbtrend_instance_next_frame() has waited for,
+ * or reads rbtrend_instance_get_completed_submission() before choosing the
+ * bytes, is never refused. The check reads the fence only when
+ * @p last_reader is past the last finished serial the instance has seen,
+ * and checks Rend's copies in flight on a staged buffer, a few dozen
+ * ranges at most for a few dozen writes a frame.
+ *
+ * Not for a buffer of per-frame copies, whose copies are kept apart
+ * already ("Per-frame copies"), or one written once.
+ *
+ * Every argument is checked before anything is written, each its own
+ * check and message in parameter order, after the buffer's null and
+ * destroyed checks and Rend's overlap check on its instance, as
+ * rbtrend_buffer_write().
+ *
+ * Thread: a buffer write, under rbtrendcontext.h's "Threads": not at once
+ * with any other call on the instance but the exceptions marked there, a
+ * submission included.
+ *
+ * @param[in]  buffer      Buffer to write: created RBTREND_BUFFER_WRITES_MANY,
+ *                         not per_frame.
+ * @param[in]  offset      Where in the buffer the bytes go.
+ * @param[in]  data        The bytes. Read during the call only.
+ * @param[in]  data_size   How many bytes. Not 0.
+ * @param[in]  last_reader The serial of the last submission that may read
+ *                         those bytes, or 0 for none. Not above
+ *                         rbtrend_instance_get_last_submission().
+ * @param[out] out_error   Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; otherwise nothing is written, checked in this
+ *         order: RBT_RESULT_INVALID_ARGUMENT if @p buffer is NULL (or
+ *         destroyed, in Debug), @p data is NULL, @p data_size is 0,
+ *         @p offset is past the end of the buffer, the bytes run past it
+ *         (checked by subtraction, so no sum wraps), the buffer was created
+ *         RBTREND_BUFFER_WRITES_ONCE, it has per-frame copies, or
+ *         @p last_reader is above the last serial the instance has taken
+ *         (the message names both); RBT_RESULT_REND_IN_USE if submission
+ *         @p last_reader hasn't finished, or Rend's copy of an earlier write
+ *         of any of the bytes is in a submission that hasn't (the message
+ *         names the bytes, the serial and the latest finished);
+ *         RBT_RESULT_OUT_OF_MEMORY if there is no memory to note the write;
+ *         or the code for Carrottus GPU's result if it can't be flushed or
+ *         staged.
+ */
+RBT_RESULT rbtrend_buffer_write_after(
+	rbtrend_buffer buffer,
+	uint64_t offset,
+	const void *data,
+	uint64_t data_size,
+	uint64_t last_reader,
 	RBTREND_ERROR *out_error);
 
 /**

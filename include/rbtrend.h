@@ -24,5 +24,7 @@
 #include "render/rbtrendbatch.h"
 #include "render/rbtrendraytracing.h"
 #include "render/rbtrendatmosphere.h"
+#include "render/rbtrendfog.h"
+#include "render/rbtrendclouds.h"
 
 #endif // RBTREND_H

@@ -11,11 +11,14 @@
 // in angle across a texel. A scene with an atmosphere (rbtrendatmosphere.h)
 // that draws a sky draws its sky-view table in the environment's place, and
 // each of its suns' discs through the medium's transmittance from the eye;
-// one with no sky draws as a scene with no atmosphere.
+// one with no sky draws as a scene with no atmosphere. A scene with a height
+// fog (rbtrend_lit_scene_set_fog()) sees all of it through the fog to the
+// fog's end.
 
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_atmosphere;
+import rbtrend_lit_fog;
 
 [shader("fragment")]
 float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
@@ -58,6 +61,9 @@ float4 rbtrend_lit_sky_frag(float4 frag_coord : SV_Position) : SV_Target0 {
             color += inside * 3.14159265359 / solid * d.radiance_disc.rgb * through;
         }
     }
+    // The scene's height fog in front, to its end: the sky and the discs
+    // alike seen through it.
+    color = lit_fog_apply(color, lit_fog_along(direction, 3.402823e38));
     color *= u_lit_scene.exposure;
     if (u_lit_scene.output_encoding == 1u) {
         float3 c = clamp(color, 0.0, 1.0);

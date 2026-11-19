@@ -33,6 +33,7 @@ import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_material;
 import rbtrend_lit_atmosphere;
+import rbtrend_lit_fog;
 
 // The position first, then the five inputs, in the order a vertex shader
 // writes them (rbtrend_lit_vert.slang), so D3D12 matches each by register.
@@ -435,6 +436,15 @@ public LitShaded lit_shade(LitFragmentInput input) {
     color += emission;
     // Distant surfaces fade into the air (the scene's aerial volume).
     color = lit_atmosphere_aerial(color, in_position, input.frag_coord.xy);
+    // Then the scene's height fog, in front of the air; what the specular
+    // target's reflections add later is seen through it too.
+    if (lit_fog()) {
+        float3 to_surface = in_position - u_lit_scene.eye_position.xyz;
+        float distance    = length(to_surface);
+        LitFog fog        = lit_fog_along(distance > 0.0 ? to_surface / distance : u_lit_scene.view_direction.xyz, distance);
+        color             = lit_fog_apply(color, fog);
+        specular_weight *= fog.transmittance;
+    }
 
     color *= u_lit_scene.exposure;
     if (u_lit_scene.output_encoding == 1u) {

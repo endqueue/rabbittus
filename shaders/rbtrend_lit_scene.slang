@@ -57,6 +57,7 @@ public static const uint RBTREND_LIT_SCENE_SCENE_COLOR      = 256u; // scene_col
 public static const uint RBTREND_LIT_SCENE_ATMOSPHERE       = 512u; // the atmosphere_* members and textures hold the scene's atmosphere (rbtrendatmosphere.h)
 public static const uint RBTREND_LIT_SCENE_AERIAL           = 1024u; // atmosphere_aerial holds its aerial volume
 public static const uint RBTREND_LIT_SCENE_SKY              = 2048u; // the atmosphere's sky-view table, layer 0, holds its sky (none with no sky)
+public static const uint RBTREND_LIT_SCENE_FOG              = 4096u; // the fog_* members hold the scene's height fog (rbtrend_lit_scene_set_fog())
 
 // Every matrix is column-major in memory, as the CPU writes it.
 public struct RbtrendLitScene {
@@ -95,6 +96,13 @@ public struct RbtrendLitScene {
     public float4 atmosphere_sizes;        // xy the transmittance table; zw the sky-view table, in texels
     public float4 atmosphere_aerial;       // x the aerial volume's slices; y how far its last is; zw its width and height
     public float4 atmosphere_array;        // xy the width and height of atmosphere_tables' layers, in texels
+    // The scene's height fog, where RBTREND_LIT_SCENE_FOG is set
+    // (rbtrend_lit_scene_set_fog(); rbtrend_lit_fog.slang reads it).
+    public float4 fog_up_base;             // xyz a plane's up (0 for a sphere); w its base
+    public float4 fog_eye;                 // xyz the eye less the fog's origin; w its density
+    public float4 fog_albedo;              // rgb its albedo; w its phase's g
+    public float4 fog_range;               // x its start, y its end, z its least transmittance, w its scale height
+    public float4 fog_light;               // x how many of the directional lights, the first, light it; y its ambient share
 };
 [[vk::binding(0, 0)]] public ConstantBuffer<RbtrendLitScene> u_lit_scene : register(b0, space0);
 

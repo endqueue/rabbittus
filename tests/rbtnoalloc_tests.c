@@ -9,7 +9,9 @@
 // A frame, per module: Rabbittus Audio's render (the audio callback) and update
 // with sounds playing and the limiter on; Rabbittus Math's ray casts against a
 // mesh's BVH; Rabbittus Math's noise, every call and kind over 10,000
-// places, alone and split on a pool; Rabbittus Jobs' reference pool running a task; Rabbittus Text laying the
+// places, alone and split on a pool; Rabbittus Math's elementary functions,
+// each over 10,000 elements; Rabbittus Math's fog, each call over 4,096
+// points, and a noise volume's slice baked and read; Rabbittus Jobs' reference pool running a task; Rabbittus Text laying the
 // same label out again with a layout it keeps. Rend's frame needs a GPU:
 // ../rabbittustests measures it.
 //
@@ -19,6 +21,9 @@
 #include "audio/rbtaudio.h"
 #include "jobs/rbtjobs.h"
 #include "math/rbtmathbvh.h"
+#include "math/rbtmathclouds.h"
+#include "math/rbtmathfog.h"
+#include "math/rbtmathfunctions.h"
 #include "math/rbtmathnoise.h"
 #include "text/rbttext.h"
 #include <math.h>
@@ -873,6 +878,163 @@ static void test_noise(void)
     rbtjobs_pool_destroy(pool);
 }
 
+// ---- Rabbittus Math's elementary functions ------------------------------------------------
+//
+// Each batch call over 10,000 elements a frame: nothing allocates
+// (rbtmathfunctions.h: no allocation, no state).
+
+#define FUNCTION_ELEMENTS 10000
+static double function_x[FUNCTION_ELEMENTS];
+static double function_y[FUNCTION_ELEMENTS];
+static double function_out[FUNCTION_ELEMENTS];
+
+static void test_functions(void)
+{
+    for (int i = 0; i < FUNCTION_ELEMENTS; i++)
+    {
+        function_x[i] = (double)((i * 7919) % 20011) * 0.0005 + 0.001;
+        function_y[i] = (double)((i * 104729) % 20011) * 0.0005 - 5.0;
+    }
+    static const char *const names[6] = {"tan", "atan", "atan2", "exp2", "exp", "log2"};
+    for (int call = 0; call < 6; call++)
+    {
+        start_counting();
+        for (int f = 0; f < FRAMES; f++)
+        {
+            switch (call)
+            {
+            case 0: CHECK(rbtmath_compute_tan(function_x, FUNCTION_ELEMENTS, function_out, NULL) == RBT_RESULT_OK); break;
+            case 1: CHECK(rbtmath_compute_atan(function_x, FUNCTION_ELEMENTS, function_out, NULL) == RBT_RESULT_OK); break;
+            case 2: CHECK(rbtmath_compute_atan2(function_y, function_x, FUNCTION_ELEMENTS, function_out, NULL) == RBT_RESULT_OK); break;
+            case 3: CHECK(rbtmath_compute_exp2(function_y, FUNCTION_ELEMENTS, function_out, NULL) == RBT_RESULT_OK); break;
+            case 4: CHECK(rbtmath_compute_exp(function_y, FUNCTION_ELEMENTS, function_out, NULL) == RBT_RESULT_OK); break;
+            default: CHECK(rbtmath_compute_log2(function_x, FUNCTION_ELEMENTS, function_out, NULL) == RBT_RESULT_OK); break;
+            }
+        }
+        stop_counting();
+        char what[96];
+        snprintf(what, sizeof(what), "Rabbittus Math's %s over 10,000 elements", names[call]);
+        report(what);
+    }
+}
+
+// ---- Rabbittus Math's fog and baked noise volumes ---------------------------------------
+//
+// Each fog call over 4,096 points a frame, a WORLEY volume's slice baked and
+// 4,096 places read from it: nothing allocates (rbtmathfog.h and
+// rbtmathnoise.h, "Allocation").
+
+#define FOG_POINTS 4096
+static float fog_a[FOG_POINTS * 3];
+static float fog_b[FOG_POINTS * 3];
+static float fog_out[FOG_POINTS * 4];
+static uint8_t fog_noise[16 * 16 * 16 * 4];
+
+static void test_fog(void)
+{
+    for (int i = 0; i < FOG_POINTS * 3; i++)
+    {
+        fog_a[i] = (float)((i * 7919) % 20011) * 0.01f - 100.0f;
+        fog_b[i] = (float)((i * 104729) % 20011) * 0.01f - 100.0f;
+    }
+    CHECK(rbtmath_noise_volume_bake(RBTMATH_NOISE_VOLUME_KIND_WORLEY, 1u, 16, 0, 16, fog_noise, NULL) == RBT_RESULT_OK);
+    RBTMATH_HEIGHT_FOG plane;
+    memset(&plane, 0, sizeof(plane));
+    plane.kind         = RBTMATH_FOG_HEIGHT_KIND_PLANE;
+    plane.up[1]        = 1.0f;
+    plane.density      = 0.05f;
+    plane.scale_height = 20.0f;
+    RBTMATH_HEIGHT_FOG sphere = plane;
+    sphere.kind               = RBTMATH_FOG_HEIGHT_KIND_SPHERE;
+    sphere.up[1]              = 0.0f;
+    sphere.base               = 60.0f;
+    RBTMATH_FOG_VOLUME box;
+    memset(&box, 0, sizeof(box));
+    box.shape           = RBTMATH_FOG_VOLUME_SHAPE_BOX;
+    box.half_extents[0] = box.half_extents[1] = box.half_extents[2] = 50.0f;
+    box.edge            = 5.0f;
+    box.density         = 0.1f;
+    box.noise_strength  = 0.5f;
+    box.noise_tile      = 10.0f;
+    const float offset[3] = {0.25f, 0.5f, 0.75f};
+    start_counting();
+    for (int f = 0; f < FRAMES; f++)
+    {
+        CHECK(rbtmath_height_fog_compute_density(&plane, fog_a, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        CHECK(rbtmath_height_fog_compute_transmittance(&plane, fog_a, fog_b, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        CHECK(rbtmath_height_fog_compute_transmittance(&sphere, fog_a, fog_b, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        CHECK(rbtmath_fog_volume_compute_density(&box, fog_noise, 16, offset, fog_a, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        CHECK(rbtmath_noise_volume_sample(fog_noise, 16, fog_b, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        if (f % 10 == 0)
+            CHECK(rbtmath_noise_volume_bake(RBTMATH_NOISE_VOLUME_KIND_WORLEY, 1u, 16, (uint32_t)(f / 10) % 16, 1, fog_noise, NULL) == RBT_RESULT_OK);
+    }
+    stop_counting();
+    report("Rabbittus Math's fog over 4,096 points, and a noise volume's slice baked and read");
+}
+
+// ---- Rabbittus Math's cloud layers ------------------------------------------------------
+//
+// A slice of each noise volume kind baked and 4,096 densities of a shell and
+// a slab a frame: nothing allocates (rbtmathclouds.h, "Allocation").
+
+static uint8_t cloud_base[16 * 16 * 16 * 4];
+static uint8_t cloud_detail[16 * 16 * 16 * 4];
+static uint8_t cloud_map[6 * 8 * 8 * 4];
+
+static void test_clouds(void)
+{
+    for (int i = 0; i < FOG_POINTS * 3; i++)
+        fog_a[i] = (float)((i * 7919) % 20011) * 0.01f - 100.0f;
+    for (size_t i = 0; i < sizeof(cloud_map); i++)
+        cloud_map[i] = (uint8_t)(i * 37u);
+    CHECK(rbtmath_noise_volume_bake(RBTMATH_NOISE_VOLUME_KIND_PERLIN_WORLEY, 3u, 16, 0, 16, cloud_base, NULL) == RBT_RESULT_OK);
+    CHECK(rbtmath_noise_volume_bake(RBTMATH_NOISE_VOLUME_KIND_WORLEY, 4u, 16, 0, 16, cloud_detail, NULL) == RBT_RESULT_OK);
+    RBTMATH_CLOUD_SHAPE shape;
+    memset(&shape, 0, sizeof(shape));
+    shape.type_count     = 1;
+    shape.profiles[1]    = 0.2f;
+    shape.profiles[2]    = 0.7f;
+    shape.profiles[3]    = 1.0f;
+    shape.base_tile      = 40.0f;
+    shape.detail_tile    = 9.0f;
+    shape.erosion        = 0.4f;
+    shape.billow_height  = 0.5f;
+    shape.density_scale  = 1.0f;
+    shape.coverage_scale = 1.0f;
+    RBTMATH_CLOUD_BOUNDS shell;
+    memset(&shell, 0, sizeof(shell));
+    shell.kind      = RBTMATH_CLOUD_BOUNDS_KIND_SHELL;
+    shell.bottom    = 60.0f;
+    shell.top       = 120.0f;
+    shell.cube_warp = RBTMATH_CLOUD_CUBE_WARP_EQUI_ANGULAR;
+    RBTMATH_CLOUD_BOUNDS slab;
+    memset(&slab, 0, sizeof(slab));
+    slab.kind        = RBTMATH_CLOUD_BOUNDS_KIND_SLAB;
+    slab.bottom      = -20.0f;
+    slab.top         = 40.0f;
+    slab.up[1]       = 1.0f;
+    slab.map_axis[0] = 1.0f;
+    slab.map_extent  = 150.0f;
+    slab.map_address = RBTMATH_CLOUD_MAP_ADDRESS_REPEAT;
+    RBTMATH_CLOUD_TEXELS texels = {cloud_base, 16, cloud_detail, 16, cloud_map, 8};
+    RBTMATH_CLOUD_OFFSETS offsets;
+    memset(&offsets, 0, sizeof(offsets));
+    start_counting();
+    for (int f = 0; f < FRAMES; f++)
+    {
+        offsets.base[0] = 0.01f * (float)f;
+        CHECK(rbtmath_cloud_compute_density(&shape, &shell, &texels, &offsets, fog_a, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        CHECK(rbtmath_cloud_compute_density(&shape, &slab, &texels, &offsets, fog_a, FOG_POINTS, fog_out, NULL) == RBT_RESULT_OK);
+        if (f % 10 == 0)
+        {
+            CHECK(rbtmath_noise_volume_bake(RBTMATH_NOISE_VOLUME_KIND_PERLIN_WORLEY, 3u, 16, (uint32_t)(f / 10) % 16, 1, cloud_base, NULL) ==
+                  RBT_RESULT_OK);
+        }
+    }
+    stop_counting();
+    report("Rabbittus Math's cloud densities over 4,096 points, a shell and a slab, and a base volume's slice baked");
+}
+
 // ---- Rabbittus Jobs ----------------------------------------------------------------------
 
 static void sum_task(uint32_t first, uint32_t end, uint32_t worker, void *data)
@@ -1062,6 +1224,9 @@ int main(int argc, char **argv)
     test_audio_spatial();
     test_bvh();
     test_noise();
+    test_functions();
+    test_fog();
+    test_clouds();
     test_jobs();
     test_job_groups();
     test_text(argc > 1 ? argv[1] : NULL);

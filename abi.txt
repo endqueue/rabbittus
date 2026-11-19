@@ -2,9 +2,9 @@
 # Don't edit by hand. Read as: apple (arm64-apple-macos13), linux (x86_64-unknown-linux-gnu), windows (x86_64-pc-windows-msvc).
 const RBTARCHIVE_STRICT_NONE = 0
 const RBTARCHIVE_STRICT_NO_ARCHIVE_COMMENT = 1
-const RBTARCHIVE_STRICT_NO_DIRECTORY_ENTRIES = 3
+const RBTARCHIVE_STRICT_NO_DIRECTORY_ENTRIES = 4
 const RBTARCHIVE_STRICT_NO_ENTRY_COMMENTS = 2
-const RBTARCHIVE_STRICT_NO_GAPS = 4
+const RBTARCHIVE_STRICT_NO_GAPS = 8
 const RBTAUDIO_HANDEDNESS_LEFT = 2
 const RBTAUDIO_HANDEDNESS_RIGHT = 1
 const RBTAUDIO_HANDEDNESS_UNSPECIFIED = 0
@@ -42,6 +42,21 @@ const RBTAUDIO_VIRTUAL_KILL = 1
 const RBTAUDIO_VIRTUAL_PAUSE = 4
 const RBTAUDIO_VIRTUAL_RESTART = 3
 const RBTAUDIO_VIRTUAL_UNSPECIFIED = 0
+const RBTMATH_CLOUD_BOUNDS_KIND_SHELL = 1
+const RBTMATH_CLOUD_BOUNDS_KIND_SLAB = 2
+const RBTMATH_CLOUD_BOUNDS_KIND_UNKNOWN = 0
+const RBTMATH_CLOUD_CUBE_WARP_EQUI_ANGULAR = 2
+const RBTMATH_CLOUD_CUBE_WARP_PLAIN = 1
+const RBTMATH_CLOUD_CUBE_WARP_UNKNOWN = 0
+const RBTMATH_CLOUD_MAP_ADDRESS_CLAMP = 2
+const RBTMATH_CLOUD_MAP_ADDRESS_REPEAT = 1
+const RBTMATH_CLOUD_MAP_ADDRESS_UNKNOWN = 0
+const RBTMATH_FOG_HEIGHT_KIND_PLANE = 1
+const RBTMATH_FOG_HEIGHT_KIND_SPHERE = 2
+const RBTMATH_FOG_HEIGHT_KIND_UNKNOWN = 0
+const RBTMATH_FOG_VOLUME_SHAPE_BOX = 1
+const RBTMATH_FOG_VOLUME_SHAPE_SPHERE = 2
+const RBTMATH_FOG_VOLUME_SHAPE_UNKNOWN = 0
 const RBTMATH_NOISE_CELL_DISTANCE_CHEBYSHEV = 3
 const RBTMATH_NOISE_CELL_DISTANCE_EUCLIDEAN = 1
 const RBTMATH_NOISE_CELL_DISTANCE_MANHATTAN = 2
@@ -64,6 +79,9 @@ const RBTMATH_NOISE_ORIENTATION_EVEN = 1
 const RBTMATH_NOISE_ORIENTATION_UNKNOWN = 0
 const RBTMATH_NOISE_ORIENTATION_Y_UP = 2
 const RBTMATH_NOISE_ORIENTATION_Z_UP = 3
+const RBTMATH_NOISE_VOLUME_KIND_PERLIN_WORLEY = 1
+const RBTMATH_NOISE_VOLUME_KIND_UNKNOWN = 0
+const RBTMATH_NOISE_VOLUME_KIND_WORLEY = 2
 const RBTMATH_OVERLAP_NONE = 0
 const RBTMATH_OVERLAP_PARTIAL = 1
 const RBTMATH_OVERLAP_WHOLE = 2
@@ -152,8 +170,10 @@ const RBTREND_COMMAND_LIT_AMBIENT_OCCLUSION = 33
 const RBTREND_COMMAND_LIT_ATMOSPHERE = 49
 const RBTREND_COMMAND_LIT_ATMOSPHERE_ENVIRONMENT = 50
 const RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS = 51
+const RBTREND_COMMAND_LIT_CLOUDS = 53
 const RBTREND_COMMAND_LIT_CULL_LIGHTS = 38
 const RBTREND_COMMAND_LIT_ENVIRONMENT = 31
+const RBTREND_COMMAND_LIT_FOG = 52
 const RBTREND_COMMAND_LIT_PATH_TRACE = 44
 const RBTREND_COMMAND_LIT_REFLECT = 47
 const RBTREND_COMMAND_LIT_SHADOW_MASK = 43
@@ -325,6 +345,7 @@ const RBT_RESULT_OK = 0
 const RBT_RESULT_OUT_OF_MEMORY = 2
 const RBT_RESULT_REND_DEVICE_LOST = 5003
 const RBT_RESULT_REND_GPU_FAILURE = 5001
+const RBT_RESULT_REND_IN_USE = 5005
 const RBT_RESULT_REND_REFLECTION_MISMATCH = 5004
 const RBT_RESULT_REND_STALE = 5002
 const RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN = 11
@@ -375,10 +396,13 @@ const RBT_STRUCT_TYPE_REND_BATCH_LINE = 5028
 const RBT_STRUCT_TYPE_REND_BLAS_DESC = 5030
 const RBT_STRUCT_TYPE_REND_BLAS_INFO = 5031
 const RBT_STRUCT_TYPE_REND_BUFFER_DESC = 5025
+const RBT_STRUCT_TYPE_REND_CLOUDS_DESC = 5043
+const RBT_STRUCT_TYPE_REND_CLOUD_LOOK = 5044
 const RBT_STRUCT_TYPE_REND_COMPUTE_PASS_DESC = 5011
 const RBT_STRUCT_TYPE_REND_COMPUTE_PIPELINE_DESC = 5013
 const RBT_STRUCT_TYPE_REND_DRAW_LIST_DESC = 5003
 const RBT_STRUCT_TYPE_REND_EXPOSURE_DESC = 5016
+const RBT_STRUCT_TYPE_REND_FOG_DESC = 5042
 const RBT_STRUCT_TYPE_REND_FRAMEBUFFER_DESC = 5004
 const RBT_STRUCT_TYPE_REND_GPU_TIMER_DESC = 5015
 const RBT_STRUCT_TYPE_REND_GRAPHICS_PIPELINE_DESC = 5012
@@ -389,6 +413,7 @@ const RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE = 5037
 const RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR = 5038
 const RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT = 5022
 const RBT_STRUCT_TYPE_REND_LIT_ENVIRONMENT_DESC = 5017
+const RBT_STRUCT_TYPE_REND_LIT_FOG = 5041
 const RBT_STRUCT_TYPE_REND_LIT_LIGHT_SHADOW = 5034
 const RBT_STRUCT_TYPE_REND_LIT_MATERIAL_VALUES = 5018
 const RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC = 5040
@@ -547,6 +572,16 @@ fn rbtmath_box_bvh_refit void (rbtmath_box_bvh)
 fn rbtmath_box_bvh_set_boxes RBT_RESULT (rbtmath_box_bvh, const uint32_t *, const RBTMATH_BVH_BOX *, uint32_t, RBTMATH_ERROR *)
 fn rbtmath_box_bvh_sweep _Bool (rbtmath_box_bvh, const RBTMATH_SWEEP *, const RBTMATH_CAST_DESC *, RBTMATH_BOX_HIT *)
 fn rbtmath_box_bvh_sweep_all uint32_t (rbtmath_box_bvh, const RBTMATH_SWEEP *, const RBTMATH_CAST_DESC *, RBTMATH_BOX_HIT *, uint32_t)
+fn rbtmath_cloud_compute_density RBT_RESULT (const RBTMATH_CLOUD_SHAPE *, const RBTMATH_CLOUD_BOUNDS *, const RBTMATH_CLOUD_TEXELS *, const RBTMATH_CLOUD_OFFSETS *, const float *, uint32_t, float *, RBTMATH_ERROR *)
+fn rbtmath_compute_atan RBT_RESULT (const double *, uint32_t, double *, RBTMATH_ERROR *)
+fn rbtmath_compute_atan2 RBT_RESULT (const double *, const double *, uint32_t, double *, RBTMATH_ERROR *)
+fn rbtmath_compute_exp RBT_RESULT (const double *, uint32_t, double *, RBTMATH_ERROR *)
+fn rbtmath_compute_exp2 RBT_RESULT (const double *, uint32_t, double *, RBTMATH_ERROR *)
+fn rbtmath_compute_log2 RBT_RESULT (const double *, uint32_t, double *, RBTMATH_ERROR *)
+fn rbtmath_compute_tan RBT_RESULT (const double *, uint32_t, double *, RBTMATH_ERROR *)
+fn rbtmath_fog_volume_compute_density RBT_RESULT (const RBTMATH_FOG_VOLUME *, const uint8_t *, uint32_t, const float *, const float *, uint32_t, float *, RBTMATH_ERROR *)
+fn rbtmath_height_fog_compute_density RBT_RESULT (const RBTMATH_HEIGHT_FOG *, const float *, uint32_t, float *, RBTMATH_ERROR *)
+fn rbtmath_height_fog_compute_transmittance RBT_RESULT (const RBTMATH_HEIGHT_FOG *, const float *, const float *, uint32_t, float *, RBTMATH_ERROR *)
 fn rbtmath_instance_bvh_cast _Bool (rbtmath_instance_bvh, const RBTMATH_RAY *, const RBTMATH_CAST_DESC *, RBTMATH_INSTANCE_HIT *)
 fn rbtmath_instance_bvh_cast_all uint32_t (rbtmath_instance_bvh, const RBTMATH_RAY *, const RBTMATH_CAST_DESC *, RBTMATH_INSTANCE_HIT *, uint32_t)
 fn rbtmath_instance_bvh_create RBT_RESULT (const RBTMATH_INSTANCE_BVH_DESC *, rbtmath_instance_bvh *)
@@ -574,6 +609,8 @@ fn rbtmath_noise_compute_grid RBT_RESULT (const RBTMATH_NOISE_DESC *, const RBTM
 fn rbtmath_noise_compute_nearest_cells RBT_RESULT (const RBTMATH_NOISE_DESC *, const double *, uint32_t, float *, uint32_t *, float *, RBTMATH_ERROR *)
 fn rbtmath_noise_compute_offsets RBT_RESULT (const RBTMATH_NOISE_DESC *, const double *, const float *, uint32_t, float *, float *, RBTMATH_ERROR *)
 fn rbtmath_noise_compute_points RBT_RESULT (const RBTMATH_NOISE_DESC *, const double *, uint32_t, float *, float *, RBTMATH_ERROR *)
+fn rbtmath_noise_volume_bake RBT_RESULT (RBTMATH_NOISE_VOLUME_KIND, uint32_t, uint32_t, uint32_t, uint32_t, uint8_t *, RBTMATH_ERROR *)
+fn rbtmath_noise_volume_sample RBT_RESULT (const uint8_t *, uint32_t, const float *, uint32_t, float *, RBTMATH_ERROR *)
 fn rbtmath_noise_warp_points RBT_RESULT (const RBTMATH_NOISE_WARP_DESC *, const double *, uint32_t, double *, float *, RBTMATH_ERROR *)
 fn rbtmath_poly_boolean RBT_RESULT (const RBTMATH_POLY_BOOLEAN_DESC *, rbtmath_poly *, RBTMATH_ERROR *)
 fn rbtmath_poly_destroy void (rbtmath_poly)
@@ -622,7 +659,13 @@ fn rbtrend_buffer_create RBT_RESULT (rbtrend_instance, const RBTREND_BUFFER_DESC
 fn rbtrend_buffer_destroy void (rbtrend_buffer)
 fn rbtrend_buffer_get_desc RBT_RESULT (rbtrend_buffer, RBTREND_BUFFER_DESC *)
 fn rbtrend_buffer_write RBT_RESULT (rbtrend_buffer, uint64_t, const void *, uint64_t, RBTREND_ERROR *)
+fn rbtrend_buffer_write_after RBT_RESULT (rbtrend_buffer, uint64_t, const void *, uint64_t, uint64_t, RBTREND_ERROR *)
 fn rbtrend_buffer_write_uniform RBT_RESULT (rbtrend_buffer, const RBTREND_UNIFORM_LAYOUT *, uint32_t, const void *, RBTREND_ERROR *)
+fn rbtrend_clouds_create RBT_RESULT (rbtrend_instance, const RBTREND_CLOUDS_DESC *, rbtrend_clouds *, RBTREND_ERROR *)
+fn rbtrend_clouds_destroy void (rbtrend_clouds)
+fn rbtrend_clouds_set_look RBT_RESULT (rbtrend_clouds, uint32_t, const RBTREND_CLOUD_LOOK *, RBTREND_ERROR *)
+fn rbtrend_clouds_write_coverage RBT_RESULT (rbtrend_clouds, crgpu_command_queue, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, const void *, uint64_t, RBTREND_ERROR *)
+fn rbtrend_clouds_write_noise RBT_RESULT (rbtrend_clouds, crgpu_command_queue, RBTMATH_NOISE_VOLUME_KIND, uint32_t, uint32_t, const void *, uint64_t, RBTREND_ERROR *)
 fn rbtrend_command_list_compile RBT_RESULT (rbtrend_command_list, RBTREND_ERROR *)
 fn rbtrend_command_list_create RBT_RESULT (rbtrend_instance, rbtrend_command_list *, RBTREND_ERROR *)
 fn rbtrend_command_list_destroy void (rbtrend_command_list)
@@ -643,6 +686,9 @@ fn rbtrend_draw_list_get_counts RBT_RESULT (rbtrend_draw_list, uint32_t *, uint3
 fn rbtrend_draw_list_reset void (rbtrend_draw_list)
 fn rbtrend_exposure_create RBT_RESULT (rbtrend_instance, const RBTREND_EXPOSURE_DESC *, rbtrend_exposure *, RBTREND_ERROR *)
 fn rbtrend_exposure_destroy void (rbtrend_exposure)
+fn rbtrend_fog_create RBT_RESULT (rbtrend_instance, const RBTREND_FOG_DESC *, rbtrend_fog *, RBTREND_ERROR *)
+fn rbtrend_fog_destroy void (rbtrend_fog)
+fn rbtrend_fog_write_noise RBT_RESULT (rbtrend_fog, crgpu_command_queue, uint32_t, uint32_t, const void *, uint64_t, RBTREND_ERROR *)
 fn rbtrend_framebuffer_clear_colors RBT_RESULT (rbtrend_framebuffer, crgpu_command_queue, float, float, float, float, RBTREND_ERROR *)
 fn rbtrend_framebuffer_clear_depth RBT_RESULT (rbtrend_framebuffer, crgpu_command_queue, _Bool, _Bool, float, uint32_t, RBTREND_ERROR *)
 fn rbtrend_framebuffer_create RBT_RESULT (rbtrend_instance, const RBTREND_FRAMEBUFFER_DESC *, rbtrend_framebuffer *, RBTREND_ERROR *)
@@ -672,9 +718,11 @@ fn rbtrend_index_pool_get_usage RBT_RESULT (rbtrend_index_pool, uint64_t *, uint
 fn rbtrend_index_pool_trim void (rbtrend_index_pool)
 fn rbtrend_instance_create RBT_RESULT (const RBTREND_INSTANCE_DESC *, rbtrend_instance *, RBTREND_ERROR *)
 fn rbtrend_instance_destroy void (rbtrend_instance)
+fn rbtrend_instance_get_completed_submission uint64_t (rbtrend_instance)
 fn rbtrend_instance_get_desc RBT_RESULT (rbtrend_instance, RBTREND_INSTANCE_DESC *)
 fn rbtrend_instance_get_frame_index uint32_t (rbtrend_instance)
 fn rbtrend_instance_get_fullscreen_vertex_shader RBT_RESULT (rbtrend_instance, rbtrend_shader *, RBTREND_ERROR *)
+fn rbtrend_instance_get_last_submission uint64_t (rbtrend_instance)
 fn rbtrend_instance_get_render_target_pool RBT_RESULT (rbtrend_instance, RBTREND_RENDER_TARGET_POOL_INFO *)
 fn rbtrend_instance_next_frame RBT_RESULT (rbtrend_instance, uint64_t, uint32_t *, RBTREND_ERROR *)
 fn rbtrend_instance_set_render_target_retirement RBT_RESULT (rbtrend_instance, uint32_t, uint64_t, RBTREND_ERROR *)
@@ -704,6 +752,7 @@ fn rbtrend_lit_scene_set_ambient RBT_RESULT (rbtrend_lit_scene, const RBTREND_LI
 fn rbtrend_lit_scene_set_ambient_occlusion RBT_RESULT (rbtrend_lit_scene, rbtrend_texture_view, float, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_atmosphere RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_ATMOSPHERE *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_bent_normals RBT_RESULT (rbtrend_lit_scene, _Bool, RBTREND_ERROR *)
+fn rbtrend_lit_scene_set_fog RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_FOG *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_light_shadow RBT_RESULT (rbtrend_lit_scene, uint32_t, const RBTREND_LIT_LIGHT_SHADOW *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_lights RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_SCENE_LIGHT *, uint32_t, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_scene_color RBT_RESULT (rbtrend_lit_scene, rbtrend_texture_view, RBTREND_ERROR *)
@@ -853,12 +902,17 @@ macro RBTAUDIO_CUE_NAME_SIZE 64
 macro RBTAUDIO_ERROR_MESSAGE_SIZE 256
 macro RBTJOBS_ERROR_MESSAGE_SIZE 256
 macro RBTJOBS_POOL_MAX_THREADS 256
+macro RBTMATH_CLOUD_MAX_COVERAGE_SIZE 4096u
+macro RBTMATH_CLOUD_MAX_TYPES 4u
 macro RBTMATH_ERROR_MESSAGE_SIZE 256
 macro RBTMATH_NOISE_MAX_CELLS 68719476736.0
 macro RBTMATH_NOISE_MAX_OCTAVES 32u
+macro RBTMATH_NOISE_VOLUME_MAX_COORDINATE 65536.0f
+macro RBTMATH_NOISE_VOLUME_MAX_SIZE 256u
 macro RBTMATH_POLY_COORD_LIMIT ((int64_t)1 << 40)
 macro RBTMATH_POLY_NO_RING UINT32_MAX
 macro RBTMATH_SHELL_MEDIUM_MAX_STEPS 1024u
+macro RBTMATH_TAN_MAX_ARGUMENT 1048576.0
 macro RBTREND_ATMOSPHERE_MAX_MULTIPLE_SCATTERING_SIZE 128u
 macro RBTREND_ATMOSPHERE_MAX_STEPS 256u
 macro RBTREND_ATMOSPHERE_MAX_TRANSMITTANCE_SIZE 1024u
@@ -866,8 +920,22 @@ macro RBTREND_ATMOSPHERE_MIN_MULTIPLE_SCATTERING_SIZE 8u
 macro RBTREND_ATMOSPHERE_MIN_STEPS 4u
 macro RBTREND_ATMOSPHERE_MIN_TRANSMITTANCE_SIZE 16u
 macro RBTREND_BLUR_MAX_SIGMA 32.0f
+macro RBTREND_CLOUDS_MAX_COVERAGE_MAPS 8u
+macro RBTREND_CLOUDS_MAX_LAYERS 4u
+macro RBTREND_CLOUDS_MAX_LAYER_LIGHTS 2u
+macro RBTREND_CLOUDS_MAX_LIGHT_STEPS 16u
+macro RBTREND_CLOUDS_MAX_LOOKS 16u
+macro RBTREND_CLOUDS_MAX_SCATTERING_OCTAVES 4u
+macro RBTREND_CLOUDS_MAX_STEPS 256u
+macro RBTREND_CLOUDS_MAX_TARGET_SIDE 16384u
+macro RBTREND_CLOUDS_MAX_VIEWS 16u
 macro RBTREND_DRAW_LIST_NO_MATERIAL UINT32_MAX
 macro RBTREND_ERROR_MESSAGE_SIZE 256
+macro RBTREND_FOG_MAX_GRID_SIDE 512u
+macro RBTREND_FOG_MAX_GRID_SLICES 256u
+macro RBTREND_FOG_MAX_TILE_VOLUMES 15u
+macro RBTREND_FOG_MAX_VIEWS 16u
+macro RBTREND_FOG_MAX_VOLUMES 64u
 macro RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_SIZE 128u
 macro RBTREND_LIT_ATMOSPHERE_MAX_AERIAL_STEPS 16u
 macro RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS 2u
@@ -876,6 +944,7 @@ macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_SIZE 1024u
 macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS 128u
 macro RBTREND_LIT_ATMOSPHERE_MIN_AERIAL_SIZE 8u
 macro RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE 32u
+macro RBTREND_LIT_FOG_MAX_SUNS 2u
 macro RBTREND_LIT_MATERIAL_SET 1u
 macro RBTREND_LIT_MAX_CASCADES 4u
 macro RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS 4u
@@ -922,11 +991,13 @@ opaque rbtrend_binding_layout_t
 opaque rbtrend_binding_set_t
 opaque rbtrend_blas_t
 opaque rbtrend_buffer_t
+opaque rbtrend_clouds_t
 opaque rbtrend_command_list_t
 opaque rbtrend_compute_pass_t
 opaque rbtrend_compute_pipeline_t
 opaque rbtrend_draw_list_t
 opaque rbtrend_exposure_t
+opaque rbtrend_fog_t
 opaque rbtrend_framebuffer_t
 opaque rbtrend_gpu_timer_t
 opaque rbtrend_graphics_pipeline_t
@@ -1256,8 +1327,51 @@ field RBTMATH_CAST_DESC.base @0 RBT_STRUCT_BASE
 field RBTMATH_CAST_DESC.mask @16 uint32_t
 field RBTMATH_CAST_DESC.filter @24 RBTMATH_CAST_FILTER
 field RBTMATH_CAST_DESC.user @32 void *
+struct RBTMATH_CLOUD_BOUNDS size=48 align=4
+field RBTMATH_CLOUD_BOUNDS.kind @0 RBTMATH_CLOUD_BOUNDS_KIND
+field RBTMATH_CLOUD_BOUNDS.bottom @4 float
+field RBTMATH_CLOUD_BOUNDS.top @8 float
+field RBTMATH_CLOUD_BOUNDS.up @12 float[3]
+field RBTMATH_CLOUD_BOUNDS.map_axis @24 float[3]
+field RBTMATH_CLOUD_BOUNDS.map_extent @36 float
+field RBTMATH_CLOUD_BOUNDS.map_address @40 RBTMATH_CLOUD_MAP_ADDRESS
+field RBTMATH_CLOUD_BOUNDS.cube_warp @44 RBTMATH_CLOUD_CUBE_WARP
+struct RBTMATH_CLOUD_OFFSETS size=32 align=4
+field RBTMATH_CLOUD_OFFSETS.base @0 float[3]
+field RBTMATH_CLOUD_OFFSETS.detail @12 float[3]
+field RBTMATH_CLOUD_OFFSETS.coverage @24 float[2]
+struct RBTMATH_CLOUD_SHAPE size=96 align=4
+field RBTMATH_CLOUD_SHAPE.type_count @0 uint32_t
+field RBTMATH_CLOUD_SHAPE.profiles @4 float[16]
+field RBTMATH_CLOUD_SHAPE.base_tile @68 float
+field RBTMATH_CLOUD_SHAPE.detail_tile @72 float
+field RBTMATH_CLOUD_SHAPE.erosion @76 float
+field RBTMATH_CLOUD_SHAPE.billow_height @80 float
+field RBTMATH_CLOUD_SHAPE.density_scale @84 float
+field RBTMATH_CLOUD_SHAPE.coverage_scale @88 float
+field RBTMATH_CLOUD_SHAPE.coverage_bias @92 float
+struct RBTMATH_CLOUD_TEXELS size=48 align=8
+field RBTMATH_CLOUD_TEXELS.base @0 const uint8_t *
+field RBTMATH_CLOUD_TEXELS.base_size @8 uint32_t
+field RBTMATH_CLOUD_TEXELS.detail @16 const uint8_t *
+field RBTMATH_CLOUD_TEXELS.detail_size @24 uint32_t
+field RBTMATH_CLOUD_TEXELS.coverage @32 const uint8_t *
+field RBTMATH_CLOUD_TEXELS.coverage_size @40 uint32_t
 struct RBTMATH_ERROR size=256 align=1
 field RBTMATH_ERROR.message @0 char[256]
+struct RBTMATH_FOG_VOLUME size=32 align=4
+field RBTMATH_FOG_VOLUME.shape @0 RBTMATH_FOG_VOLUME_SHAPE
+field RBTMATH_FOG_VOLUME.half_extents @4 float[3]
+field RBTMATH_FOG_VOLUME.edge @16 float
+field RBTMATH_FOG_VOLUME.density @20 float
+field RBTMATH_FOG_VOLUME.noise_strength @24 float
+field RBTMATH_FOG_VOLUME.noise_tile @28 float
+struct RBTMATH_HEIGHT_FOG size=28 align=4
+field RBTMATH_HEIGHT_FOG.kind @0 RBTMATH_FOG_HEIGHT_KIND
+field RBTMATH_HEIGHT_FOG.up @4 float[3]
+field RBTMATH_HEIGHT_FOG.base @16 float
+field RBTMATH_HEIGHT_FOG.density @20 float
+field RBTMATH_HEIGHT_FOG.scale_height @24 float
 struct RBTMATH_INSTANCE_BVH_DESC size=32 align=8
 field RBTMATH_INSTANCE_BVH_DESC.base @0 RBT_STRUCT_BASE
 field RBTMATH_INSTANCE_BVH_DESC.instances @16 const RBTMATH_BVH_INSTANCE *
@@ -1491,6 +1605,41 @@ field RBTREND_BUFFER_DESC.index_stride @32 RBTREND_INDEX_STRIDE
 field RBTREND_BUFFER_DESC.per_frame @36 _Bool
 field RBTREND_BUFFER_DESC.initial_data @40 const void *
 field RBTREND_BUFFER_DESC.debug_name @48 const char *
+struct RBTREND_CLOUDS_DESC size=56 align=8
+field RBTREND_CLOUDS_DESC.base @0 RBT_STRUCT_BASE
+field RBTREND_CLOUDS_DESC.debug_name @16 const char *
+field RBTREND_CLOUDS_DESC.base_noise_size @24 uint32_t
+field RBTREND_CLOUDS_DESC.detail_noise_size @28 uint32_t
+field RBTREND_CLOUDS_DESC.coverage_size @32 uint32_t
+field RBTREND_CLOUDS_DESC.coverage_maps @36 uint32_t
+field RBTREND_CLOUDS_DESC.max_looks @40 uint32_t
+field RBTREND_CLOUDS_DESC.max_views @44 uint32_t
+field RBTREND_CLOUDS_DESC.max_target_width @48 uint32_t
+field RBTREND_CLOUDS_DESC.max_target_height @52 uint32_t
+struct RBTREND_CLOUD_LAYER size=176 align=8
+field RBTREND_CLOUD_LAYER._look @0 uint32_t
+field RBTREND_CLOUD_LAYER._coverage_map @4 uint32_t
+field RBTREND_CLOUD_LAYER._bounds @8 RBTMATH_CLOUD_BOUNDS
+field RBTREND_CLOUD_LAYER._origin @56 float[3]
+field RBTREND_CLOUD_LAYER._axes @68 float[9]
+field RBTREND_CLOUD_LAYER._offsets @104 RBTMATH_CLOUD_OFFSETS
+field RBTREND_CLOUD_LAYER._light_count @136 uint32_t
+field RBTREND_CLOUD_LAYER._lights @140 uint32_t[2]
+field RBTREND_CLOUD_LAYER._atmosphere @152 rbtrend_atmosphere
+field RBTREND_CLOUD_LAYER._atmosphere_center @160 float[3]
+struct RBTREND_CLOUD_LOOK size=160 align=8
+field RBTREND_CLOUD_LOOK.base @0 RBT_STRUCT_BASE
+field RBTREND_CLOUD_LOOK.shape @16 RBTMATH_CLOUD_SHAPE
+field RBTREND_CLOUD_LOOK.extinction @112 float
+field RBTREND_CLOUD_LOOK.albedo @116 float[3]
+field RBTREND_CLOUD_LOOK.phase_forward @128 float
+field RBTREND_CLOUD_LOOK.phase_backward @132 float
+field RBTREND_CLOUD_LOOK.phase_blend @136 float
+field RBTREND_CLOUD_LOOK.scattering_octaves @140 uint32_t
+field RBTREND_CLOUD_LOOK.octave_extinction @144 float
+field RBTREND_CLOUD_LOOK.octave_scattering @148 float
+field RBTREND_CLOUD_LOOK.octave_phase @152 float
+field RBTREND_CLOUD_LOOK.ambient_scale @156 float
 struct RBTREND_COLOR_TARGET size=40 align=8
 field RBTREND_COLOR_TARGET.view @0 rbtrend_texture_view
 field RBTREND_COLOR_TARGET.resolve_view @8 rbtrend_texture_view
@@ -1550,10 +1699,14 @@ field RBTREND_COMMAND._params._lit_atmosphere_environment @8 struct {}
 field RBTREND_COMMAND._params._lit_atmosphere_environment._environment @8 rbtrend_lit_environment
 field RBTREND_COMMAND._params._lit_atmosphere_shells @8 struct {}
 field RBTREND_COMMAND._params._lit_atmosphere_shells._scene @8 rbtrend_lit_scene
+field RBTREND_COMMAND._params._lit_clouds @8 struct {}
+field RBTREND_COMMAND._params._lit_clouds._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_cull_lights @8 struct {}
 field RBTREND_COMMAND._params._lit_cull_lights._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_environment @8 struct {}
 field RBTREND_COMMAND._params._lit_environment._environment @8 rbtrend_lit_environment
+field RBTREND_COMMAND._params._lit_fog @8 struct {}
+field RBTREND_COMMAND._params._lit_fog._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_path_trace @8 struct {}
 field RBTREND_COMMAND._params._lit_path_trace._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_reflect @8 struct {}
@@ -1621,8 +1774,10 @@ field RBTREND_COMMAND._params._generate_mips._base_mip @16 uint32_t
 field RBTREND_COMMAND._params._lit_ambient_occlusion._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_atmosphere_environment._scene @16 rbtrend_lit_scene
 field RBTREND_COMMAND._params._lit_atmosphere_shells._shells @16 const struct RBTREND_LIT_ATMOSPHERE_SHELL *
+field RBTREND_COMMAND._params._lit_clouds._clouds @16 rbtrend_clouds
 field RBTREND_COMMAND._params._lit_cull_lights._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_environment._source @16 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_fog._fog @16 rbtrend_fog
 field RBTREND_COMMAND._params._lit_path_trace._tlas @16 rbtrend_tlas
 field RBTREND_COMMAND._params._lit_reflect._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._tlas @16 rbtrend_tlas
@@ -1654,6 +1809,8 @@ field RBTREND_COMMAND._params._draw_indirect._draw_count @24 uint32_t
 field RBTREND_COMMAND._params._draw_texture._scaling @24 RBTREND_TEXTURE_SCALING
 field RBTREND_COMMAND._params._lit_ambient_occlusion._target @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_atmosphere_shells._shell_count @24 uint32_t
+field RBTREND_COMMAND._params._lit_clouds._layers @24 const struct RBTREND_CLOUD_LAYER *
+field RBTREND_COMMAND._params._lit_fog._volumes @24 const struct RBTREND_FOG_VOLUME_INSTANCE *
 field RBTREND_COMMAND._params._lit_path_trace._target @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_reflect._normal_roughness @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._light @24 uint32_t
@@ -1673,6 +1830,8 @@ field RBTREND_COMMAND._params._bloom._radius @32 float
 field RBTREND_COMMAND._params._draw_texture._border_color @32 float[4]
 field RBTREND_COMMAND._params._lit_ambient_occlusion._radius @32 float
 field RBTREND_COMMAND._params._lit_atmosphere_shells._max_steps @32 uint32_t
+field RBTREND_COMMAND._params._lit_clouds._layer_count @32 uint32_t
+field RBTREND_COMMAND._params._lit_fog._volume_count @32 uint32_t
 field RBTREND_COMMAND._params._lit_path_trace._albedo @32 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_reflect._specular @32 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._depth @32 rbtrend_texture_view
@@ -1683,9 +1842,13 @@ field RBTREND_COMMAND._params._present_texture._border_color @32 float[4]
 field RBTREND_COMMAND._params._tone_map._encoding @32 RBTREND_COLOR_ENCODING
 field RBTREND_COMMAND._params._bloom._intensity @36 float
 field RBTREND_COMMAND._params._lit_ambient_occlusion._intensity @36 float
+field RBTREND_COMMAND._params._lit_clouds._max_steps @36 uint32_t
+field RBTREND_COMMAND._params._lit_fog._near_distance @36 float
 field RBTREND_COMMAND._params._lit_sky._ground_albedo @36 float[3]
 field RBTREND_COMMAND._params._bloom._levels @40 uint32_t
 field RBTREND_COMMAND._params._lit_atmosphere_shells._depth @40 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_clouds._light_steps @40 uint32_t
+field RBTREND_COMMAND._params._lit_fog._far_distance @40 float
 field RBTREND_COMMAND._params._lit_path_trace._normal @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_reflect._reflection @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._target @40 rbtrend_texture_view
@@ -1693,9 +1856,13 @@ field RBTREND_COMMAND._params._lit_ssr._reflection @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_trace_reflections._reflection @40 rbtrend_texture_view
 field RBTREND_COMMAND._params._outline._width @40 float
 field RBTREND_COMMAND._params._tone_map._auto_exposure @40 rbtrend_exposure
+field RBTREND_COMMAND._params._lit_clouds._max_distance @44 float
+field RBTREND_COMMAND._params._lit_fog._history_weight @44 float
 field RBTREND_COMMAND._params._bloom._mask @48 rbtrend_texture_view
 field RBTREND_COMMAND._params._draw_texture._source_rect @48 RBTREND_TEXEL_RECT
 field RBTREND_COMMAND._params._lit_atmosphere_shells._target @48 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_clouds._space_shift @48 float[3]
+field RBTREND_COMMAND._params._lit_fog._space_shift @48 float[3]
 field RBTREND_COMMAND._params._lit_path_trace._samples @48 uint32_t
 field RBTREND_COMMAND._params._lit_reflect._target @48 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_shadow_mask._ray_count @48 uint32_t
@@ -1715,6 +1882,8 @@ field RBTREND_COMMAND._params._lit_trace_reflections._max_distance @56 float
 field RBTREND_COMMAND._params._set_transient_index_buffer._index_size @56 uint32_t
 field RBTREND_COMMAND._params._set_transient_vertex_buffer._slot @56 uint32_t
 field RBTREND_COMMAND._params._begin_rendering._y @60 int32_t
+field RBTREND_COMMAND._params._lit_clouds._history_reset @60 uint32_t
+field RBTREND_COMMAND._params._lit_fog._history_reset @60 uint32_t
 field RBTREND_COMMAND._params._lit_path_trace._max_bounces @60 uint32_t
 field RBTREND_COMMAND._params._lit_shadow_mask._normal_offset @60 float
 field RBTREND_COMMAND._params._lit_ssr._edge_fade @60 float
@@ -1722,12 +1891,16 @@ field RBTREND_COMMAND._params._lit_trace_reflections._max_roughness @60 float
 field RBTREND_COMMAND._params._begin_rendering._width @64 uint32_t
 field RBTREND_COMMAND._params._bloom._lens_dirt_intensity @64 float
 field RBTREND_COMMAND._params._draw_texture._target_rect @64 RBTREND_TEXEL_RECT
+field RBTREND_COMMAND._params._lit_clouds._depth @64 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_fog._depth @64 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_path_trace._cull_mask @64 uint32_t
 field RBTREND_COMMAND._params._lit_shadow_mask._max_distance @64 float
 field RBTREND_COMMAND._params._lit_ssr._max_roughness @64 float
 field RBTREND_COMMAND._params._begin_rendering._height @68 uint32_t
 field RBTREND_COMMAND._params._lit_path_trace._clamp @68 float
 field RBTREND_COMMAND._params._begin_rendering._timer @72 rbtrend_gpu_timer
+field RBTREND_COMMAND._params._lit_clouds._target @72 rbtrend_texture_view
+field RBTREND_COMMAND._params._lit_fog._target @72 rbtrend_texture_view
 field RBTREND_COMMAND._params._begin_rendering._timer_slot @80 uint32_t
 struct RBTREND_COMPUTE_PASS_DESC size=56 align=8
 field RBTREND_COMPUTE_PASS_DESC.base @0 RBT_STRUCT_BASE
@@ -1773,6 +1946,19 @@ field RBTREND_EXPOSURE_DESC.up_rate @28 float
 field RBTREND_EXPOSURE_DESC.down_rate @32 float
 field RBTREND_EXPOSURE_DESC.low_share @36 float
 field RBTREND_EXPOSURE_DESC.high_share @40 float
+struct RBTREND_FOG_DESC size=48 align=8
+field RBTREND_FOG_DESC.base @0 RBT_STRUCT_BASE
+field RBTREND_FOG_DESC.debug_name @16 const char *
+field RBTREND_FOG_DESC.grid_width @24 uint32_t
+field RBTREND_FOG_DESC.grid_height @28 uint32_t
+field RBTREND_FOG_DESC.grid_slices @32 uint32_t
+field RBTREND_FOG_DESC.max_views @36 uint32_t
+field RBTREND_FOG_DESC.noise_size @40 uint32_t
+struct RBTREND_FOG_VOLUME_INSTANCE size=104 align=4
+field RBTREND_FOG_VOLUME_INSTANCE._volume @0 RBTMATH_FOG_VOLUME
+field RBTREND_FOG_VOLUME_INSTANCE._to_volume @32 float[12]
+field RBTREND_FOG_VOLUME_INSTANCE._noise_offset @80 float[3]
+field RBTREND_FOG_VOLUME_INSTANCE._albedo @92 float[3]
 struct RBTREND_FRAMEBUFFER_DESC size=48 align=8
 field RBTREND_FRAMEBUFFER_DESC.base @0 RBT_STRUCT_BASE
 field RBTREND_FRAMEBUFFER_DESC.width @16 uint32_t
@@ -1888,6 +2074,17 @@ struct RBTREND_LIT_ENVIRONMENT_DESC size=24 align=8
 field RBTREND_LIT_ENVIRONMENT_DESC.base @0 RBT_STRUCT_BASE
 field RBTREND_LIT_ENVIRONMENT_DESC.specular_size @16 uint32_t
 field RBTREND_LIT_ENVIRONMENT_DESC.irradiance_size @20 uint32_t
+struct RBTREND_LIT_FOG size=96 align=8
+field RBTREND_LIT_FOG.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_FOG.fog @16 RBTMATH_HEIGHT_FOG
+field RBTREND_LIT_FOG.origin @44 float[3]
+field RBTREND_LIT_FOG.albedo @56 float[3]
+field RBTREND_LIT_FOG.phase_g @68 float
+field RBTREND_LIT_FOG.sun_count @72 uint32_t
+field RBTREND_LIT_FOG.ambient_scale @76 float
+field RBTREND_LIT_FOG.start_distance @80 float
+field RBTREND_LIT_FOG.end_distance @84 float
+field RBTREND_LIT_FOG.max_opacity @88 float
 struct RBTREND_LIT_INSTANCE size=64 align=4
 field RBTREND_LIT_INSTANCE.transform @0 float[16]
 struct RBTREND_LIT_LIGHT_SHADOW size=32 align=8
@@ -2482,7 +2679,18 @@ typedef RBTMATH_BVH_BOX = struct RBTMATH_BVH_BOX
 typedef RBTMATH_BVH_INSTANCE = struct RBTMATH_BVH_INSTANCE
 typedef RBTMATH_CAST_DESC = struct RBTMATH_CAST_DESC
 typedef RBTMATH_CAST_FILTER = _Bool (*)(void *, uint32_t, uint64_t)
+typedef RBTMATH_CLOUD_BOUNDS = struct RBTMATH_CLOUD_BOUNDS
+typedef RBTMATH_CLOUD_BOUNDS_KIND = enum RBTMATH_CLOUD_BOUNDS_KIND
+typedef RBTMATH_CLOUD_CUBE_WARP = enum RBTMATH_CLOUD_CUBE_WARP
+typedef RBTMATH_CLOUD_MAP_ADDRESS = enum RBTMATH_CLOUD_MAP_ADDRESS
+typedef RBTMATH_CLOUD_OFFSETS = struct RBTMATH_CLOUD_OFFSETS
+typedef RBTMATH_CLOUD_SHAPE = struct RBTMATH_CLOUD_SHAPE
+typedef RBTMATH_CLOUD_TEXELS = struct RBTMATH_CLOUD_TEXELS
 typedef RBTMATH_ERROR = struct RBTMATH_ERROR
+typedef RBTMATH_FOG_HEIGHT_KIND = enum RBTMATH_FOG_HEIGHT_KIND
+typedef RBTMATH_FOG_VOLUME = struct RBTMATH_FOG_VOLUME
+typedef RBTMATH_FOG_VOLUME_SHAPE = enum RBTMATH_FOG_VOLUME_SHAPE
+typedef RBTMATH_HEIGHT_FOG = struct RBTMATH_HEIGHT_FOG
 typedef RBTMATH_INSTANCE_BVH_DESC = struct RBTMATH_INSTANCE_BVH_DESC
 typedef RBTMATH_INSTANCE_HIT = struct RBTMATH_INSTANCE_HIT
 typedef RBTMATH_MESH_BVH_DESC = struct RBTMATH_MESH_BVH_DESC
@@ -2494,6 +2702,7 @@ typedef RBTMATH_NOISE_FRACTAL = enum RBTMATH_NOISE_FRACTAL
 typedef RBTMATH_NOISE_GRID = struct RBTMATH_NOISE_GRID
 typedef RBTMATH_NOISE_KIND = enum RBTMATH_NOISE_KIND
 typedef RBTMATH_NOISE_ORIENTATION = enum RBTMATH_NOISE_ORIENTATION
+typedef RBTMATH_NOISE_VOLUME_KIND = enum RBTMATH_NOISE_VOLUME_KIND
 typedef RBTMATH_NOISE_WARP_DESC = struct RBTMATH_NOISE_WARP_DESC
 typedef RBTMATH_OVERLAP = enum RBTMATH_OVERLAP
 typedef RBTMATH_PLANE = struct RBTMATH_PLANE
@@ -2535,6 +2744,9 @@ typedef RBTREND_BUFFER_DESC = struct RBTREND_BUFFER_DESC
 typedef RBTREND_BUFFER_USAGE = uint32_t
 typedef RBTREND_BUFFER_WRITES = uint32_t
 typedef RBTREND_BUILD_MODE = enum RBTREND_BUILD_MODE
+typedef RBTREND_CLOUDS_DESC = struct RBTREND_CLOUDS_DESC
+typedef RBTREND_CLOUD_LAYER = struct RBTREND_CLOUD_LAYER
+typedef RBTREND_CLOUD_LOOK = struct RBTREND_CLOUD_LOOK
 typedef RBTREND_COLOR_ENCODING = uint32_t
 typedef RBTREND_COLOR_TARGET = struct RBTREND_COLOR_TARGET
 typedef RBTREND_COMMAND = struct RBTREND_COMMAND
@@ -2547,6 +2759,8 @@ typedef RBTREND_DRAW_LIST_ORDER = uint32_t
 typedef RBTREND_DRAW_MESH = struct RBTREND_DRAW_MESH
 typedef RBTREND_ERROR = struct RBTREND_ERROR
 typedef RBTREND_EXPOSURE_DESC = struct RBTREND_EXPOSURE_DESC
+typedef RBTREND_FOG_DESC = struct RBTREND_FOG_DESC
+typedef RBTREND_FOG_VOLUME_INSTANCE = struct RBTREND_FOG_VOLUME_INSTANCE
 typedef RBTREND_FRAMEBUFFER_DESC = struct RBTREND_FRAMEBUFFER_DESC
 typedef RBTREND_FRAMEBUFFER_TEXTURE_SPEC = struct RBTREND_FRAMEBUFFER_TEXTURE_SPEC
 typedef RBTREND_GPU_TIMER_DESC = struct RBTREND_GPU_TIMER_DESC
@@ -2561,6 +2775,7 @@ typedef RBTREND_LIT_ATMOSPHERE_SHELL = struct RBTREND_LIT_ATMOSPHERE_SHELL
 typedef RBTREND_LIT_CASCADE_ANCHOR = struct RBTREND_LIT_CASCADE_ANCHOR
 typedef RBTREND_LIT_CASCADE_FIT = struct RBTREND_LIT_CASCADE_FIT
 typedef RBTREND_LIT_ENVIRONMENT_DESC = struct RBTREND_LIT_ENVIRONMENT_DESC
+typedef RBTREND_LIT_FOG = struct RBTREND_LIT_FOG
 typedef RBTREND_LIT_INSTANCE = struct RBTREND_LIT_INSTANCE
 typedef RBTREND_LIT_LIGHT_SHADOW = struct RBTREND_LIT_LIGHT_SHADOW
 typedef RBTREND_LIT_LIGHT_TYPE = uint32_t
@@ -2682,11 +2897,13 @@ typedef rbtrend_binding_layout = struct rbtrend_binding_layout_t *
 typedef rbtrend_binding_set = struct rbtrend_binding_set_t *
 typedef rbtrend_blas = struct rbtrend_blas_t *
 typedef rbtrend_buffer = struct rbtrend_buffer_t *
+typedef rbtrend_clouds = struct rbtrend_clouds_t *
 typedef rbtrend_command_list = struct rbtrend_command_list_t *
 typedef rbtrend_compute_pass = struct rbtrend_compute_pass_t *
 typedef rbtrend_compute_pipeline = struct rbtrend_compute_pipeline_t *
 typedef rbtrend_draw_list = struct rbtrend_draw_list_t *
 typedef rbtrend_exposure = struct rbtrend_exposure_t *
+typedef rbtrend_fog = struct rbtrend_fog_t *
 typedef rbtrend_framebuffer = struct rbtrend_framebuffer_t *
 typedef rbtrend_gpu_timer = struct rbtrend_gpu_timer_t *
 typedef rbtrend_graphics_pipeline = struct rbtrend_graphics_pipeline_t *

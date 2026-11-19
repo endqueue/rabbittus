@@ -232,6 +232,12 @@ typedef enum RBT_RESULT RBT_ENUM_BASE {
 	 * of another format version than this library reads. Rebuilding the
 	 * caller's shaders with this version's tool fixes it. */
 	RBT_RESULT_REND_REFLECTION_MISMATCH = 5004,
+	/** Bytes the call would write may still be read by submitted work
+	 * that hasn't finished: a submission the caller named, or Rend's own
+	 * copy of an earlier write of them. Nothing is written. It is a "not
+	 * yet": the same call succeeds once that submission has finished
+	 * (render/rbtrendbuffers.h, rbtrend_buffer_write_after()). */
+	RBT_RESULT_REND_IN_USE = 5005,
 
 	/* Rabbittus Text (text/rbttext.h) */
 
@@ -372,6 +378,10 @@ typedef enum RBT_STRUCT_TYPE RBT_ENUM_BASE {
 	RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE = 5037, /**< RBTREND_LIT_ATMOSPHERE. */
 	RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR = 5038, /**< RBTREND_LIT_CASCADE_ANCHOR, chained onto RBTREND_LIT_CASCADE_FIT. */
 	RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC = 5040, /**< RBTREND_LIT_SCENE_DESC. */
+	RBT_STRUCT_TYPE_REND_LIT_FOG = 5041, /**< RBTREND_LIT_FOG. */
+	RBT_STRUCT_TYPE_REND_FOG_DESC = 5042, /**< RBTREND_FOG_DESC. */
+	RBT_STRUCT_TYPE_REND_CLOUDS_DESC = 5043, /**< RBTREND_CLOUDS_DESC. */
+	RBT_STRUCT_TYPE_REND_CLOUD_LOOK = 5044, /**< RBTREND_CLOUD_LOOK. */
 
 	/* Rabbittus Text (text/rbttext.h) */
 	RBT_STRUCT_TYPE_TEXT_FACE_DESC = 6000, /**< RBTTEXT_FACE_DESC. */

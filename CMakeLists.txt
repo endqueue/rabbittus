@@ -32,6 +32,8 @@ add_library(rabbittus STATIC
         src/render/rbtrendcontext.cpp
         src/render/rbtrendbuffers.cpp
         src/render/rbtrendranges_internal.hpp
+        src/render/rbtrendcopies_internal.hpp
+        src/render/rbtrendhistory.hpp
         src/render/rbtrendpools_internal.hpp
         src/render/rbtrendpools.cpp
         src/render/rbtrendimages_internal.hpp
@@ -61,6 +63,10 @@ add_library(rabbittus STATIC
         src/render/rbtrendraytracing.cpp
         src/render/rbtrendatmosphere_internal.hpp
         src/render/rbtrendatmosphere.cpp
+        src/render/rbtrendfog_internal.hpp
+        src/render/rbtrendfog.cpp
+        src/render/rbtrendclouds_internal.hpp
+        src/render/rbtrendclouds.cpp
         src/archive/rbtarchive_internal.hpp
         src/archive/rbtarchive.cpp
         src/audio/rbtaudio_internal.hpp
@@ -75,8 +81,12 @@ add_library(rabbittus STATIC
         src/math/rbtmathpoly_internal.hpp
         src/math/rbtmathpoly.cpp
         src/math/rbtmathmedium.cpp
+        src/math/rbtmathfog.cpp
+        src/math/rbtmathclouds.cpp
         src/math/rbtmathnoise.cpp
         src/math/rbtmathnoise_internal.hpp
+        src/math/rbtmathfunctions.cpp
+        src/math/rbtmathfunctions_internal.hpp
         src/sync/rbtsync_internal.hpp
         src/sync/rbtsyncnet.cpp
         src/text/rbttext_internal.hpp
@@ -108,6 +118,8 @@ add_library(rabbittus STATIC
         include/render/rbtrendbatch.h
         include/render/rbtrendraytracing.h
         include/render/rbtrendatmosphere.h
+        include/render/rbtrendfog.h
+        include/render/rbtrendclouds.h
         include/archive/rbtarchive.h
         include/audio/rbtaudio.h
         include/audio/rbtaudiocues.h
@@ -115,7 +127,10 @@ add_library(rabbittus STATIC
         include/math/rbtmatherror.h
         include/math/rbtmathpoly.h
         include/math/rbtmathmedium.h
+        include/math/rbtmathfog.h
+        include/math/rbtmathclouds.h
         include/math/rbtmathnoise.h
+        include/math/rbtmathfunctions.h
         include/sync/rbtsyncnet.h
         include/text/rbttext.h
         include/jobs/rbtjobs.h
@@ -204,6 +219,7 @@ target_link_libraries(rabbittus PRIVATE Threads::Threads)
 # compiled at run time. src/render/rbtrendbuiltin.cpp, rbtrendbatch.cpp and
 # rbtrendlit.cpp include them.
 include(cmake/rbtrend_slang.cmake)
+include(cmake/rabbittus_no_contract.cmake)
 set(RABBITTUS_SHADER_INC_DIR ${CMAKE_CURRENT_BINARY_DIR}/rbtrend_shaders)
 set(RABBITTUS_SHADERS
         rbtrend_fullscreen_vert
@@ -259,6 +275,13 @@ set(RABBITTUS_SHADERS
         rbtrend_atmosphere_copy_frag
         rbtrend_atmosphere_aerial_frag
         rbtrend_atmosphere_shell_frag
+        rbtrend_fog_cull_comp
+        rbtrend_fog_inject_comp
+        rbtrend_fog_integrate_comp
+        rbtrend_fog_apply_frag
+        rbtrend_clouds_march_comp
+        rbtrend_clouds_reconstruct_comp
+        rbtrend_clouds_composite_frag
 )
 # The modules the shaders import, from shaders/: every shader is compiled
 # again when one of them changes.
@@ -281,6 +304,12 @@ set(RABBITTUS_SHADER_MODULES
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_pass.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_atmosphere_pass_block.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_atmosphere.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_fog.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_fog_grid.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_fog_bindings.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_clouds_model.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_clouds_input.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_clouds_bindings.slang
 )
 # The shaders that trace (rbtrendraytracing.h): inline ray queries, SPIR-V's
 # ray query capability (SPV_KHR_ray_query) and DXIL's shader model 6.5. Made
@@ -753,48 +782,30 @@ file(CONFIGURE OUTPUT ${RABBITTUS_SHADER_INC_DIR}/rbtrend_hosek_rgb.inc CONTENT 
 # For a caller's tests that work the model out in C to compare with.
 set(RABBITTUS_HOSEK_RGB_INC ${RABBITTUS_SHADER_INC_DIR}/rbtrend_hosek_rgb.inc CACHE INTERNAL "")
 
-# No floating-point contraction in RbtMath's noise (rbtmathnoise.h, "Same
-# bits"), chosen by the compiler's ID rather than "NOT MSVC": clang-cl, which
-# CMake counts as MSVC, contracts by default. MSVC itself contracts only
-# under /fp:contract or /fp:fast from 17.0 (cl 19.30); earlier versions
-# contracted under /fp:precise, so they are refused.
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    set(RABBITTUS_NO_CONTRACT /clang:-ffp-contract=off)
-elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    set(RABBITTUS_NO_CONTRACT -ffp-contract=off)
-elseif (MSVC)
-    if (MSVC_VERSION LESS 1930)
-        message(FATAL_ERROR "rbtmathnoise.cpp needs MSVC 17.0 (cl 19.30) or later: earlier versions contract under /fp:precise")
-    endif ()
-    set(RABBITTUS_NO_CONTRACT /fp:precise)
-else ()
-    message(FATAL_ERROR "rbtmathnoise.cpp: no known way to turn floating-point contraction off for ${CMAKE_CXX_COMPILER_ID}")
-endif ()
-set_source_files_properties(src/math/rbtmathnoise.cpp PROPERTIES COMPILE_OPTIONS "${RABBITTUS_NO_CONTRACT}")
+# No floating-point contraction wherever results must be the same bits on
+# every platform (card A63; cmake/rabbittus_no_contract.cmake chooses the
+# flag by the compiler's ID): RbtMath's noise (rbtmathnoise.h, "Same bits"),
+# elementary functions (rbtmathfunctions.h), polygons (with Clipper2, whose
+# intersections are part of a boolean's result), BVHs (a cast, an overlap
+# and a sweep) and shell media (rbtmathmedium.h, its exponential
+# rbtmathfunctions.h's); RbtText and its four dependencies (a layout's
+# positions and a glyph's distance field, rbttext.h); and Rend's lit code on
+# the CPU (card A49: a cascade fit's arithmetic the same on every compiler,
+# leaving only libm's rounding of std::pow and std::tan, which
+# rbtrend_contract_tests allows for).
+rabbittus_no_contract(
+        TARGETS rbtmath_clipper2 rbttext_harfbuzz rbttext_msdfgen rbttext_sheenbidi rbttext_unibreak
+        SOURCES src/math/rbtmathnoise.cpp src/math/rbtmathfunctions.cpp src/math/rbtmathpoly.cpp
+                src/math/rbtmathbvh.cpp src/math/rbtmathmedium.cpp src/math/rbtmathfog.cpp
+                src/math/rbtmathclouds.cpp
+                src/text/rbttext.cpp src/text/rbttext_layout.cpp src/text/rbttext_atlas.cpp
+                src/render/rbtrendlit.cpp)
 
-# No floating-point contraction where RbtMath's polygons compute in doubles:
-# results must be the same bits on every platform. MSVC doesn't contract
-# unless asked (/fp:contract), so only Clang and GCC need telling.
 if (NOT MSVC)
-    target_compile_options(rbtmath_clipper2 PRIVATE -ffp-contract=off)
-    set_source_files_properties(src/math/rbtmathpoly.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
-    # The same for RbtMath's BVHs: a cast, an overlap and a sweep give the
-    # same bits everywhere (rbtmathbvh.h, "Same bits").
-    set_source_files_properties(src/math/rbtmathbvh.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
-    # The same for RbtMath's shell media (rbtmathmedium.h, "Same bits"),
-    # whose exponential is its own for the same reason.
-    set_source_files_properties(src/math/rbtmathmedium.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
-    # The same for RbtText: a layout's positions and a glyph's distance field
-    # are the same bits on every platform (rbttext.h).
+    # RbtText's dependencies are third-party code: their warnings are theirs.
     foreach (target rbttext_harfbuzz rbttext_msdfgen rbttext_sheenbidi rbttext_unibreak)
-        target_compile_options(${target} PRIVATE -ffp-contract=off -w)
+        target_compile_options(${target} PRIVATE -w)
     endforeach ()
-    set_source_files_properties(src/text/rbttext.cpp src/text/rbttext_layout.cpp src/text/rbttext_atlas.cpp
-            PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
-    # The same for Rend's lit code on the CPU (card A49): a cascade fit's
-    # arithmetic is the same on every compiler, leaving only libm's rounding
-    # of std::pow and std::tan, which rbtrend_contract_tests allows for.
-    set_source_files_properties(src/render/rbtrendlit.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 else ()
     # RbtText's dependencies are third-party code: their warnings are theirs.
     # HarfBuzz's one-file amalgamation has more sections than an object file
@@ -914,17 +925,75 @@ if (RABBITTUS_BUILD_TESTS)
     # hand, Release; RBTMATH_TODO.md has the run).
     add_executable(rbtmathnoise_tests tests/rbtmathnoise_tests.c)
     target_link_libraries(rbtmathnoise_tests PRIVATE rabbittus Threads::Threads)
-    target_compile_options(rbtmathnoise_tests PRIVATE ${RABBITTUS_NO_CONTRACT})
+    rabbittus_no_contract(TARGETS rbtmathnoise_tests)
     add_test(NAME rbtmathnoise_tests COMMAND rbtmathnoise_tests)
     set_tests_properties(rbtmathnoise_tests PROPERTIES TIMEOUT 600)
     # The same bits on every platform: a fixed run of every kind, fractal,
     # dimension, distance and return, and the definition's parts a copy must
     # match exactly, against values recorded on the M5 Pro
     # (tests/data/rbtmathnoise).
+    # RbtMath's baked noise volumes (rbtmathnoise.h, "Baked volumes"; card
+    # A57's Math half, tests 1 to 4, built first for card A59's fog volumes).
+    add_executable(rbtmathnoise_volume_tests tests/rbtmathnoise_volume_tests.c)
+    target_link_libraries(rbtmathnoise_volume_tests PRIVATE rabbittus Threads::Threads)
+    rabbittus_no_contract(TARGETS rbtmathnoise_volume_tests)
+    add_test(NAME rbtmathnoise_volume_tests COMMAND rbtmathnoise_volume_tests)
+    # RbtMath's fog (rbtmathfog.h, card A59): densities, a plane's closed
+    # transmittance and a sphere's approximation against a march in double,
+    # volumes, refusals; and its bits, recorded on the Mac
+    # (tests/data/rbtmathfog/bits.inc).
+    add_executable(rbtmathfog_tests tests/rbtmathfog_tests.c)
+    target_link_libraries(rbtmathfog_tests PRIVATE rabbittus)
+    rabbittus_no_contract(TARGETS rbtmathfog_tests)
+    add_test(NAME rbtmathfog_tests COMMAND rbtmathfog_tests)
+    add_executable(rbtmathfog_bits_tests tests/rbtmathfog_bits_tests.c)
+    target_link_libraries(rbtmathfog_bits_tests PRIVATE rabbittus)
+    rabbittus_no_contract(TARGETS rbtmathfog_bits_tests)
+    add_test(NAME rbtmathfog_bits_tests COMMAND rbtmathfog_bits_tests)
+    # RbtMath's cloud layers (rbtmathclouds.h, card A57): each step of the
+    # density worked by hand, against a reference of the definition written
+    # in the test, the bounds, the cube's faces and every argument check; and
+    # the same bits everywhere (tests/data/rbtmathclouds/bits.inc).
+    add_executable(rbtmathclouds_tests tests/rbtmathclouds_tests.c)
+    target_link_libraries(rbtmathclouds_tests PRIVATE rabbittus)
+    rabbittus_no_contract(TARGETS rbtmathclouds_tests)
+    add_test(NAME rbtmathclouds_tests COMMAND rbtmathclouds_tests)
+    add_executable(rbtmathclouds_bits_tests tests/rbtmathclouds_bits_tests.c)
+    target_link_libraries(rbtmathclouds_bits_tests PRIVATE rabbittus)
+    rabbittus_no_contract(TARGETS rbtmathclouds_bits_tests)
+    add_test(NAME rbtmathclouds_bits_tests COMMAND rbtmathclouds_bits_tests)
+    # The density's cost a point (Release, by hand; not a ctest).
+    add_executable(rbtmathclouds_bench tests/rbtmathclouds_bench.c)
+    target_link_libraries(rbtmathclouds_bench PRIVATE rabbittus)
+    rabbittus_no_contract(TARGETS rbtmathclouds_bench)
+    # Numbers, not a test: the fog's calls and the volumes' bakes (Release, by hand).
+    add_executable(rbtmathfog_bench tests/rbtmathfog_bench.c)
+    target_link_libraries(rbtmathfog_bench PRIVATE rabbittus)
     add_executable(rbtmathnoise_bits_tests tests/rbtmathnoise_bits_tests.c)
     target_link_libraries(rbtmathnoise_bits_tests PRIVATE rabbittus)
-    target_compile_options(rbtmathnoise_bits_tests PRIVATE ${RABBITTUS_NO_CONTRACT})
+    rabbittus_no_contract(TARGETS rbtmathnoise_bits_tests)
     add_test(NAME rbtmathnoise_bits_tests COMMAND rbtmathnoise_bits_tests)
+    # RbtMath's elementary functions (rbtmathfunctions.h, card A61): the
+    # draft's section 10, tests 1 to 7, the accuracy test against MPFR's
+    # correctly rounded results (tests/data/rbtmathfunctions/reference.inc,
+    # made by tests/rbtmathfunctions_reference.c, run by hand). Its inputs
+    # are worked out in the test, so with no contraction either.
+    add_executable(rbtmathfunctions_tests tests/rbtmathfunctions_tests.c)
+    target_link_libraries(rbtmathfunctions_tests PRIVATE rabbittus Threads::Threads)
+    rabbittus_no_contract(TARGETS rbtmathfunctions_tests)
+    add_test(NAME rbtmathfunctions_tests COMMAND rbtmathfunctions_tests)
+    # The same bits on every platform: 2^20 inputs a function and range,
+    # hashed, against values recorded on the M5 Pro
+    # (tests/data/rbtmathfunctions/bits.inc), and again with subnormals
+    # flushed.
+    add_executable(rbtmathfunctions_bits_tests tests/rbtmathfunctions_bits_tests.c)
+    target_link_libraries(rbtmathfunctions_bits_tests PRIVATE rabbittus)
+    rabbittus_no_contract(TARGETS rbtmathfunctions_bits_tests)
+    add_test(NAME rbtmathfunctions_bits_tests COMMAND rbtmathfunctions_bits_tests)
+    # Numbers, not a test: each function's cost an element against the
+    # platform's libm (RBTMATH_TODO.md). Run by hand, Release.
+    add_executable(rbtmathfunctions_bench tests/rbtmathfunctions_bench.c)
+    target_link_libraries(rbtmathfunctions_bench PRIVATE rabbittus)
     # Numbers, not a test: samples a second per kind, dimension and fractal,
     # and a terrain chunk's proxy (RBTMATH_TODO.md). Run by hand, Release.
     add_executable(rbtmathnoise_bench tests/rbtmathnoise_bench.c)
@@ -935,7 +1004,7 @@ if (RABBITTUS_BUILD_TESTS)
     # src/math for the octave's raw evaluation.
     add_executable(rbtmathnoise_scale_search tests/rbtmathnoise_scale_search.cpp)
     target_include_directories(rbtmathnoise_scale_search PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/math ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_compile_options(rbtmathnoise_scale_search PRIVATE ${RABBITTUS_NO_CONTRACT})
+    rabbittus_no_contract(TARGETS rbtmathnoise_scale_search)
     add_executable(rbtmathpoly_tests tests/rbtmathpoly_tests.c)
     target_link_libraries(rbtmathpoly_tests PRIVATE rabbittus)
     add_test(NAME rbtmathpoly_tests COMMAND rbtmathpoly_tests)
@@ -951,20 +1020,29 @@ if (RABBITTUS_BUILD_TESTS)
     # Its inputs are worked out in the test, so with no contraction either:
     # clang fuses a multiply and an add on arm64 by default, which made the
     # inputs, not the BVH, differ from MSVC's (found on macOS 2026-11-09).
-    if (NOT MSVC)
-        target_compile_options(rbtmathbvh_bits_tests PRIVATE -ffp-contract=off)
-    endif ()
+    rabbittus_no_contract(TARGETS rbtmathbvh_bits_tests)
     add_test(NAME rbtmathbvh_bits_tests COMMAND rbtmathbvh_bits_tests)
     # The range list under Rbtrend's pools: an internal header with no GPU in
     # it, which is why this one test sees src/render.
     add_executable(rbtrendranges_tests tests/rbtrendranges_tests.cpp)
     target_include_directories(rbtrendranges_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
     add_test(NAME rbtrendranges_tests COMMAND rbtrendranges_tests)
+    # The copies a staged buffer has in flight (card A62): an internal
+    # header too, over eqstd's array.
+    add_executable(rbtrendcopies_tests tests/rbtrendcopies_tests.cpp)
+    target_include_directories(rbtrendcopies_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
+    target_link_libraries(rbtrendcopies_tests PRIVATE eqstd)
+    add_test(NAME rbtrendcopies_tests COMMAND rbtrendcopies_tests)
     # Which of a lit scene's view-set records takes a new set: an internal
     # header with no GPU in it, as the range list's (card A67).
     add_executable(rbtrendviewsets_tests tests/rbtrendviewsets_tests.cpp)
     target_include_directories(rbtrendviewsets_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
     add_test(NAME rbtrendviewsets_tests COMMAND rbtrendviewsets_tests)
+    # The history records Rend's volumetric objects keep a view (card A59's
+    # fog and A57's clouds share them): an internal header, no GPU.
+    add_executable(rbtrendhistory_tests tests/rbtrendhistory_tests.cpp)
+    target_include_directories(rbtrendhistory_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/render)
+    add_test(NAME rbtrendhistory_tests COMMAND rbtrendhistory_tests)
     # The open-addressing table under Rbtrend's command lists, an internal
     # header too.
     add_executable(rbthashindex_tests tests/rbthashindex_tests.cpp)

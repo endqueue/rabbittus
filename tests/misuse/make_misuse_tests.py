@@ -30,6 +30,12 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 # Functions zeroes are a valid call for, each with the reason.
 ZEROES_SUCCEED = {
+    "rbtmath_compute_atan": "a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)",
+    "rbtmath_compute_atan2": "a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)",
+    "rbtmath_compute_exp": "a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)",
+    "rbtmath_compute_exp2": "a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)",
+    "rbtmath_compute_log2": "a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)",
+    "rbtmath_compute_tan": "a count of 0 is OK with any pointers and writes nothing (rbtmathfunctions.h, Results)",
 }
 
 # Functions not called: zeroes are outside their contract in a way a
@@ -103,7 +109,7 @@ def main():
             out.append('// - %s%s.\n//   Not covered: %s.\n' % (reason[0].upper(), reason[1:], ', '.join(uncovered)))
     out.append('\n')
     out.append('#include "rbtrend.h"\n#include "archive/rbtarchive.h"\n#include "audio/rbtaudio.h"\n')
-    out.append('#include "audio/rbtaudiocues.h"\n#include "jobs/rbtjobs.h"\n#include "math/rbtmathbvh.h"\n#include "math/rbtmathmedium.h"\n#include "math/rbtmathnoise.h"\n')
+    out.append('#include "audio/rbtaudiocues.h"\n#include "jobs/rbtjobs.h"\n#include "math/rbtmathbvh.h"\n#include "math/rbtmathclouds.h"\n#include "math/rbtmathfunctions.h"\n#include "math/rbtmathmedium.h"\n#include "math/rbtmathnoise.h"\n')
     out.append('#include "math/rbtmathpoly.h"\n#include "sync/rbtsyncnet.h"\n#include "text/rbttext.h"\n')
     out.append('#include "rbtmath.h"\n#include "misuse/misuse_factories.h"\n#include <stdio.h>\n#include <string.h>\n\n')
     out.append('#if defined(_MSC_VER) && _DEBUG\n#include <crtdbg.h>\n#endif\n\n')

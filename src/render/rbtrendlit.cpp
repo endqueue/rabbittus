@@ -6,6 +6,8 @@
 #include "rbtrendimages_internal.hpp"
 #include "rbtrendlit_internal.hpp"
 #include "rbtrendatmosphere_internal.hpp"
+#include "rbtrendfog_internal.hpp"
+#include "rbtrendclouds_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -45,11 +47,18 @@
 #include "rbtrend_lit_ssr_comp.package.inc"
 #include "rbtrend_lit_reflect_frag.package.inc"
 #include "rbtrend_atmosphere_shell_frag.package.inc"
+#include "rbtrend_fog_cull_comp.package.inc"
+#include "rbtrend_fog_inject_comp.package.inc"
+#include "rbtrend_fog_integrate_comp.package.inc"
+#include "rbtrend_fog_apply_frag.package.inc"
+#include "rbtrend_clouds_march_comp.package.inc"
+#include "rbtrend_clouds_reconstruct_comp.package.inc"
+#include "rbtrend_clouds_composite_frag.package.inc"
 
 static_assert(sizeof(RBTREND_LIT_VERTEX) == 48, "RBTREND_LIT_VERTEX is 48 bytes");
 static_assert(sizeof(RBTREND_LIT_INSTANCE) == 64, "RBTREND_LIT_INSTANCE is 64 bytes");
 static_assert(sizeof(rbtrend_lit_scene_block) == 128 + 80 * RBTREND_LIT_MAX_SHADOW_VIEWS + 80 * RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS +
-                                                 32 * RBTREND_LIT_MAX_SHADOW_VIEWS + 208 + 64 * RBTREND_LIT_MAX_LIGHTS + 7 * 16,
+                                                 32 * RBTREND_LIT_MAX_SHADOW_VIEWS + 208 + 64 * RBTREND_LIT_MAX_LIGHTS + 7 * 16 + 5 * 16,
               "RbtrendLitScene's std140 size");
 // Vulkan's guaranteed maxUniformBufferRange, the smallest any device may
 // report; Carrottus GPU reports no limit of its own for a uniform buffer, so the
@@ -179,6 +188,11 @@ static bool rbtrend_lit_check_scene_block(rbtrend_binding_layout layout) {
 	    {"atmosphere_sizes", MEMBER(B, atmosphere_sizes)},
 	    {"atmosphere_aerial", MEMBER(B, atmosphere_aerial)},
 	    {"atmosphere_array", MEMBER(B, atmosphere_array)},
+	    {"fog_up_base", MEMBER(B, fog_up_base)},
+	    {"fog_eye", MEMBER(B, fog_eye)},
+	    {"fog_albedo", MEMBER(B, fog_albedo)},
+	    {"fog_range", MEMBER(B, fog_range)},
+	    {"fog_light", MEMBER(B, fog_light)},
 	    {"lights[0].position_range", MEMBER(B, lights)},
 	    {"lights[0].outer_shadow", MEMBER(B, lights) + MEMBER(L, outer_shadow)},
 	    {"lights[127].outer_shadow", last_light + MEMBER(L, outer_shadow)},
@@ -737,6 +751,282 @@ rbtrend_graphics_pipeline rbtrend_lit_shell_pipeline(rbtrend_instance instance, 
 	                                  &blend);
 }
 
+static bool rbtrend_fog_check_block(rbtrend_binding_layout layout) {
+	typedef rbtrend_fog_block B;
+	typedef rbtrend_fog_volume_block V;
+	const uint32_t last = (uint32_t)offsetof(B, volumes) + (uint32_t)sizeof(V) * (RBTREND_FOG_MAX_VOLUMES - 1);
+	const rbtrend_block_member members[] = {
+	    {"last_view_projection", (uint32_t)offsetof(B, last_view_projection)},
+	    {"last_eye", (uint32_t)offsetof(B, last_eye)},
+	    {"shift", (uint32_t)offsetof(B, shift)},
+	    {"range", (uint32_t)offsetof(B, range)},
+	    {"last_range", (uint32_t)offsetof(B, last_range)},
+	    {"grid", (uint32_t)offsetof(B, grid)},
+	    {"volumes[0].to_volume", (uint32_t)offsetof(B, volumes)},
+	    {"volumes[0].half_shape", (uint32_t)(offsetof(B, volumes) + offsetof(V, half_shape))},
+	    {"volumes[0].params", (uint32_t)(offsetof(B, volumes) + offsetof(V, params))},
+	    {"volumes[0].noise_offset", (uint32_t)(offsetof(B, volumes) + offsetof(V, noise_offset))},
+	    {"volumes[0].albedo", (uint32_t)(offsetof(B, volumes) + offsetof(V, albedo))},
+	    {"volumes[0].sphere", (uint32_t)(offsetof(B, volumes) + offsetof(V, sphere))},
+	    {"volumes[63].sphere", last + (uint32_t)offsetof(V, sphere)},
+	};
+	return rbtrend_lit_check_block(layout, 0, "RbtrendFog", (uint32_t)sizeof(B), members, sizeof(members) / sizeof(members[0]));
+}
+
+// A compute pipeline of Rend's fog: [shader] over [layouts], [push] bytes
+// of push constants (none at 0), into [*out] if it isn't made. False,
+// reported, if it can't be.
+static bool rbtrend_lit_fog_compute(rbtrend_instance instance, rbtrend_shader shader, const char *entry, const rbtrend_binding_layout *layouts,
+                                   uint32_t layout_count, uint32_t push, const char *name, rbtrend_compute_pipeline *out) {
+	if (*out)
+		return true;
+	RBTREND_COMPUTE_PIPELINE_DESC desc{};
+	desc.base           = rbt_struct_base(RBT_STRUCT_TYPE_REND_COMPUTE_PIPELINE_DESC);
+	desc._debug_name    = name;
+	desc.compute_shader = shader;
+	desc._entry_point   = entry;
+	for (uint32_t i = 0; i < layout_count; ++i)
+		desc._binding_layouts[i] = layouts[i];
+	desc._binding_layout_count = layout_count;
+	if (push > 0) {
+		desc._push_constant_ranges[0].stage_flags = CRGPU_SHADER_STAGE_COMPUTE;
+		desc._push_constant_ranges[0].offset      = 0;
+		desc._push_constant_ranges[0].size        = push;
+		desc._push_constant_range_count           = 1;
+	}
+	RBTREND_ERROR error;
+	(void)rbtrend_compute_pipeline_create(instance, &desc, out, &error);
+	if (!*out)
+		rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's %s pipeline can't be created: %s", name, error.message);
+	return *out != nullptr;
+}
+
+bool rbtrend_lit_fog_prepare(rbtrend_instance instance) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	if (lit.fog_cull_pipeline && lit.fog_inject_pipeline && lit.fog_integrate_pipeline && lit.fog_apply_layout)
+		return true;
+	if (!rbtrend_lit_prepare_resources(instance))
+		return false;
+	rbtrend_binding_layout scene_layout = rbtrend_lit_scene_layout(instance);
+	if (!scene_layout)
+		return false;
+	struct {
+		const RBTREND_SHADER_PACKAGE *package;
+		rbtrend_shader *shader;
+		const char *name;
+	} const shaders[4] = {{&rbtrend_fog_cull_comp_package, &lit.fog_cull_comp, "fog cull"},
+	                      {&rbtrend_fog_inject_comp_package, &lit.fog_inject_comp, "fog inject"},
+	                      {&rbtrend_fog_integrate_comp_package, &lit.fog_integrate_comp, "fog integrate"},
+	                      {&rbtrend_fog_apply_frag_package, &lit.fog_apply_frag, "fog apply"}};
+	for (const auto &entry : shaders) {
+		if (*entry.shader)
+			continue;
+		(void)rbtrend_shader_create(instance, entry.package, entry.shader, nullptr);
+		if (!*entry.shader) {
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's %s shader can't be created", entry.name);
+			return false;
+		}
+	}
+	if (!lit.fog_layout) {
+		// Set 1, alike in the cull and the inject.
+		rbtrend_shader both[2] = {lit.fog_cull_comp, lit.fog_inject_comp};
+		(void)rbtrend_binding_layout_create_from_shaders(instance, both, 2, 1, &lit.fog_layout, nullptr);
+		if (!lit.fog_layout || !rbtrend_fog_check_block(lit.fog_layout)) {
+			rbtrend_binding_layout_destroy(lit.fog_layout);
+			lit.fog_layout = nullptr;
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the binding layout of Rend's fog grid can't be created");
+			return false;
+		}
+	}
+	if (!lit.fog_integrate_layout) {
+		(void)rbtrend_binding_layout_create_from_shaders(instance, &lit.fog_integrate_comp, 1, 0, &lit.fog_integrate_layout, nullptr);
+		if (!lit.fog_integrate_layout) {
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the binding layout of Rend's fog integration can't be created");
+			return false;
+		}
+	}
+	const rbtrend_binding_layout two[2] = {scene_layout, lit.fog_layout};
+	if (!rbtrend_lit_fog_compute(instance, lit.fog_cull_comp, "rbtrend_fog_cull_comp", two, 2, 0, "rbtrend fog cull", &lit.fog_cull_pipeline))
+		return false;
+	if (!rbtrend_lit_fog_compute(instance, lit.fog_inject_comp, "rbtrend_fog_inject_comp", two, 2, 0, "rbtrend fog inject", &lit.fog_inject_pipeline))
+		return false;
+	if (!rbtrend_lit_fog_compute(instance, lit.fog_integrate_comp, "rbtrend_fog_integrate_comp", &lit.fog_integrate_layout, 1,
+	                             (uint32_t)sizeof(rbtrend_fog_integrate_params), "rbtrend fog integrate", &lit.fog_integrate_pipeline))
+		return false;
+	if (!lit.fog_apply_layout) {
+		(void)rbtrend_binding_layout_create_from_shaders(instance, &lit.fog_apply_frag, 1, 1, &lit.fog_apply_layout, nullptr);
+		if (!lit.fog_apply_layout) {
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the binding layout of Rend's fog apply can't be created");
+			return false;
+		}
+	}
+	return true;
+}
+
+rbtrend_graphics_pipeline rbtrend_lit_fog_apply_pipeline(rbtrend_instance instance, CRGPU_FORMAT format) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.fog_apply_pipelines)
+		if (entry.format == format)
+			return entry.pipeline;
+	if (!rbtrend_lit_fog_prepare(instance))
+		return nullptr;
+	// The texel becomes texel x T + L: L the output's colour, T its alpha;
+	// the alpha kept.
+	crgpu_blend_attachment_desc blend{};
+	blend.blend_enable                      = true;
+	blend.src_color_blend_factor            = CRGPU_BLEND_FACTOR_ONE;
+	blend.dst_color_blend_factor            = CRGPU_BLEND_FACTOR_SRC_ALPHA;
+	blend.color_blend_op                    = CRGPU_BLEND_OP_ADD;
+	blend.src_alpha_blend_factor            = CRGPU_BLEND_FACTOR_ZERO;
+	blend.dst_alpha_blend_factor            = CRGPU_BLEND_FACTOR_ONE;
+	blend.alpha_blend_op                    = CRGPU_BLEND_OP_ADD;
+	const rbtrend_binding_layout layouts[2] = {lit.scene_layout, lit.fog_apply_layout};
+	return rbtrend_lit_format_pipeline(instance, lit.fog_apply_pipelines, lit.fog_apply_frag, layouts, 2, format, sizeof(rbtrend_fog_apply_params),
+	                                  "fog apply", &blend);
+}
+
+static bool rbtrend_clouds_check_blocks(rbtrend_binding_layout looks_layout, rbtrend_binding_layout march_layout, rbtrend_binding_layout history_layout) {
+	typedef rbtrend_clouds_look_block K;
+	typedef rbtrend_clouds_march_block M;
+	typedef rbtrend_clouds_layer_block L;
+	typedef rbtrend_clouds_history_block H;
+	const uint32_t last_look = (uint32_t)sizeof(K) * (RBTREND_CLOUDS_MAX_LOOKS - 1);
+	const rbtrend_block_member looks[] = {
+	    {"looks[0].profiles", (uint32_t)offsetof(K, profiles)},
+	    {"looks[0].tiles", (uint32_t)offsetof(K, tiles)},
+	    {"looks[0].shape", (uint32_t)offsetof(K, shape)},
+	    {"looks[0].albedo", (uint32_t)offsetof(K, albedo)},
+	    {"looks[0].phase", (uint32_t)offsetof(K, phase)},
+	    {"looks[0].octave", (uint32_t)offsetof(K, octave)},
+	    {"looks[15].octave", last_look + (uint32_t)offsetof(K, octave)},
+	};
+	const uint32_t first = (uint32_t)offsetof(M, layers);
+	const uint32_t last  = first + (uint32_t)sizeof(L) * (RBTREND_CLOUDS_MAX_LAYERS - 1);
+	const rbtrend_block_member march[] = {
+	    {"sizes", (uint32_t)offsetof(M, sizes)},
+	    {"target", (uint32_t)offsetof(M, target)},
+	    {"counts", (uint32_t)offsetof(M, counts)},
+	    {"jitter", (uint32_t)offsetof(M, jitter)},
+	    {"layers[0].axes", first},
+	    {"layers[0].origin_kind", first + (uint32_t)offsetof(L, origin_kind)},
+	    {"layers[0].bounds", first + (uint32_t)offsetof(L, bounds)},
+	    {"layers[0].up_look", first + (uint32_t)offsetof(L, up_look)},
+	    {"layers[0].map_axis_layer", first + (uint32_t)offsetof(L, map_axis_layer)},
+	    {"layers[0].base_offset", first + (uint32_t)offsetof(L, base_offset)},
+	    {"layers[0].detail_offset", first + (uint32_t)offsetof(L, detail_offset)},
+	    {"layers[0].light_direction", first + (uint32_t)offsetof(L, light_direction)},
+	    {"layers[0].light_illuminance", first + (uint32_t)offsetof(L, light_illuminance)},
+	    {"layers[0].atmosphere", first + (uint32_t)offsetof(L, atmosphere)},
+	    {"layers[0].atmosphere_radii", first + (uint32_t)offsetof(L, atmosphere_radii)},
+	    {"layers[3].atmosphere_radii", last + (uint32_t)offsetof(L, atmosphere_radii)},
+	};
+	const rbtrend_block_member history[] = {
+	    {"last_view_projection", (uint32_t)offsetof(H, last_view_projection)},
+	    {"shift", (uint32_t)offsetof(H, shift)},
+	    {"sizes", (uint32_t)offsetof(H, sizes)},
+	    {"frame", (uint32_t)offsetof(H, frame)},
+	};
+	return rbtrend_lit_check_block(looks_layout, 0, "RbtrendCloudsLooks", (uint32_t)sizeof(rbtrend_clouds_looks_block), looks,
+	                               sizeof(looks) / sizeof(looks[0])) &&
+	       rbtrend_lit_check_block(march_layout, 0, "RbtrendCloudsMarch", (uint32_t)sizeof(M), march, sizeof(march) / sizeof(march[0])) &&
+	       rbtrend_lit_check_block(history_layout, 0, "RbtrendCloudsHistory", (uint32_t)sizeof(H), history, sizeof(history) / sizeof(history[0]));
+}
+
+// The shaders the scene's layout is made from that are the clouds': made
+// here, if they aren't, for rbtrend_lit_scene_layout() and the clouds'
+// passes alike. False, reported, if one can't be.
+static bool rbtrend_lit_clouds_shaders(rbtrend_instance instance) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	struct {
+		const RBTREND_SHADER_PACKAGE *package;
+		rbtrend_shader *shader;
+		const char *name;
+	} const shaders[3] = {{&rbtrend_clouds_march_comp_package, &lit.clouds_march_comp, "clouds march"},
+	                      {&rbtrend_clouds_reconstruct_comp_package, &lit.clouds_reconstruct_comp, "clouds reconstruct"},
+	                      {&rbtrend_clouds_composite_frag_package, &lit.clouds_composite_frag, "clouds composite"}};
+	for (const auto &entry : shaders) {
+		if (*entry.shader)
+			continue;
+		(void)rbtrend_shader_create(instance, entry.package, entry.shader, nullptr);
+		if (!*entry.shader) {
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's %s shader can't be created", entry.name);
+			return false;
+		}
+	}
+	return true;
+}
+
+bool rbtrend_lit_clouds_prepare(rbtrend_instance instance) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	if (lit.clouds_march_pipeline && lit.clouds_reconstruct_pipeline && lit.clouds_composite_layout)
+		return true;
+	if (!rbtrend_lit_prepare_resources(instance))
+		return false;
+	if (!rbtrend_lit_clouds_shaders(instance))
+		return false;
+	rbtrend_binding_layout scene_layout = rbtrend_lit_scene_layout(instance);
+	if (!scene_layout)
+		return false;
+	struct {
+		rbtrend_shader shaders[2];
+		uint32_t count;
+		uint32_t set;
+		rbtrend_binding_layout *out;
+		const char *name;
+	} const layouts[5] = {
+	    {{lit.clouds_march_comp, lit.clouds_composite_frag}, 2, 1, &lit.clouds_input_layout, "clouds input"},
+	    {{lit.clouds_march_comp, nullptr}, 1, 2, &lit.clouds_layout, "clouds"},
+	    {{lit.clouds_march_comp, nullptr}, 1, 3, &lit.clouds_march_layout, "clouds march"},
+	    {{lit.clouds_reconstruct_comp, nullptr}, 1, 1, &lit.clouds_reconstruct_layout, "clouds reconstruct"},
+	    {{lit.clouds_composite_frag, nullptr}, 1, 2, &lit.clouds_composite_layout, "clouds composite"},
+	};
+	for (const auto &entry : layouts) {
+		if (*entry.out)
+			continue;
+		rbtrend_shader shaders[2] = {entry.shaders[0], entry.shaders[1]};
+		(void)rbtrend_binding_layout_create_from_shaders(instance, shaders, entry.count, entry.set, entry.out, nullptr);
+		if (!*entry.out) {
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the binding layout of Rend's %s can't be created", entry.name);
+			return false;
+		}
+	}
+	if (!rbtrend_clouds_check_blocks(lit.clouds_layout, lit.clouds_march_layout, lit.clouds_reconstruct_layout)) {
+		rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the blocks of Rend's clouds don't match their shaders");
+		return false;
+	}
+	const rbtrend_binding_layout march[4] = {scene_layout, lit.clouds_input_layout, lit.clouds_layout, lit.clouds_march_layout};
+	if (!rbtrend_lit_fog_compute(instance, lit.clouds_march_comp, "rbtrend_clouds_march_comp", march, 4, 0, "rbtrend clouds march",
+	                             &lit.clouds_march_pipeline))
+		return false;
+	const rbtrend_binding_layout reconstruct[2] = {scene_layout, lit.clouds_reconstruct_layout};
+	if (!rbtrend_lit_fog_compute(instance, lit.clouds_reconstruct_comp, "rbtrend_clouds_reconstruct_comp", reconstruct, 2, 0, "rbtrend clouds reconstruct",
+	                             &lit.clouds_reconstruct_pipeline))
+		return false;
+	return true;
+}
+
+rbtrend_graphics_pipeline rbtrend_lit_clouds_composite_pipeline(rbtrend_instance instance, CRGPU_FORMAT format) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.clouds_composite_pipelines)
+		if (entry.format == format)
+			return entry.pipeline;
+	if (!rbtrend_lit_clouds_prepare(instance))
+		return nullptr;
+	// The texel becomes texel x T + L: L the output's colour, T its alpha;
+	// the alpha kept.
+	crgpu_blend_attachment_desc blend{};
+	blend.blend_enable                      = true;
+	blend.src_color_blend_factor            = CRGPU_BLEND_FACTOR_ONE;
+	blend.dst_color_blend_factor            = CRGPU_BLEND_FACTOR_SRC_ALPHA;
+	blend.color_blend_op                    = CRGPU_BLEND_OP_ADD;
+	blend.src_alpha_blend_factor            = CRGPU_BLEND_FACTOR_ZERO;
+	blend.dst_alpha_blend_factor            = CRGPU_BLEND_FACTOR_ONE;
+	blend.alpha_blend_op                    = CRGPU_BLEND_OP_ADD;
+	const rbtrend_binding_layout layouts[3] = {lit.scene_layout, lit.clouds_input_layout, lit.clouds_composite_layout};
+	return rbtrend_lit_format_pipeline(instance, lit.clouds_composite_pipelines, lit.clouds_composite_frag, layouts, 3, format,
+	                                  sizeof(rbtrend_clouds_composite_params), "clouds composite", &blend);
+}
+
 rbtrend_compute_pipeline rbtrend_lit_histogram_pipeline(rbtrend_instance instance) {
 	rbtrend_lit_builtins &lit = instance->builtins.lit;
 	if (lit.histogram_pipeline)
@@ -873,6 +1163,18 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.shell_pipelines)
 		rbtrend_graphics_pipeline_destroy(entry.pipeline);
 	lit.shell_pipelines.clear();
+	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.fog_apply_pipelines)
+		rbtrend_graphics_pipeline_destroy(entry.pipeline);
+	lit.fog_apply_pipelines.clear();
+	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.clouds_composite_pipelines)
+		rbtrend_graphics_pipeline_destroy(entry.pipeline);
+	lit.clouds_composite_pipelines.clear();
+	rbtrend_compute_pipeline *fog_pipelines[] = {&lit.fog_cull_pipeline, &lit.fog_inject_pipeline, &lit.fog_integrate_pipeline,
+	                                             &lit.clouds_march_pipeline, &lit.clouds_reconstruct_pipeline};
+	for (rbtrend_compute_pipeline *pipeline : fog_pipelines) {
+		rbtrend_compute_pipeline_destroy(*pipeline);
+		*pipeline = nullptr;
+	}
 	rbtrend_compute_pipeline_destroy(lit.ssr_pipeline);
 	lit.ssr_pipeline = nullptr;
 	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.tone_map_pipelines)
@@ -898,7 +1200,9 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	rbtrend_binding_layout *layouts[] = {&lit.shell_input_layout, &lit.reflect_input_layout, &lit.ssr_input_layout, &lit.ssr_scene_layout,  &lit.tone_map_layout,
 	                                    &lit.pass_layout,          &lit.occlusion_layout, &lit.hosek_layout,       &lit.histogram_layout,
 	                                    &lit.cull_depth_layout,    &lit.cull_layout,      &lit.material_layout,    &lit.shadow_layout,
-	                                    &lit.scene_layout,         &lit.atmosphere_layout};
+	                                    &lit.scene_layout,         &lit.atmosphere_layout, &lit.fog_layout,         &lit.fog_integrate_layout,
+	                                    &lit.fog_apply_layout,     &lit.clouds_input_layout, &lit.clouds_layout,   &lit.clouds_march_layout,
+	                                    &lit.clouds_reconstruct_layout, &lit.clouds_composite_layout};
 	for (rbtrend_binding_layout *layout : layouts) {
 		rbtrend_binding_layout_destroy(*layout);
 		*layout = nullptr;
@@ -911,6 +1215,12 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	lit.reflect_frag = nullptr;
 	rbtrend_shader_destroy(lit.shell_frag);
 	lit.shell_frag = nullptr;
+	rbtrend_shader *fog_shaders[] = {&lit.fog_cull_comp,          &lit.fog_inject_comp,           &lit.fog_integrate_comp, &lit.fog_apply_frag,
+	                                 &lit.clouds_march_comp,      &lit.clouds_reconstruct_comp, &lit.clouds_composite_frag};
+	for (rbtrend_shader *shader : fog_shaders) {
+		rbtrend_shader_destroy(*shader);
+		*shader = nullptr;
+	}
 	rbtrend_shader_destroy(lit.cull_comp);
 	lit.cull_comp = nullptr;
 	rbtrend_shader_destroy(lit.cull_bounded_comp);
@@ -988,16 +1298,31 @@ static rbtrend_binding_layout rbtrend_lit_scene_layout(rbtrend_instance instance
 	if (lit.scene_layout)
 		return lit.scene_layout;
 	// Every shader that reads set 0, so each binding has every stage that
-	// reads it.
-	rbtrend_shader shaders[4] = {rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_SURFACE_FRAGMENT),
+	// reads it: the fog grid's inject pass among them (RBTREND_COMMAND_LIT_FOG
+	// binds the scene's own set from compute), which widens the stages and
+	// changes no binding.
+	rbtrend_lit_builtins &made = instance->builtins.lit;
+	if (!made.fog_inject_comp) {
+		(void)rbtrend_shader_create(instance, &rbtrend_fog_inject_comp_package, &made.fog_inject_comp, nullptr);
+		if (!made.fog_inject_comp) {
+			rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's fog inject shader can't be created");
+			return nullptr;
+		}
+	}
+	// The clouds' march and reconstruct passes bind it from compute too
+	// (RBTREND_COMMAND_LIT_CLOUDS).
+	if (!rbtrend_lit_clouds_shaders(instance))
+		return nullptr;
+	rbtrend_shader shaders[7] = {rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_SURFACE_FRAGMENT),
 	                            rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_SURFACE_VERTEX),
 	                            rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_SURFACE_VERTEX_COLOR),
-	                            rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_SKY_FRAGMENT)};
+	                            rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_SKY_FRAGMENT), made.fog_inject_comp, made.clouds_march_comp,
+	                            made.clouds_reconstruct_comp};
 	for (rbtrend_shader shader : shaders)
 		if (!shader)
 			return nullptr;
 	rbtrend_binding_layout layout = nullptr;
-	(void)rbtrend_binding_layout_create_from_shaders(instance, shaders, 4, RBTREND_LIT_SCENE_SET, &layout, nullptr);
+	(void)rbtrend_binding_layout_create_from_shaders(instance, shaders, 7, RBTREND_LIT_SCENE_SET, &layout, nullptr);
 	if (!layout) {
 		rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the binding layout of Rend's lit scene can't be created");
 		return nullptr;
@@ -1712,9 +2037,38 @@ static void rbtrend_lit_scene_resolve_shadows(rbtrend_lit_scene scene) {
 
 // The block as the scene holds it, into the materials that read it, for the
 // next submission that binds them.
+// The fog as set, into the block: its eye the scene's eye less its origin,
+// taken in double so a fog far from the scene's origin keeps the eye's
+// place to the float's precision of the difference.
+static void rbtrend_lit_scene_resolve_fog(rbtrend_lit_scene scene) {
+	rbtrend_lit_scene_block &b = scene->block;
+	b.flags &= ~(uint32_t)RBTREND_LIT_SCENE_FLAG_FOG;
+	if (!scene->has_fog)
+		return;
+	const RBTREND_LIT_FOG &f = scene->fog;
+	for (int i = 0; i < 3; ++i) {
+		b.fog_up_base[i] = f.fog.kind == RBTMATH_FOG_HEIGHT_KIND_PLANE ? f.fog.up[i] : 0.0f;
+		b.fog_eye[i]     = (float)((double)b.eye_position[i] - (double)f.origin[i]);
+		b.fog_albedo[i]  = f.albedo[i];
+	}
+	b.fog_up_base[3] = f.fog.base;
+	b.fog_eye[3]     = f.fog.density;
+	b.fog_albedo[3]  = f.phase_g;
+	b.fog_range[0]   = f.start_distance;
+	b.fog_range[1]   = f.end_distance;
+	b.fog_range[2]   = 1.0f - f.max_opacity;
+	b.fog_range[3]   = f.fog.scale_height;
+	b.fog_light[0]   = (float)f.sun_count;
+	b.fog_light[1]   = f.ambient_scale;
+	b.fog_light[2]   = 0.0f;
+	b.fog_light[3]   = 0.0f;
+	b.flags |= RBTREND_LIT_SCENE_FLAG_FOG;
+}
+
 void rbtrend_lit_scene_commit(rbtrend_lit_scene scene) {
 	rbtrend_lit_scene_resolve_shadows(scene);
 	rbtrend_lit_scene_resolve_atmosphere(scene);
+	rbtrend_lit_scene_resolve_fog(scene);
 	rbtrend_lit_write_block(scene->material, "u_lit_scene", &scene->block, sizeof(scene->block));
 	rbtrend_lit_write_block(scene->cull_material, "u_lit_scene", &scene->block, sizeof(scene->block));
 }
@@ -2448,6 +2802,71 @@ RBT_RESULT rbtrend_lit_scene_set_ambient(rbtrend_lit_scene scene, const RBTREND_
 	return RBT_RESULT_OK;
 }
 
+RBT_RESULT rbtrend_lit_scene_set_fog(rbtrend_lit_scene scene, const RBTREND_LIT_FOG *fog, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	if (!scene)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "scene is NULL");
+	if (RBT_STALE(scene, "rbtrend_lit_scene_set_fog", "scene"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "scene is destroyed");
+	RBTREND_ENTER(scene->instance, "rbtrend_lit_scene_set_fog");
+	if (!fog) {
+		scene->has_fog = false;
+		rbtrend_lit_scene_commit(scene);
+		return RBT_RESULT_OK;
+	}
+	if (const RBT_RESULT base = rbtrend_base_check(out_error, "fog", &fog->base, RBT_STRUCT_TYPE_REND_LIT_FOG))
+		return base;
+	const RBTREND_LIT_FOG &f = *fog;
+	// Rabbittus Math's own checks of the fog, field by field in its order:
+	// asked for no density, it checks the fog alone.
+	RBTMATH_ERROR checked{};
+	const RBT_RESULT valid = rbtmath_height_fog_compute_density(&f.fog, nullptr, 0, nullptr, &checked);
+	if (valid != RBT_RESULT_OK)
+		return rbtrend_fail(out_error, valid, "fog->fog: %s", checked.message);
+	if (!all_finite(f.origin, 3))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->origin is not finite");
+	if (!all_finite(f.albedo, 3))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->albedo is not finite");
+	for (int i = 0; i < 3; ++i) {
+		if (!(f.albedo[i] >= 0.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->albedo[%d], %g, is below 0", i, (double)f.albedo[i]);
+		if (!(f.albedo[i] <= 1.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->albedo[%d], %g, is above 1", i, (double)f.albedo[i]);
+	}
+	if (!finite(f.phase_g))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->phase_g is not finite");
+	if (!(f.phase_g >= -0.999f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->phase_g, %g, is below -0.999", (double)f.phase_g);
+	if (!(f.phase_g <= 0.999f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->phase_g, %g, is above 0.999", (double)f.phase_g);
+	if (f.sun_count > RBTREND_LIT_FOG_MAX_SUNS)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->sun_count, %u, is above RBTREND_LIT_FOG_MAX_SUNS (%u)", f.sun_count,
+		                   RBTREND_LIT_FOG_MAX_SUNS);
+	if (!finite(f.ambient_scale))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->ambient_scale is not finite");
+	if (!(f.ambient_scale >= 0.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->ambient_scale, %g, is below 0", (double)f.ambient_scale);
+	if (!finite(f.start_distance))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->start_distance is not finite");
+	if (!(f.start_distance >= 0.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->start_distance, %g, is below 0", (double)f.start_distance);
+	if (!finite(f.end_distance))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->end_distance is not finite");
+	if (!(f.end_distance > f.start_distance))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->end_distance, %g, is not above its start_distance, %g", (double)f.end_distance,
+		                   (double)f.start_distance);
+	if (!finite(f.max_opacity))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->max_opacity is not finite");
+	if (!(f.max_opacity >= 0.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->max_opacity, %g, is below 0", (double)f.max_opacity);
+	if (!(f.max_opacity <= 1.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "fog->max_opacity, %g, is above 1", (double)f.max_opacity);
+	scene->fog     = f;
+	scene->has_fog = true;
+	rbtrend_lit_scene_commit(scene);
+	return RBT_RESULT_OK;
+}
+
 RBT_RESULT rbtrend_lit_scene_set_ambient_occlusion(rbtrend_lit_scene scene, rbtrend_texture_view occlusion, float strength, RBTREND_ERROR *out_error) {
 	rbtrend_error_clear(out_error);
 	if (!scene)
@@ -3130,3 +3549,4 @@ RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTRE
 }
 
 } // extern "C"
+

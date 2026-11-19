@@ -4,6 +4,10 @@
 #include "rbtrendimages_internal.hpp"
 #include "rbtrendlit_internal.hpp"
 #include "rbtrendatmosphere_internal.hpp"
+#include "rbtrendfog_internal.hpp"
+#include "rbtrendclouds_internal.hpp"
+
+#include "math/rbtmathnoise.h"
 #include "rbtrendraytracing_internal.hpp"
 
 #include <cmath>
@@ -562,6 +566,12 @@ static void rbtrend_cmd_point_at_copies(rbtrend_command_list cmd_list) {
 		case RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS:
 			cmd._params._lit_atmosphere_shells._shells = (const RBTREND_LIT_ATMOSPHERE_SHELL *)copy;
 			break;
+		case RBTREND_COMMAND_LIT_FOG:
+			cmd._params._lit_fog._volumes = (const RBTREND_FOG_VOLUME_INSTANCE *)copy;
+			break;
+		case RBTREND_COMMAND_LIT_CLOUDS:
+			cmd._params._lit_clouds._layers = (const RBTREND_CLOUD_LAYER *)copy;
+			break;
 		default:
 			break;
 		}
@@ -813,6 +823,254 @@ static bool rbtrend_shell_send_checks(rbtrend_command_list cmd_list, const RBTRE
 		if (!rbtrend_shell_lights_ok(cmd_list, p._scene, i, shell))
 			return false;
 	}
+	return true;
+}
+
+/* Volume [index] of a LIT_FOG, checked at the send in its members' order:
+ * Rabbittus Math's checks of the volume (its noise's place among them),
+ * then the frame, the noise's place and the albedo. False, reported, at
+ * the first that fails. */
+static bool rbtrend_fog_volume_ok(rbtrend_command_list cmd_list, uint32_t index, const RBTREND_FOG_VOLUME_INSTANCE &v) {
+	const char *who = "LIT_FOG";
+	// Asked for no density, Math checks the volume, and with its noise a
+	// stand-in volume of one texel so the noise's place is checked too.
+	static const uint8_t one_texel[4] = {0, 0, 0, 0};
+	const bool noisy                  = v._volume.noise_strength > 0.0f;
+	RBTMATH_ERROR checked{};
+	const RBT_RESULT valid =
+	    rbtmath_fog_volume_compute_density(&v._volume, noisy ? one_texel : nullptr, noisy ? 1u : 0u, v._noise_offset, nullptr, 0, nullptr, &checked);
+	if (valid != RBT_RESULT_OK)
+		return rbtrend_cmd_report(cmd_list, valid, "%s: volume %u: %s", who, index, checked.message);
+	for (uint32_t k = 0; k < 12; ++k) {
+		if (!std::isfinite(v._to_volume[k]))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: volume %u's _to_volume[%u] is not finite", who, index, k);
+	}
+	for (uint32_t r = 0; r < 3; ++r) {
+		for (uint32_t c = r; c < 3; ++c) {
+			const float dot = v._to_volume[r * 4 + 0] * v._to_volume[c * 4 + 0] + v._to_volume[r * 4 + 1] * v._to_volume[c * 4 + 1] +
+			                  v._to_volume[r * 4 + 2] * v._to_volume[c * 4 + 2];
+			if (std::fabs(dot - (r == c ? 1.0f : 0.0f)) > 1e-3f)
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+				                          "%s: volume %u's _to_volume is not a rotation and a move (its 3 x 3 part's rows %u and %u: %g, not %g within 1e-3)", who,
+				                          index, r, c, (double)dot, r == c ? 1.0 : 0.0);
+		}
+	}
+	for (uint32_t k = 0; k < 3; ++k) {
+		if (!std::isfinite(v._noise_offset[k]))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: volume %u's _noise_offset[%u] is not finite", who, index, k);
+		if (std::fabs(v._noise_offset[k]) > RBTMATH_NOISE_VOLUME_MAX_COORDINATE)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: volume %u's _noise_offset[%u] is past RBTMATH_NOISE_VOLUME_MAX_COORDINATE", who,
+			                          index, k);
+	}
+	for (uint32_t k = 0; k < 3; ++k) {
+		if (!(v._albedo[k] >= 0.0f && v._albedo[k] <= 1.0f))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: volume %u's _albedo[%u] is outside 0 to 1, or not a number", who, index, k);
+	}
+	return true;
+}
+
+/* The checks LIT_FOG makes at the send (rbtrendcommands.h), in its members'
+ * order and then each volume's, each its own refusal. False, reported, at
+ * the first that fails. */
+static bool rbtrend_fog_send_checks(rbtrend_command_list cmd_list, const RBTREND_COMMAND &cmd) {
+	rbtrend_instance instance = cmd_list->instance;
+	const auto &p            = cmd._params._lit_fog;
+	const char *who          = "LIT_FOG";
+	const CRGPU_FORMAT any   = CRGPU_FORMAT_UNKNOWN;
+	if (!p._scene)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a NULL scene", who);
+	if (RBT_STALE(p._scene, "rbtrend_command_list_send", "_lit_fog._scene"))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a destroyed scene", who);
+	if (p._scene->instance != instance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a scene of another instance", who);
+	if (!p._fog)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a NULL fog", who);
+	if (RBT_STALE(p._fog, "rbtrend_command_list_send", "_lit_fog._fog"))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a destroyed fog", who);
+	if (p._fog->instance != instance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a fog of another instance", who);
+	if (p._volume_count > RBTREND_FOG_MAX_VOLUMES)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _volume_count of %u, above RBTREND_FOG_MAX_VOLUMES, %u", who, p._volume_count,
+		                          RBTREND_FOG_MAX_VOLUMES);
+	if (p._volume_count > 0 && !p._volumes)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _volume_count of %u and NULL _volumes", who, p._volume_count);
+	for (uint32_t i = 0; i < p._volume_count; ++i) {
+		if (!rbtrend_fog_volume_ok(cmd_list, i, p._volumes[i]))
+			return false;
+	}
+	if (!(std::isfinite(p._near_distance) && p._near_distance > 0.0f))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _near_distance that is not above 0, or not finite", who);
+	if (!(std::isfinite(p._far_distance) && p._far_distance > p._near_distance))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _far_distance that is not above _near_distance, or not finite", who);
+	if (!(std::isfinite(p._history_weight) && p._history_weight >= 0.0f && p._history_weight < 1.0f))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _history_weight outside 0 to below 1, or not a number", who);
+	for (uint32_t k = 0; k < 3; ++k) {
+		if (!std::isfinite(p._space_shift[k]))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _space_shift[%u] that is not finite", who, k);
+	}
+	if (p._history_reset > 1)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _history_reset of %u, not 0 or 1", who, p._history_reset);
+	if (!rbtrend_reflect_view_ok(cmd_list, who, "_depth", p._depth, RBTREND_TEXTURE_VIEW_TYPE_SHADER_RESOURCE, "SHADER_RESOURCE",
+	                            RBTREND_TEXTURE_VIEW_ASPECT_DEPTH, true, any, nullptr))
+		return false;
+	if (p._depth->texture._t2d->desc.sample_count != 1)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _depth of %u samples, not single-sampled", who,
+		                          p._depth->texture._t2d->desc.sample_count);
+	uint32_t width = 0, height = 0, w = 0, h = 0;
+	rbtrend_reflect_view_size(p._depth, &width, &height);
+	if ((float)width != p._scene->block.target_size[0] || (float)height != p._scene->block.target_size[1])
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _depth of %ux%u, and the scene's view's target %gx%g", who, width, height,
+		                          (double)p._scene->block.target_size[0], (double)p._scene->block.target_size[1]);
+	if (!rbtrend_reflect_view_ok(cmd_list, who, "_target", p._target, RBTREND_TEXTURE_VIEW_TYPE_RENDER_TARGET, "RENDER_TARGET",
+	                            RBTREND_TEXTURE_VIEW_ASPECT_COLOR, true, any, nullptr))
+		return false;
+	if (!rbtrend_reflect_target_format(p._target->texture._t2d->desc.format))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target not of R16G16B16A16_FLOAT, R32G32B32A32_FLOAT or R11G11B10_FLOAT", who);
+	rbtrend_reflect_view_size(p._target, &w, &h);
+	if (w != width || h != height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target of %ux%u, and the depth %ux%u", who, w, h, width, height);
+	return true;
+}
+
+/* Layer [index] of a LIT_CLOUDS, checked at the send in its members' order:
+ * its look's and map's slots, Rabbittus Math's checks of its bounds and
+ * offsets (asked for no density, over a stand-in shape and texels that
+ * pass), its origin and frame, its lights (the scene's, as a shell's) and
+ * its atmosphere. False, reported, at the first that fails. */
+static bool rbtrend_clouds_layer_ok(rbtrend_command_list cmd_list, rbtrend_lit_scene scene, rbtrend_clouds clouds, uint32_t index,
+                                    const RBTREND_CLOUD_LAYER &l) {
+	const char *who = "LIT_CLOUDS";
+	if (l._look >= clouds->desc.max_looks)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _look %u is not below max_looks, %u", who, index, l._look,
+		                          clouds->desc.max_looks);
+	if (l._coverage_map >= clouds->desc.coverage_maps)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _coverage_map %u is not below coverage_maps, %u", who, index,
+		                          l._coverage_map, clouds->desc.coverage_maps);
+	static const uint8_t one_texel[4] = {0, 0, 0, 0};
+	RBTMATH_CLOUD_SHAPE shape{};
+	shape.type_count     = 1;
+	shape.profiles[1]    = 0.5f;
+	shape.profiles[2]    = 0.5f;
+	shape.profiles[3]    = 1.0f;
+	shape.base_tile      = 1.0f;
+	shape.detail_tile    = 1.0f;
+	shape.billow_height  = 1.0f;
+	shape.density_scale  = 1.0f;
+	shape.coverage_scale = 1.0f;
+	const RBTMATH_CLOUD_TEXELS texels{one_texel, 1, one_texel, 1, one_texel, 1};
+	RBTMATH_ERROR checked{};
+	const RBT_RESULT valid = rbtmath_cloud_compute_density(&shape, &l._bounds, &texels, &l._offsets, nullptr, 0, nullptr, &checked);
+	if (valid != RBT_RESULT_OK)
+		return rbtrend_cmd_report(cmd_list, valid, "%s: layer %u: %s", who, index, checked.message);
+	for (uint32_t k = 0; k < 3; ++k) {
+		if (!std::isfinite(l._origin[k]))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _origin[%u] is not finite", who, index, k);
+	}
+	for (uint32_t k = 0; k < 9; ++k) {
+		if (!std::isfinite(l._axes[k]))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _axes[%u] is not finite", who, index, k);
+	}
+	for (uint32_t r = 0; r < 3; ++r) {
+		for (uint32_t c = r; c < 3; ++c) {
+			const float dot = l._axes[r * 3 + 0] * l._axes[c * 3 + 0] + l._axes[r * 3 + 1] * l._axes[c * 3 + 1] + l._axes[r * 3 + 2] * l._axes[c * 3 + 2];
+			if (std::fabs(dot - (r == c ? 1.0f : 0.0f)) > 1e-4f)
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+				                          "%s: layer %u's _axes are not orthonormal (rows %u and %u: %g, not %g within 1e-4)", who, index, r, c, (double)dot,
+				                          r == c ? 1.0 : 0.0);
+		}
+	}
+	if (l._light_count > RBTREND_CLOUDS_MAX_LAYER_LIGHTS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _light_count %u is above RBTREND_CLOUDS_MAX_LAYER_LIGHTS, %u", who,
+		                          index, l._light_count, RBTREND_CLOUDS_MAX_LAYER_LIGHTS);
+	for (uint32_t j = 0; j < l._light_count; ++j) {
+		const uint32_t light = l._lights[j];
+		if (light >= scene->light_count)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _lights[%u] is %u, past the scene's %u lights", who, index, j,
+			                          light, scene->light_count);
+		if (scene->lights[light].type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: layer %u's _lights[%u] names light %u, a %s light: clouds are lit by directional lights only", who, index, j, light,
+			                          scene->lights[light].type == RBTREND_LIT_LIGHT_TYPE_POINT ? "point" : "spot");
+	}
+	if (l._atmosphere) {
+		if (RBT_STALE(l._atmosphere, "rbtrend_command_list_send", "_lit_clouds._layers[]._atmosphere"))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _atmosphere is destroyed", who, index);
+		if (l._atmosphere->instance != cmd_list->instance)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _atmosphere is of another instance", who, index);
+		for (uint32_t k = 0; k < 3; ++k) {
+			if (!std::isfinite(l._atmosphere_center[k]))
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _atmosphere_center[%u] is not finite", who, index, k);
+		}
+	}
+	return true;
+}
+
+/* The checks LIT_CLOUDS makes at the send (rbtrendcommands.h), in its
+ * members' order and then each layer's, each its own refusal. False,
+ * reported, at the first that fails. */
+static bool rbtrend_clouds_send_checks(rbtrend_command_list cmd_list, const RBTREND_COMMAND &cmd) {
+	rbtrend_instance instance = cmd_list->instance;
+	const auto &p            = cmd._params._lit_clouds;
+	const char *who          = "LIT_CLOUDS";
+	const CRGPU_FORMAT any   = CRGPU_FORMAT_UNKNOWN;
+	if (!p._scene)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a NULL scene", who);
+	if (RBT_STALE(p._scene, "rbtrend_command_list_send", "_lit_clouds._scene"))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a destroyed scene", who);
+	if (p._scene->instance != instance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a scene of another instance", who);
+	if (!p._clouds)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with NULL clouds", who);
+	if (RBT_STALE(p._clouds, "rbtrend_command_list_send", "_lit_clouds._clouds"))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with destroyed clouds", who);
+	if (p._clouds->instance != instance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with clouds of another instance", who);
+	if (p._layer_count > RBTREND_CLOUDS_MAX_LAYERS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _layer_count of %u, above RBTREND_CLOUDS_MAX_LAYERS, %u", who, p._layer_count,
+		                          RBTREND_CLOUDS_MAX_LAYERS);
+	if (p._layer_count > 0 && !p._layers)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _layer_count of %u and NULL _layers", who, p._layer_count);
+	for (uint32_t i = 0; i < p._layer_count; ++i) {
+		if (!rbtrend_clouds_layer_ok(cmd_list, p._scene, p._clouds, i, p._layers[i]))
+			return false;
+	}
+	if (p._max_steps == 0)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _max_steps of 0", who);
+	if (p._max_steps > RBTREND_CLOUDS_MAX_STEPS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _max_steps of %u, above RBTREND_CLOUDS_MAX_STEPS, %u", who, p._max_steps,
+		                          RBTREND_CLOUDS_MAX_STEPS);
+	if (p._light_steps > RBTREND_CLOUDS_MAX_LIGHT_STEPS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _light_steps of %u, above RBTREND_CLOUDS_MAX_LIGHT_STEPS, %u", who,
+		                          p._light_steps, RBTREND_CLOUDS_MAX_LIGHT_STEPS);
+	if (!std::isfinite(p._max_distance))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _max_distance that is not finite", who);
+	if (!(p._max_distance > 0.0f))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _max_distance of %g, not above 0", who, (double)p._max_distance);
+	for (uint32_t k = 0; k < 3; ++k) {
+		if (!std::isfinite(p._space_shift[k]))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _space_shift[%u] that is not finite", who, k);
+	}
+	if (p._history_reset > 1)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _history_reset of %u, not 0 or 1", who, p._history_reset);
+	if (!rbtrend_reflect_view_ok(cmd_list, who, "_depth", p._depth, RBTREND_TEXTURE_VIEW_TYPE_SHADER_RESOURCE, "SHADER_RESOURCE",
+	                            RBTREND_TEXTURE_VIEW_ASPECT_DEPTH, true, any, nullptr))
+		return false;
+	if (p._depth->texture._t2d->desc.sample_count != 1)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _depth of %u samples, not single-sampled", who,
+		                          p._depth->texture._t2d->desc.sample_count);
+	uint32_t width = 0, height = 0, w = 0, h = 0;
+	rbtrend_reflect_view_size(p._depth, &width, &height);
+	if ((float)width != p._scene->block.target_size[0] || (float)height != p._scene->block.target_size[1])
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _depth of %ux%u, and the scene's view's target %gx%g", who, width, height,
+		                          (double)p._scene->block.target_size[0], (double)p._scene->block.target_size[1]);
+	if (!rbtrend_reflect_view_ok(cmd_list, who, "_target", p._target, RBTREND_TEXTURE_VIEW_TYPE_RENDER_TARGET, "RENDER_TARGET",
+	                            RBTREND_TEXTURE_VIEW_ASPECT_COLOR, true, any, nullptr))
+		return false;
+	if (!rbtrend_reflect_target_format(p._target->texture._t2d->desc.format))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target not of R16G16B16A16_FLOAT, R32G32B32A32_FLOAT or R11G11B10_FLOAT", who);
+	rbtrend_reflect_view_size(p._target, &w, &h);
+	if (w != width || h != height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a _target of %ux%u, and the depth %ux%u", who, w, h, width, height);
 	return true;
 }
 
@@ -1811,6 +2069,30 @@ static void rbtrend_send_command_recorded(
 			p._shells = (const RBTREND_LIT_ATMOSPHERE_SHELL *)keep(p._shells, sizeof(RBTREND_LIT_ATMOSPHERE_SHELL) * p._shell_count);
 		else
 			p._shells = nullptr;
+	}
+	if (cmd._type == RBTREND_COMMAND_LIT_FOG) {
+		if (!rbtrend_fog_send_checks(cmd_list, cmd)) {
+			cmd_list->recording_error = true;
+			return;
+		}
+		// The volumes into the list's own storage, as the shells are.
+		auto &p = cmd._params._lit_fog;
+		if (p._volume_count > 0)
+			p._volumes = (const RBTREND_FOG_VOLUME_INSTANCE *)keep(p._volumes, sizeof(RBTREND_FOG_VOLUME_INSTANCE) * p._volume_count);
+		else
+			p._volumes = nullptr;
+	}
+	if (cmd._type == RBTREND_COMMAND_LIT_CLOUDS) {
+		if (!rbtrend_clouds_send_checks(cmd_list, cmd)) {
+			cmd_list->recording_error = true;
+			return;
+		}
+		// The layers into the list's own storage, as the shells are.
+		auto &p = cmd._params._lit_clouds;
+		if (p._layer_count > 0)
+			p._layers = (const RBTREND_CLOUD_LAYER *)keep(p._layers, sizeof(RBTREND_CLOUD_LAYER) * p._layer_count);
+		else
+			p._layers = nullptr;
 	}
 	if (cmd._type == RBTREND_COMMAND_LIT_AMBIENT_OCCLUSION) {
 		const auto &p = cmd._params._lit_ambient_occlusion;
@@ -4500,10 +4782,11 @@ static RBTREND_BINDING_SET_ENTRY rbtrend_reflect_sampler_entry(uint32_t binding,
 }
 
 /* One dispatch of Rend's own [pipeline] over [count] [sets], untraced:
- * each set's resources made ready as any dispatch's are. False, reported,
- * if a set can't be read. Throws std::bad_alloc. */
+ * each set's resources made ready as any dispatch's are; [push_size] bytes
+ * of push constants (none at 0); [groups_z] deep (1 for a 2D one). False,
+ * reported, if a set can't be read. Throws std::bad_alloc. */
 static bool rbtrend_cmd_own_dispatch(rbtrend_command_list cmd_list, rbtrend_compute_pipeline pipeline, const rbtrend_binding_set *sets, uint32_t count,
-                                    const void *push, uint32_t push_size, uint32_t groups_x, uint32_t groups_y) {
+                                    const void *push, uint32_t push_size, uint32_t groups_x, uint32_t groups_y, uint32_t groups_z = 1) {
 	eq::array<rbtrend_pass_image> &images = cmd_list->pass_images;
 	eq::array<rbtrend_pass_store> &stores = cmd_list->pass_stores;
 	images.clear();
@@ -4521,8 +4804,9 @@ static bool rbtrend_cmd_own_dispatch(rbtrend_command_list cmd_list, rbtrend_comp
 	crgpu_command_list_bind_compute_pipeline(cmd, pipeline->pipeline);
 	for (uint32_t slot = 0; slot < count; ++slot)
 		crgpu_command_list_bind_compute_descriptor_sets(cmd, pipeline->pipeline, slot, &sets[slot]->sets[rbtrend_binding_set_frame_slot(sets[slot], cmd_list->compiled_frame)], 1);
-	crgpu_command_list_push_compute_constants(cmd, pipeline->pipeline, 0, push_size, push);
-	crgpu_command_list_dispatch(cmd, groups_x, groups_y, 1);
+	if (push_size > 0)
+		crgpu_command_list_push_compute_constants(cmd, pipeline->pipeline, 0, push_size, push);
+	crgpu_command_list_dispatch(cmd, groups_x, groups_y, groups_z);
 	return true;
 }
 
@@ -5023,6 +5307,564 @@ static bool rbtrend_cmd_lit_atmosphere_shells(rbtrend_command_list cmd_list, con
 	return true;
 }
 
+/* ---- The fog's grid (LIT_FOG, rbtrendfog.h) --------------------------- */
+
+/* What rbtrend_fog_record_held reads: the compile in progress and its fog. */
+struct rbtrend_fog_hold {
+	rbtrend_command_list compiling;
+	rbtrend_fog fog;
+};
+
+/* Whether record [record] of the fog [user] names is held: either of its
+ * materials bound by the compile in progress or by a list compiled and not
+ * yet submitted. Under release_mutex. */
+static bool rbtrend_fog_record_held(const void *user, uint32_t record) {
+	const rbtrend_fog_hold *hold = (const rbtrend_fog_hold *)user;
+	const rbtrend_fog_view &view = hold->fog->views[record];
+	for (rbtrend_material material : view.materials) {
+		for (rbtrend_material listed : hold->compiling->materials)
+			if (listed == material)
+				return true;
+		for (rbtrend_command_list listed : hold->compiling->instance->compiled_lists)
+			if (listed != hold->compiling && rbtrend_cmd_list_uses(listed, material))
+				return true;
+	}
+	return false;
+}
+
+/* LIT_FOG, outside a pass: the views and the scene's view checked again as
+ * LIT_ATMOSPHERE_SHELLS's are, the scene's fog and its start; the scene's
+ * record taken (rbtrendhistory.hpp: its own unless held, which is the
+ * scene drawn twice; else one no list holds, its history starting again);
+ * its block written for the way its history runs this frame (last frame's
+ * view and range, the shift, the jitter, the volumes resolved); then the
+ * cull, the inject and the integrate dispatches, and the apply over the
+ * target in a pass of its own. False, reported, at the first refusal or
+ * if a pipeline or set can't be made. */
+static bool rbtrend_cmd_lit_fog(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	const auto &p            = command._params._lit_fog;
+	const char *who          = "LIT_FOG";
+	rbtrend_instance instance = cmd_list->instance;
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	rbtrend_lit_scene scene   = p._scene;
+	rbtrend_fog fog           = p._fog;
+	if (!rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._depth)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the depth has nothing in it, from before the list or earlier in it", who);
+	if (!rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._target)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the target has nothing in it, from before the list or earlier in it", who);
+	uint32_t width = 0, height = 0, w = 0, h = 0;
+	rbtrend_reflect_view_size(p._depth, &width, &height);
+	if ((float)width != scene->block.target_size[0] || (float)height != scene->block.target_size[1])
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the depth is %ux%u, and the scene's view's target %gx%g", who, width, height,
+		                          (double)scene->block.target_size[0], (double)scene->block.target_size[1]);
+	rbtrend_reflect_view_size(p._target, &w, &h);
+	if (w != width || h != height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the target is %ux%u, no longer the depth's %ux%u", who, w, h, width, height);
+	bool inverse = false;
+	for (float v : scene->block.inverse_view_projection)
+		inverse = inverse || v != 0.0f;
+	if (!inverse)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene's view_projection can't be inverted", who);
+	if (scene->block.output_encoding != RBTREND_COLOR_ENCODING_LINEAR)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene writes its color encoded, and the picture the fog is drawn over is linear",
+		                          who);
+	if (!scene->has_fog)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene has no fog (rbtrend_lit_scene_set_fog()), which the grid draws near the eye",
+		                          who);
+	if (scene->fog.start_distance != p._far_distance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+		                          "%s: the scene fog's start_distance %g isn't _far_distance %g: the lit shaders and the grid would both fog what lies between",
+		                          who, (double)scene->fog.start_distance, (double)p._far_distance);
+
+	// The scene's record.
+	const uint32_t count = fog->desc.max_views;
+	rbtrend_fog_hold hold{cmd_list, fog};
+	uint32_t index = UINT32_MAX;
+	bool reset     = false;
+	{
+		std::lock_guard<std::mutex> lock(instance->release_mutex);
+		for (uint32_t r = 0; r < count; ++r) {
+			if (fog->records[r].scene == scene && rbtrend_fog_record_held(&hold, r))
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+				                          "%s: the scene is drawn twice in a frame: its record of the fog is held by this compile or a list compiled and not yet "
+				                          "submitted",
+				                          who);
+		}
+		index = rbtrend_history_take(fog->records, count, scene, ++fog->clock, rbtrend_fog_record_held, &hold, &reset);
+	}
+	if (index == UINT32_MAX)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_LIMIT,
+		                          "%s: no record of the fog is free: its %u (max_views, RBTREND_FOG_DESC) are all held by this compile and lists compiled and not "
+		                          "yet submitted",
+		                          who, count);
+	rbtrend_fog_view &view = fog->views[index];
+	if (reset || p._history_reset)
+		view.frames = 0;
+	const uint32_t way  = view.frames == 0 ? 0u : 1u - view.last_written;
+	const bool history  = view.frames > 0;
+	const float slices  = (float)fog->desc.grid_slices;
+	const float log_far = std::log(p._far_distance / p._near_distance);
+
+	rbtrend_compute_pipeline cull      = lit.fog_cull_pipeline;
+	rbtrend_compute_pipeline inject    = lit.fog_inject_pipeline;
+	rbtrend_compute_pipeline integrate = lit.fog_integrate_pipeline;
+	rbtrend_graphics_pipeline apply    = rbtrend_lit_fog_apply_pipeline(instance, p._target->texture._t2d->desc.format);
+	if (!apply || !cull || !inject || !integrate)
+		return false;
+
+	// The block: last frame's view where the history holds one.
+	rbtrend_fog_block b;
+	memset(&b, 0, sizeof(b));
+	// While the history holds fewer frames than its weight averages, each
+	// frame takes an even share (n frames held: the history n / (n + 1)), so
+	// the first frames after a reset average their jitters at once.
+	if (history) {
+		memcpy(b.last_view_projection, fog->records[index].view_projection, sizeof(b.last_view_projection));
+		memcpy(b.last_eye, view.last_eye, sizeof(float) * 3);
+		const float even = (float)view.frames / (float)(view.frames + 1);
+		b.last_eye[3]    = p._history_weight < even ? p._history_weight : even;
+		memcpy(b.last_range, view.last_range, sizeof(b.last_range));
+	}
+	memcpy(b.shift, p._space_shift, sizeof(float) * 3);
+	// The jitter steps through its sequence where a history averages it;
+	// with no history weight, every frame samples the slice's middle.
+	b.shift[3] = p._history_weight > 0.0f ? rbtrend_history_jitter(view.frames) : 0.5f;
+	b.range[0] = p._near_distance;
+	b.range[1] = p._far_distance;
+	b.range[2] = log_far;
+	b.range[3] = slices;
+	b.grid[0]  = fog->desc.grid_width;
+	b.grid[1]  = fog->desc.grid_height;
+	b.grid[2]  = fog->desc.grid_slices;
+	b.grid[3]  = p._volume_count;
+	for (uint32_t i = 0; i < p._volume_count; ++i) {
+		const RBTREND_FOG_VOLUME_INSTANCE &v = p._volumes[i];
+		rbtrend_fog_volume_block &o          = b.volumes[i];
+		memcpy(o.to_volume, v._to_volume, sizeof(o.to_volume));
+		const bool sphere = v._volume.shape == RBTMATH_FOG_VOLUME_SHAPE_SPHERE;
+		for (int k = 0; k < 3; ++k) {
+			o.half_shape[k]   = v._volume.half_extents[k];
+			o.noise_offset[k] = v._noise_offset[k];
+			o.albedo[k]       = v._albedo[k];
+		}
+		o.half_shape[3] = sphere ? 2.0f : 1.0f;
+		o.params[0]     = v._volume.edge;
+		o.params[1]     = v._volume.density;
+		o.params[2]     = v._volume.noise_strength;
+		o.params[3]     = v._volume.noise_tile > 0.0f ? v._volume.noise_tile : 1.0f;
+		// Its bounds: the frame's origin in the scene's space (the move
+		// turned back), and the shape's farthest reach.
+		for (int c = 0; c < 3; ++c)
+			o.sphere[c] = -(v._to_volume[0 * 4 + c] * v._to_volume[3] + v._to_volume[1 * 4 + c] * v._to_volume[7] + v._to_volume[2 * 4 + c] * v._to_volume[11]);
+		const float *e = v._volume.half_extents;
+		o.sphere[3]    = sphere ? e[0] : std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+	}
+	rbtrend_fog_write_block(fog, index, way, b);
+	rbtrend_material material = view.materials[way];
+	if (!rbtrend_cmd_use_material(cmd_list, scene->material) || !rbtrend_cmd_use_material(cmd_list, material))
+		return false;
+
+	// The apply's set 1: the depth and the integrated grid, from the
+	// scene's view-set records.
+	const rbtrend_texture_view views[2]          = {p._depth, view.sampled[2]};
+	const RBTREND_BINDING_SET_ENTRY entries[3] = {rbtrend_reflect_entry(0, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, p._depth),
+	                                             rbtrend_reflect_entry(1, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, view.sampled[2]),
+	                                             rbtrend_reflect_sampler_entry(2, lit.environment_sampler)};
+	rbtrend_binding_set apply_set = rbtrend_view_set_get(cmd_list, scene, lit.fog_apply_layout, views, 2, entries, 3, who);
+	if (!apply_set)
+		return false;
+
+	const uint32_t gw = fog->desc.grid_width, gh = fog->desc.grid_height, gs = fog->desc.grid_slices;
+	const rbtrend_binding_set sets[2] = {scene->material->set, material->set};
+	if (!rbtrend_cmd_own_dispatch(cmd_list, cull, sets, 2, nullptr, 0, (gw + 7) / 8, (gh + 7) / 8))
+		return false;
+	if (!rbtrend_cmd_own_dispatch(cmd_list, inject, sets, 2, nullptr, 0, (gw + 3) / 4, (gh + 3) / 4, (gs + 3) / 4))
+		return false;
+	rbtrend_fog_integrate_params ip{};
+	ip.grid[0]  = gw;
+	ip.grid[1]  = gh;
+	ip.grid[2]  = gs;
+	ip.range[0] = p._near_distance;
+	ip.range[1] = p._far_distance;
+	ip.range[2] = log_far;
+	ip.range[3] = slices;
+	if (!rbtrend_cmd_own_dispatch(cmd_list, integrate, &view.integrate_sets[way], 1, &ip, sizeof(ip), (gw + 7) / 8, (gh + 7) / 8))
+		return false;
+
+	// The apply: the sets made ready to be read first, as a pass's are.
+	const rbtrend_binding_set apply_sets[2] = {scene->material->set, apply_set};
+	{
+		eq::array<rbtrend_pass_image> &images = cmd_list->pass_images;
+		eq::array<rbtrend_pass_store> &stores = cmd_list->pass_stores;
+		images.clear();
+		stores.clear();
+		for (uint32_t slot = 0; slot < 2; ++slot) {
+			if (!rbtrend_pass_images_add_set(cmd_list, images, apply_sets[slot], slot, apply->storage_writes))
+				return false;
+			rbtrend_storage_stores_add_set(stores, apply_sets[slot], cmd_list->compiled_frame, slot, apply->storage_writes);
+			rbtrend_cmd_use_handle(cmd_list, apply_sets[slot]);
+		}
+		for (const rbtrend_pass_store &store : stores)
+			rbtrend_cmd_use_store(cmd_list, store.store);
+		rbtrend_cmd_ready_set_resources(cmd_list, images, stores);
+	}
+	rbtrend_cmd_transition_view(cmd_list, p._target, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+	crgpu_command_list cmd = cmd_list->cmd_list;
+	const uint32_t frame   = cmd_list->compiled_frame;
+	crgpu_rendering_begin_desc pass{};
+	pass.base.type                       = CR_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
+	pass.color_attachments[0].image_view = p._target->image_view;
+	pass.color_attachments[0].load_op    = CRGPU_LOAD_OP_LOAD;
+	pass.color_attachments[0].store_op   = CRGPU_STORE_OP_STORE;
+	pass.color_attachment_count          = 1;
+	pass.width                           = width;
+	pass.height                          = height;
+	crgpu_command_list_begin_rendering(cmd, &pass);
+	CRGPU_VIEWPORT viewport{};
+	viewport.width    = (float)width;
+	viewport.height   = (float)height;
+	viewport.maxDepth = 1.0f;
+	crgpu_command_list_set_viewports(cmd, 0, 1, &viewport);
+	CRGPU_SCISSOR_RECT scissor{};
+	scissor.width  = (float)width;
+	scissor.height = (float)height;
+	crgpu_command_list_set_scissor_rects(cmd, 0, 1, &scissor);
+	crgpu_command_list_bind_graphics_pipeline(cmd, apply->pipeline);
+	for (uint32_t slot = 0; slot < 2; ++slot)
+		crgpu_command_list_bind_graphics_descriptor_sets(cmd, apply->pipeline, slot, &apply_sets[slot]->sets[rbtrend_binding_set_frame_slot(apply_sets[slot], frame)],
+		                                          1);
+	rbtrend_fog_apply_params ap{};
+	ap.range[0] = p._near_distance;
+	ap.range[1] = p._far_distance;
+	ap.range[2] = log_far;
+	ap.range[3] = slices;
+	ap.flags[0] = rbtrend_lit_scene_depth_reversed(scene) ? 1u : 0u;
+	crgpu_command_list_push_graphics_constants(cmd, apply->pipeline, 0, sizeof(ap), &ap);
+	crgpu_command_list_draw(cmd, 3, 0);
+	crgpu_command_list_end_rendering(cmd);
+
+	// What the next frame's history is read with.
+	memcpy(fog->records[index].view_projection, scene->block.view_projection, sizeof(fog->records[index].view_projection));
+	memcpy(view.last_eye, scene->block.eye_position, sizeof(view.last_eye));
+	view.last_range[0] = p._near_distance;
+	view.last_range[1] = p._far_distance;
+	view.last_range[2] = log_far;
+	view.last_range[3] = slices;
+	view.last_written  = way;
+	++view.frames;
+	rbtrend_history_mark_written(&fog->records[index]);
+	return true;
+}
+
+/* ---- The clouds (LIT_CLOUDS, rbtrendclouds.h) ------------------------- */
+
+/* What rbtrend_clouds_record_held reads: the compile in progress and its
+ * clouds. */
+struct rbtrend_clouds_hold {
+	rbtrend_command_list compiling;
+	rbtrend_clouds clouds;
+};
+
+/* Whether record [record] of the clouds [user] names is held: its march or
+ * either reconstruct material bound by the compile in progress or by a list
+ * compiled and not yet submitted. Under release_mutex. */
+static bool rbtrend_clouds_record_held(const void *user, uint32_t record) {
+	const rbtrend_clouds_hold *hold = (const rbtrend_clouds_hold *)user;
+	const rbtrend_clouds_view &view = hold->clouds->views[record];
+	const rbtrend_material materials[3] = {view.march, view.reconstruct[0], view.reconstruct[1]};
+	for (rbtrend_material material : materials) {
+		for (rbtrend_material listed : hold->compiling->materials)
+			if (listed == material)
+				return true;
+		for (rbtrend_command_list listed : hold->compiling->instance->compiled_lists)
+			if (listed != hold->compiling && rbtrend_cmd_list_uses(listed, material))
+				return true;
+	}
+	return false;
+}
+
+/* Layer [l] resolved for the march's block: its frame and bounds, its look
+ * and map, its offsets, its lights' directions and illuminances from the
+ * scene, and its atmosphere where one is drawable (the [table] it is read
+ * from set by the caller). */
+static void rbtrend_clouds_resolve_layer(rbtrend_lit_scene scene, const RBTREND_CLOUD_LAYER &l, rbtrend_clouds_layer_block &o) {
+	memset(&o, 0, sizeof(o));
+	for (int r = 0; r < 3; ++r)
+		for (int c = 0; c < 3; ++c)
+			o.axes[r][c] = l._axes[r * 3 + c];
+	const bool shell = l._bounds.kind == RBTMATH_CLOUD_BOUNDS_KIND_SHELL;
+	for (int k = 0; k < 3; ++k) {
+		o.origin_kind[k]    = l._origin[k];
+		o.up_look[k]        = l._bounds.up[k];
+		o.map_axis_layer[k] = l._bounds.map_axis[k];
+		o.base_offset[k]    = l._offsets.base[k];
+		o.detail_offset[k]  = l._offsets.detail[k];
+	}
+	o.origin_kind[3]    = shell ? 1.0f : 2.0f;
+	o.bounds[0]         = l._bounds.bottom;
+	o.bounds[1]         = l._bounds.top;
+	o.bounds[2]         = l._bounds.map_extent;
+	o.bounds[3]         = shell ? (float)l._bounds.cube_warp : (float)l._bounds.map_address;
+	o.up_look[3]        = (float)l._look;
+	o.map_axis_layer[3] = (float)(l._coverage_map * 6u);
+	o.base_offset[3]    = l._offsets.coverage[0];
+	o.detail_offset[3]  = l._offsets.coverage[1];
+	for (uint32_t j = 0; j < l._light_count; ++j) {
+		const uint32_t slot = rbtrend_lit_scene_directional_slot(scene, l._lights[j]);
+		if (slot == UINT32_MAX)
+			continue;
+		for (int k = 0; k < 3; ++k) {
+			o.light_direction[j][k]   = scene->block.directional[slot].direction_versine[k];
+			o.light_illuminance[j][k] = 3.14159265358979f * scene->block.directional[slot].radiance_disc[k];
+		}
+		o.light_direction[j][3] = 1.0f;
+	}
+	rbtrend_atmosphere a = l._atmosphere;
+	if (a && rbtrend_atmosphere_drawable(*a)) {
+		for (int k = 0; k < 3; ++k)
+			o.atmosphere[k] = l._atmosphere_center[k];
+		o.atmosphere[3]       = 1.0f;
+		o.atmosphere_radii[0] = a->medium.bottom_radius;
+		o.atmosphere_radii[1] = a->medium.top_radius;
+		o.atmosphere_radii[2] = (float)a->desc.transmittance_width;
+		o.atmosphere_radii[3] = (float)a->desc.transmittance_height;
+	}
+}
+
+/* LIT_CLOUDS, outside a pass: the views and the scene's view checked again
+ * as LIT_FOG's are, the target against the clouds' largest, each layer's
+ * look set and lights directional; with layers, the scene's record taken
+ * (rbtrendhistory.hpp: its own unless held, which is the scene drawn twice;
+ * else one no list holds, its history starting again); the march's and the
+ * history's blocks written for this frame (the frame's texel of each 2 x 2
+ * block and its jitters, the layers resolved, last frame's view and the
+ * shift); then the march and the reconstruct dispatches, and the composite
+ * over the target in a pass of its own. False, reported, at the first
+ * refusal or if a pipeline or set can't be made. */
+static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	const auto &p            = command._params._lit_clouds;
+	const char *who          = "LIT_CLOUDS";
+	rbtrend_instance instance = cmd_list->instance;
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	rbtrend_lit_scene scene   = p._scene;
+	rbtrend_clouds clouds     = p._clouds;
+	if (!rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._depth)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the depth has nothing in it, from before the list or earlier in it", who);
+	if (!rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._target)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the target has nothing in it, from before the list or earlier in it", who);
+	uint32_t width = 0, height = 0, w = 0, h = 0;
+	rbtrend_reflect_view_size(p._depth, &width, &height);
+	if ((float)width != scene->block.target_size[0] || (float)height != scene->block.target_size[1])
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the depth is %ux%u, and the scene's view's target %gx%g", who, width, height,
+		                          (double)scene->block.target_size[0], (double)scene->block.target_size[1]);
+	rbtrend_reflect_view_size(p._target, &w, &h);
+	if (w != width || h != height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the target is %ux%u, no longer the depth's %ux%u", who, w, h, width, height);
+	if (width > clouds->desc.max_target_width)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_LIMIT, "%s: the target is %u wide, above the clouds' max_target_width, %u", who, width,
+		                          clouds->desc.max_target_width);
+	if (height > clouds->desc.max_target_height)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_LIMIT, "%s: the target is %u high, above the clouds' max_target_height, %u", who, height,
+		                          clouds->desc.max_target_height);
+	bool inverse = false;
+	for (float v : scene->block.inverse_view_projection)
+		inverse = inverse || v != 0.0f;
+	if (!inverse)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene's view_projection can't be inverted", who);
+	if (scene->block.output_encoding != RBTREND_COLOR_ENCODING_LINEAR)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene writes its color encoded, and the picture the clouds are drawn over is linear",
+		                          who);
+	for (uint32_t i = 0; i < p._layer_count; ++i) {
+		const RBTREND_CLOUD_LAYER &l = p._layers[i];
+		if (!(clouds->looks_set & (1u << l._look)))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's look %u was never set (rbtrend_clouds_set_look())", who, i, l._look);
+		// The lights may have changed since the send.
+		for (uint32_t j = 0; j < l._light_count; ++j) {
+			if (l._lights[j] >= scene->light_count)
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _lights[%u] is %u, past the scene's %u lights", who, i, j,
+				                          l._lights[j], scene->light_count);
+			if (scene->lights[l._lights[j]].type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+				                          "%s: layer %u's _lights[%u] names light %u, not a directional light: clouds are lit by directional lights only", who, i,
+				                          j, l._lights[j]);
+		}
+	}
+	if (p._layer_count == 0)
+		return true;
+
+	// The scene's record.
+	const uint32_t count = clouds->desc.max_views;
+	rbtrend_clouds_hold hold{cmd_list, clouds};
+	uint32_t index = UINT32_MAX;
+	bool reset     = false;
+	{
+		std::lock_guard<std::mutex> lock(instance->release_mutex);
+		for (uint32_t r = 0; r < count; ++r) {
+			if (clouds->records[r].scene == scene && rbtrend_clouds_record_held(&hold, r))
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+				                          "%s: the scene is drawn twice in a frame: its record of the clouds is held by this compile or a list compiled and not "
+				                          "yet submitted",
+				                          who);
+		}
+		index = rbtrend_history_take(clouds->records, count, scene, ++clouds->clock, rbtrend_clouds_record_held, &hold, &reset);
+	}
+	if (index == UINT32_MAX)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_LIMIT,
+		                          "%s: no record of the clouds is free: its %u (max_views, RBTREND_CLOUDS_DESC) are all held by this compile and lists compiled "
+		                          "and not yet submitted",
+		                          who, count);
+	rbtrend_clouds_view &view = clouds->views[index];
+	if (reset || p._history_reset || view.last_size[0] != width || view.last_size[1] != height)
+		view.frames = 0;
+	const uint32_t way     = view.frames == 0 ? 0u : 1u - view.last_written;
+	const bool fresh       = view.frames == 0;
+	const uint32_t qw      = (width + 3) / 4, qh = (height + 3) / 4;
+	const uint32_t hw      = (width + 1) / 2, hh = (height + 1) / 2;
+	static const uint32_t order[4] = {0u, 3u, 1u, 2u};
+	const uint32_t sub     = order[view.frames % 4u];
+	const uint32_t cycle   = view.frames / 4u;
+
+	rbtrend_compute_pipeline march       = lit.clouds_march_pipeline;
+	rbtrend_compute_pipeline reconstruct = lit.clouds_reconstruct_pipeline;
+	rbtrend_graphics_pipeline composite  = rbtrend_lit_clouds_composite_pipeline(instance, p._target->texture._t2d->desc.format);
+	if (!composite || !march || !reconstruct)
+		return false;
+	const bool reversed = rbtrend_lit_scene_depth_reversed(scene);
+
+	// The march's block.
+	rbtrend_clouds_march_block mb;
+	memset(&mb, 0, sizeof(mb));
+	mb.sizes[0]  = qw;
+	mb.sizes[1]  = qh;
+	mb.sizes[2]  = hw;
+	mb.sizes[3]  = hh;
+	mb.target[0] = (float)width;
+	mb.target[1] = (float)height;
+	mb.target[2] = p._max_distance;
+	mb.target[3] = reversed ? 1.0f : 0.0f;
+	mb.counts[0] = p._layer_count;
+	mb.counts[1] = p._max_steps;
+	mb.counts[2] = p._light_steps;
+	mb.counts[3] = sub;
+	mb.jitter[0] = rbtrend_history_jitter(cycle);
+	mb.jitter[1] = rbtrend_history_jitter(cycle * 5u + 3u);
+	mb.jitter[2] = rbtrend_history_jitter(view.frames * 3u + 1u);
+	// Each layer's atmosphere's table: the layer's own binding, an unnamed
+	// one bound to the first named (or a placeholder where none is), unread.
+	rbtrend_texture_view tables[RBTREND_CLOUDS_MAX_LAYERS] = {};
+	rbtrend_texture_view first_table                         = nullptr;
+	for (uint32_t i = 0; i < p._layer_count; ++i) {
+		rbtrend_clouds_resolve_layer(scene, p._layers[i], mb.layers[i]);
+		if (mb.layers[i].atmosphere[3] > 0.5f) {
+			tables[i] = p._layers[i]._atmosphere->transmittance_view;
+			if (!first_table)
+				first_table = tables[i];
+		}
+	}
+	if (!first_table)
+		first_table = lit.placeholder_2d_view;
+	for (uint32_t i = 0; i < RBTREND_CLOUDS_MAX_LAYERS; ++i)
+		if (!tables[i])
+			tables[i] = first_table;
+	rbtrend_clouds_write_material_block(view.march, &mb, sizeof(mb));
+
+	// The history's block for the way it runs this frame.
+	rbtrend_clouds_history_block hb;
+	memset(&hb, 0, sizeof(hb));
+	memcpy(hb.last_view_projection, clouds->records[index].view_projection, sizeof(hb.last_view_projection));
+	memcpy(hb.shift, p._space_shift, sizeof(float) * 3);
+	hb.shift[3] = fresh ? 1.0f : 0.0f;
+	hb.sizes[0] = qw;
+	hb.sizes[1] = qh;
+	hb.sizes[2] = hw;
+	hb.sizes[3] = hh;
+	hb.frame[0] = sub;
+	rbtrend_material history = view.reconstruct[way];
+	rbtrend_clouds_write_material_block(history, &hb, sizeof(hb));
+	if (!rbtrend_cmd_use_material(cmd_list, scene->material) || !rbtrend_cmd_use_material(cmd_list, clouds->material) ||
+	    !rbtrend_cmd_use_material(cmd_list, view.march) || !rbtrend_cmd_use_material(cmd_list, history))
+		return false;
+
+	// Set 1 of the march and the composite: the depth and the tables, from
+	// the scene's view-set records.
+	const rbtrend_texture_view views[5]          = {p._depth, tables[0], tables[1], tables[2], tables[3]};
+	const RBTREND_BINDING_SET_ENTRY entries[6] = {rbtrend_reflect_entry(0, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, p._depth),
+	                                             rbtrend_reflect_entry(1, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, tables[0]),
+	                                             rbtrend_reflect_entry(2, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, tables[1]),
+	                                             rbtrend_reflect_entry(3, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, tables[2]),
+	                                             rbtrend_reflect_entry(4, CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE, tables[3]),
+	                                             rbtrend_reflect_sampler_entry(5, lit.environment_sampler)};
+	rbtrend_binding_set input = rbtrend_view_set_get(cmd_list, scene, lit.clouds_input_layout, views, 5, entries, 6, who);
+	if (!input)
+		return false;
+
+	const rbtrend_binding_set march_sets[4] = {scene->material->set, input, clouds->material->set, view.march->set};
+	if (!rbtrend_cmd_own_dispatch(cmd_list, march, march_sets, 4, nullptr, 0, (qw + 7) / 8, (qh + 7) / 8))
+		return false;
+	const rbtrend_binding_set history_sets[2] = {scene->material->set, history->set};
+	if (!rbtrend_cmd_own_dispatch(cmd_list, reconstruct, history_sets, 2, nullptr, 0, (hw + 7) / 8, (hh + 7) / 8))
+		return false;
+
+	// The composite: the sets made ready to be read first, as a pass's are.
+	const rbtrend_binding_set composite_sets[3] = {scene->material->set, input, view.composite[way]};
+	{
+		eq::array<rbtrend_pass_image> &images = cmd_list->pass_images;
+		eq::array<rbtrend_pass_store> &stores = cmd_list->pass_stores;
+		images.clear();
+		stores.clear();
+		for (uint32_t slot = 0; slot < 3; ++slot) {
+			if (!rbtrend_pass_images_add_set(cmd_list, images, composite_sets[slot], slot, composite->storage_writes))
+				return false;
+			rbtrend_storage_stores_add_set(stores, composite_sets[slot], cmd_list->compiled_frame, slot, composite->storage_writes);
+			rbtrend_cmd_use_handle(cmd_list, composite_sets[slot]);
+		}
+		for (const rbtrend_pass_store &store : stores)
+			rbtrend_cmd_use_store(cmd_list, store.store);
+		rbtrend_cmd_ready_set_resources(cmd_list, images, stores);
+	}
+	rbtrend_cmd_transition_view(cmd_list, p._target, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+	crgpu_command_list cmd = cmd_list->cmd_list;
+	const uint32_t frame   = cmd_list->compiled_frame;
+	crgpu_rendering_begin_desc pass{};
+	pass.base.type                       = CR_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
+	pass.color_attachments[0].image_view = p._target->image_view;
+	pass.color_attachments[0].load_op    = CRGPU_LOAD_OP_LOAD;
+	pass.color_attachments[0].store_op   = CRGPU_STORE_OP_STORE;
+	pass.color_attachment_count          = 1;
+	pass.width                           = width;
+	pass.height                          = height;
+	crgpu_command_list_begin_rendering(cmd, &pass);
+	CRGPU_VIEWPORT viewport{};
+	viewport.width    = (float)width;
+	viewport.height   = (float)height;
+	viewport.maxDepth = 1.0f;
+	crgpu_command_list_set_viewports(cmd, 0, 1, &viewport);
+	CRGPU_SCISSOR_RECT scissor{};
+	scissor.width  = (float)width;
+	scissor.height = (float)height;
+	crgpu_command_list_set_scissor_rects(cmd, 0, 1, &scissor);
+	crgpu_command_list_bind_graphics_pipeline(cmd, composite->pipeline);
+	for (uint32_t slot = 0; slot < 3; ++slot)
+		crgpu_command_list_bind_graphics_descriptor_sets(cmd, composite->pipeline, slot,
+		                                                 &composite_sets[slot]->sets[rbtrend_binding_set_frame_slot(composite_sets[slot], frame)], 1);
+	rbtrend_clouds_composite_params cp{};
+	cp.sizes[0] = hw;
+	cp.sizes[1] = hh;
+	cp.sizes[2] = reversed ? 1u : 0u;
+	crgpu_command_list_push_graphics_constants(cmd, composite->pipeline, 0, sizeof(cp), &cp);
+	crgpu_command_list_draw(cmd, 3, 0);
+	crgpu_command_list_end_rendering(cmd);
+
+	// What the next frame's history is read with.
+	memcpy(clouds->records[index].view_projection, scene->block.view_projection, sizeof(clouds->records[index].view_projection));
+	view.last_written = way;
+	view.last_size[0] = width;
+	view.last_size[1] = height;
+	++view.frames;
+	rbtrend_history_mark_written(&clouds->records[index]);
+	return true;
+}
+
 /* LIT_PATH_TRACE, outside a pass (T10, T11): the TLAS's emitter table built
  * first if anything it reads changed since it was (D6), then one dispatch
  * adding _samples paths a pixel to the target's running mean, and the
@@ -5329,6 +6171,14 @@ static void rbtrend_cmd_use_command_views(rbtrend_command_list cmd_list, const R
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_atmosphere_shells._depth);
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_atmosphere_shells._target);
 		break;
+	case RBTREND_COMMAND_LIT_FOG:
+		rbtrend_cmd_use_handle(cmd_list, command._params._lit_fog._depth);
+		rbtrend_cmd_use_handle(cmd_list, command._params._lit_fog._target);
+		break;
+	case RBTREND_COMMAND_LIT_CLOUDS:
+		rbtrend_cmd_use_handle(cmd_list, command._params._lit_clouds._depth);
+		rbtrend_cmd_use_handle(cmd_list, command._params._lit_clouds._target);
+		break;
 	case RBTREND_COMMAND_LIT_REFLECT:
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_reflect._depth);
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_reflect._normal_roughness);
@@ -5407,6 +6257,10 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 				material = command._params._lit_reflect._scene->material;
 			else if (command._type == RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS)
 				material = command._params._lit_atmosphere_shells._scene->material;
+			else if (command._type == RBTREND_COMMAND_LIT_FOG)
+				material = command._params._lit_fog._scene->material;
+			else if (command._type == RBTREND_COMMAND_LIT_CLOUDS)
+				material = command._params._lit_clouds._scene->material;
 			if (!material)
 				continue;
 			bool known               = false;
@@ -6018,6 +6872,26 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 				bound_compute_pipeline = nullptr;
 				break;
 			}
+			case RBTREND_COMMAND_LIT_FOG: {
+				if (in_pass) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_FOG inside a rendering pass");
+					ok = false;
+					break;
+				}
+				ok                     = rbtrend_cmd_lit_fog(cmd_list, command);
+				bound_compute_pipeline = nullptr;
+				break;
+			}
+			case RBTREND_COMMAND_LIT_CLOUDS: {
+				if (in_pass) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_CLOUDS inside a rendering pass");
+					ok = false;
+					break;
+				}
+				ok                     = rbtrend_cmd_lit_clouds(cmd_list, command);
+				bound_compute_pipeline = nullptr;
+				break;
+			}
 			case RBTREND_COMMAND_LIT_TRACE_REFLECTIONS: {
 				if (in_pass) {
 					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_TRACE_REFLECTIONS inside a rendering pass");
@@ -6228,7 +7102,7 @@ RBT_RESULT rbtrend_command_list_submit(rbtrend_command_list cmd_list, crgpu_comm
 	// uploads for the next. A buffer an upload owns is retired, released
 	// once this submission has run.
 	for (rbtrend_buffer_store *store : cmd_list->staged_stores)
-		rbtrend_buffer_store_uploads_submitted(store);
+		rbtrend_buffer_store_uploads_submitted(store, serial);
 	for (const rbtrend_upload_copy &copy : copies)
 		*copy.dirty = false;
 

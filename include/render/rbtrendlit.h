@@ -4,6 +4,7 @@
 #include "rbtrendcommands.h"
 #include "rbtrendmaterial.h"
 #include "../rbtmath.h"
+#include "../math/rbtmathfog.h"
 
 #if __cplusplus
 extern "C" {
@@ -736,7 +737,8 @@ typedef struct RBTREND_LIT_SCENE_DESC {
 	/**
 	 * How many binding sets over views the scene keeps, for the commands
 	 * that name it and make one: RBTREND_COMMAND_LIT_SSR,
-	 * _LIT_TRACE_REFLECTIONS, _LIT_REFLECT and _LIT_ATMOSPHERE_SHELLS
+	 * _LIT_TRACE_REFLECTIONS, _LIT_REFLECT, _LIT_ATMOSPHERE_SHELLS, _LIT_FOG
+	 * and _LIT_CLOUDS
 	 * (rbtrendcommands.h says which sets each takes). 0 to
 	 * RBTREND_LIT_SCENE_MAX_VIEW_SETS.
 	 *
@@ -747,7 +749,7 @@ typedef struct RBTREND_LIT_SCENE_DESC {
 	 * field; otherwise a record not so held takes the new set (an empty
 	 * one, else the one handed out least recently), its old set destroyed.
 	 *
-	 * 0 is a scene with no records: those four commands naming it are
+	 * 0 is a scene with no records: those six commands naming it are
 	 * refused at the compile, with RBT_RESULT_LIMIT naming this field; it
 	 * draws lit surfaces, skies and every other command as any scene.
 	 *
@@ -1486,6 +1488,81 @@ typedef struct RBTREND_LIT_ATMOSPHERE {
  *         changes on failure.
  */
 RBT_RESULT rbtrend_lit_scene_set_atmosphere(rbtrend_lit_scene scene, const RBTREND_LIT_ATMOSPHERE *atmosphere, RBTREND_ERROR *out_error);
+
+/** The most suns (the scene's first directional lights) a scene's fog
+ * takes light from. */
+#define RBTREND_LIT_FOG_MAX_SUNS 2u
+
+/**
+ * @brief A scene's height fog: Rabbittus Math's fog (math/rbtmathfog.h),
+ * where it is, and how it takes light. No field has a default.
+ *
+ * Its light is its own albedo times the light that reaches it: for each of
+ * the scene's first #RBTREND_LIT_FOG::sun_count directional lights, pi times its radiance
+ * times Henyey and Greenstein's phase of #RBTREND_LIT_FOG::phase_g at the angle between the
+ * view and the light, through the scene atmosphere's transmittance at the
+ * eye where the scene has one; and #RBTREND_LIT_FOG::ambient_scale times the scene's
+ * ambient light (rbtrend_lit_scene_set_ambient(): the hemisphere and the
+ * environment's irradiance) from the fog's up at the middle of the part
+ * seen. It is taken as even along the part seen (Unreal's height fog's
+ * model).
+ */
+typedef struct RBTREND_LIT_FOG {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_FOG, and its chain, which takes nothing (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/** The fog: each field in its range (math/rbtmathfog.h). */
+	RBTMATH_HEIGHT_FOG fog;
+	/** Its origin in the scene's space this frame (a plane's point at
+	 * height 0, a sphere's centre): finite. Set as often as it moves. */
+	float origin[3];
+	/** The share of its extinction that scatters, three channels: each
+	 * finite, 0 to 1. */
+	float albedo[3];
+	/** Its phase's g for the suns' light (Henyey and Greenstein's): finite,
+	 * -0.999 to 0.999; above 0 brighter towards a sun. */
+	float phase_g;
+	/** How many of the scene's directional lights, the first, light it: 0 to
+	 * RBTREND_LIT_FOG_MAX_SUNS. */
+	uint32_t sun_count;
+	/** The scene's ambient light's share: finite, at least 0. */
+	float ambient_scale;
+	/** How far from the eye it starts, in the scene's unit: finite, at least
+	 * 0. A caller drawing the grid (RBTREND_COMMAND_LIT_FOG) sets the
+	 * grid's far distance here. */
+	float start_distance;
+	/** How far from the eye it ends: finite, above #start_distance; the
+	 * sky's ray stops here. */
+	float end_distance;
+	/** The most it hides: finite, 0 to 1 (its transmittance never below 1
+	 * minus this). */
+	float max_opacity;
+} RBTREND_LIT_FOG;
+
+/**
+ * @brief Sets a scene's height fog, or takes it away (NULL). Copied; from
+ * the next submission, every lit surface, transparent ones included, and
+ * the sky (RBTREND_LIT_SHADER_SKY_FRAGMENT, its suns' discs too) are seen
+ * through it, after the scene atmosphere's air where it has one: for a
+ * texel at a distance D along its view ray (the sky's at the fog's end),
+ * between `start_distance` and the nearer of D and `end_distance` (nothing
+ * where that is no farther than the start), its colour c becomes
+ * c x T + light x (1 - T), before the exposure: T the fog's transmittance
+ * there (Math's, rbtmath_height_fog_compute_transmittance(), the shaders'
+ * copy to a tolerance), never below 1 - `max_opacity`; the light as
+ * RBTREND_LIT_FOG says. A transparent surface takes it as an opaque one
+ * does, premultiplied by its opacity as the rest of its colour; the suns'
+ * discs are dimmed by T. Nothing allocated: set each frame as it moves.
+ *
+ * @param[in]  scene     The scene.
+ * @param[in]  fog       The fog, or NULL for none. Only read during the call.
+ * @param[out] out_error Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a NULL scene or a
+ *         field out of its range, each its own check and message in member
+ *         order (Math's fog by Math's checks); the struct codes for
+ *         `fog->base`. Nothing changes on failure.
+ */
+RBT_RESULT rbtrend_lit_scene_set_fog(rbtrend_lit_scene scene, const RBTREND_LIT_FOG *fog, RBTREND_ERROR *out_error);
 
 /** The most steps a texel's march takes in RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
 #define RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS 128u

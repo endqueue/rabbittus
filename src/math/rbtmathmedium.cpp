@@ -1,4 +1,5 @@
 #include "math/rbtmathmedium.h"
+#include "rbtmathfunctions_internal.hpp"
 #include <cmath>
 #include <cstdarg>
 #include <stdio.h>
@@ -8,9 +9,10 @@
 // atmosphere shaders work out too (shaders/rbtrend_atmosphere_model.slang
 // names each of these as its counterpart).
 //
-// Built without floating-point contraction (CMakeLists.txt), and with an
-// exponential of its own (portable_exp), so every call gives the same bits on
-// every platform. Everything is worked out in doubles and written as floats.
+// Built without floating-point contraction (CMakeLists.txt), and with
+// Rabbittus Math's own exponential (rbtmathfunctions.h's exp, through
+// rbtmathfunctions_internal.hpp), so every call gives the same bits on every
+// platform. Everything is worked out in doubles and written as floats.
 
 namespace
 {
@@ -33,37 +35,6 @@ void clear(RBTMATH_ERROR *error)
 {
     if (error)
         error->message[0] = '\0';
-}
-
-// ---- The exponential ----------------------------------------------------------
-
-// e^x the same bits everywhere: x = k ln 2 + r with |r| <= ln 2 / 2 (ln 2
-// split in two so k ln 2 is exact), e^r by its Taylor series to the 13th
-// power (the first term left out is under 2^-60 of the sum there), then
-// scaled by 2^k exactly. Only additions, multiplications, a floor and
-// ldexp, each IEEE's, with contraction off: no platform's libm.
-constexpr double ln2_hi   = 6.93147180369123816490e-01;
-constexpr double ln2_lo   = 1.90821492927058770002e-10;
-constexpr double log2_e   = 1.44269504088896338700e+00;
-constexpr double exp_low  = -745.0; // below it e^x is 0 in a double
-constexpr double exp_high = 709.0;  // above it, past a double's range
-
-double portable_exp(double x)
-{
-    if (x < exp_low)
-        return 0.0;
-    if (x > exp_high)
-        x = exp_high;
-    const double k = std::floor(x * log2_e + 0.5);
-    const double r = (x - k * ln2_hi) - k * ln2_lo;
-    double term    = 1.0;
-    double sum     = 1.0;
-    for (int n = 1; n <= 13; ++n)
-    {
-        term = term * r / (double)n;
-        sum  = sum + term;
-    }
-    return std::ldexp(sum, (int)k);
 }
 
 // ---- The medium ---------------------------------------------------------------
@@ -154,8 +125,18 @@ RBT_RESULT check_medium(const RBTMATH_SHELL_MEDIUM &m, RBTMATH_ERROR *error)
     return RBT_RESULT_OK;
 }
 
+// Forced into its callers: with the two exponentials inlined in it, it is
+// past the compiler's inlining threshold, and a call a step costs the
+// transmittance march about 18% (RBTMATH_TODO.md, the shell medium's
+// exponential). Inlining moves no operation, so the bits are the same.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define RBTMATH_MEDIUM_FORCE_INLINE __forceinline
+#else
+#define RBTMATH_MEDIUM_FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
 // The three layers' densities at a height above the bottom; 0 outside.
-void densities_at(const RBTMATH_SHELL_MEDIUM &m, double radius, double out[3])
+RBTMATH_MEDIUM_FORCE_INLINE void densities_at(const RBTMATH_SHELL_MEDIUM &m, double radius, double out[3])
 {
     const double h = radius - (double)m.bottom_radius;
     if (h < 0.0 || radius > (double)m.top_radius)
@@ -165,8 +146,8 @@ void densities_at(const RBTMATH_SHELL_MEDIUM &m, double radius, double out[3])
         out[2] = 0.0;
         return;
     }
-    out[0]              = portable_exp(-h / (double)m.rayleigh_scale_height);
-    out[1]              = portable_exp(-h / (double)m.mie_scale_height);
+    out[0]              = rbtfn::exp(-h / (double)m.rayleigh_scale_height);
+    out[1]              = rbtfn::exp(-h / (double)m.mie_scale_height);
     const double tent   = 1.0 - std::fabs(h - (double)m.absorption_center_height) / (double)m.absorption_half_width;
     out[2]              = tent > 0.0 ? tent : 0.0;
 }
@@ -227,7 +208,7 @@ void transmittance_along(const RBTMATH_SHELL_MEDIUM &m, const double o[3], const
         }
     }
     for (int c = 0; c < 3; ++c)
-        out[c] = portable_exp(-depth[c]);
+        out[c] = rbtfn::exp(-depth[c]);
 }
 
 constexpr double pi = 3.14159265358979323846;

@@ -171,13 +171,111 @@ CORE-MATH or musl vendored; Q2 double only; Q3 batch calls only, scalar
 internal, nothing inline; Q4 exp public, not exp2(x log2 e); Q5 atan2
 included; Q6 tan to 2^20, a NaN past it; Q7 sin and cos later; Q8 bits
 frozen from the first release (each recommended a). **Approved
-2026-11-17 with the user, every question as recommended.** Not built: a
-prerequisite of that caller's build (the meta repo's `ROADMAP.md`
-names the session). Card A63, decided a the same day, applies with it: the bit-exact
+2026-11-17 with the user, every question as recommended.** Built
+2026-11-18 on the Mac (below); Windows and Linux owed. Card A63, decided a the same day, applies with it: the bit-exact
 sources take their contraction flags by compiler ID (MSVC `/fp:precise`
 with Visual Studio 2022 17.0 or later, clang-cl
 `/clang:-ffp-contract=off`, other Clang and GCC `-ffp-contract=off`), one
 CMake function, before A56's bits are recorded on Windows.
+
+**Card A63 built 2026-11-18 on the Mac** (the session the meta repo's `ROADMAP.md` names, first):
+`cmake/rabbittus_no_contract.cmake`, `rabbittus_no_contract(TARGETS ...
+SOURCES ...)`, the flag chosen per language by `CMAKE_<LANG>_COMPILER_ID`
+and `_FRONTEND_VARIANT` (clang-cl `/clang:-ffp-contract=off`, other Clang
+and GCC `-ffp-contract=off`, MSVC `/fp:precise` refusing cl below 19.30,
+any other compiler refused), appended to a source's options. It replaces
+`RABBITTUS_NO_CONTRACT` and the "if (NOT MSVC)" block: the noise, the
+functions, the polygons and Clipper2, the BVHs, the shell media, Rabbittus
+Text's three sources and its four dependencies, Rend's `rbtrendlit.cpp`,
+and the noise's, the functions' and the BVH bits tests' targets. On the
+Mac every one is `-ffp-contract=off` as before (read in the generated
+build files) and every hash held; the MSVC and clang-cl branches are
+written, not compiled (Windows owed, with A56's bits there). No carrottus
+source set contraction flags.
+
+**A61 built 2026-11-18 on the Mac** (MacBook, M5 Pro, macOS 27, Apple
+clang; the session the meta repo's `ROADMAP.md` names), from the approved draft's version 1:
+`include/math/rbtmathfunctions.h` (the six batch calls, the macro, the
+Definition in its `@verbatim`, section 5 word for word),
+`src/math/rbtmathfunctions.cpp` and `rbtmathfunctions_internal.hpp`
+(namespace `rbtfn`, constexpr constants, `FLT_EVAL_METHOD` asserted, fast
+math an `#error`), under `rabbittus_no_contract`. No ABI break: seven
+additions (`check.sh --update-abi`), the misuse harness regenerated (the
+six calls in its `ZEROES_SUCCEED`: a count of 0 is OK with any pointers).
+- **Tests first, seen failing** against NOT_IMPLEMENTED stubs:
+  `rbtmathfunctions_tests` 49 failures and 6 tests pending,
+  `rbtmathfunctions_bits_tests` every record refused; then all passing.
+  Tests 1 to 7 as the draft's section 10 (special values against their
+  bits, exp's edges and tan's at 2^20 MPFR's correctly rounded values,
+  exact exactly; exp2(n) and log2(2^n) for every n in [-1074, 1023]; odd
+  bit for bit over 2^20; the reference table; arrays, slices, a count of
+  0; refusals in order with their messages; two threads on a pool),
+  `rbtnoalloc_tests` (each call over 10,000 elements, 100 frames: none of
+  ours). Every Rabbittus ctest (46) passes, Debug and Release.
+- **The accuracy reference:** `tests/rbtmathfunctions_reference.c`, run by
+  hand with Homebrew's MPFR 4.2.2 (its first lines have the commands),
+  wrote `tests/data/rbtmathfunctions/reference.inc`: 21 ranges of 4,096
+  (the draft's section 3, atan's interval edges, atan2's one subnormal,
+  tan within 64 ulps of its switch), 3.6 MB, the same file on a second
+  run. Every result within 1 ulp of it. A throwaway run over 2 x 10^5
+  inputs a range against MPFR gave the draft's figures (tan 0.914 over
+  [-2^20, 2^20], 0.954 about its switch; atan2 0.840; exp2 0.782; the
+  shares above half an ulp within a tenth of a percent of the draft's).
+- **The fitter:** `tests/rbtmathfunctions_fit.c` (Remez in MPFR at 400
+  bits, run by hand): every fit's minimax error is the draft's, and the
+  first three to six coefficients of each polynomial are the
+  Definition's; the higher ones (35 of 56) differ in their last bits, at
+  the Definition's bounds and at the exact ones, and don't move between a
+  4,000- and a 16,000-point grid. As doubles both polynomials have the
+  same error on a grid (E2 2^-54.45 both, TN 2^-54.81 against 2^-54.83):
+  the draft's throwaway fitter stopped at a nearby polynomial. The
+  Definition's coefficients stay the normative ones.
+- **Bits recorded on the Mac** (`tests/data/rbtmathfunctions/bits.inc`,
+  29 records of 2^20 inputs, Debug and Release alike). A build of the
+  same source with `-ffp-contract=on` moves 19 of them, `fast` 24.
+  Windows (MSVC, x64) and Fedora (GCC and Clang, x64) owed against them,
+  with x86's FTZ and DAZ (written, not compiled).
+- **A finding against the draft, flushed subnormals:** the draft said a
+  subnormal input to atan2 read as 0 gives "the same angle to within an
+  ulp". It does only where the other argument is far larger: with both
+  small, flushing gives the angle for a zero (-pi/2 against -pi/2 +
+  0.002, 0 against a normal 2^-282). The header's "Same bits" now says
+  what happens (exp2, exp, log2 and atan2 read a subnormal input as a
+  zero of its sign and give a zero where a result would be subnormal;
+  tan and atan return a subnormal input as it came), and the bits test
+  checks exactly that against the default environment's results on the
+  zeroed inputs. The default environment's bits are untouched.
+- **The shell medium moved onto it:** `portable_exp` and its `std::ldexp`
+  are gone; `rbtmathmedium.cpp` calls `rbtfn::exp`. Its CRC is **still
+  7d88a849**: the medium writes floats, and over 10^8 arguments in [-30,
+  0] the two exponentials' doubles differ on 59.8% and their floats on
+  none, so no recorded figure that rests on it moved (rabbittustests' and
+  the caller's; RBTREND_TODO.md item 52).
+- **Measured** (`tests/rbtmathfunctions_bench.c`, Release, the M5 Pro, one
+  core, 2^20 elements, best of 7, two runs): ns an element, ours against
+  Apple's libm: exp2 3.0 / 1.3, exp 2.2 to 2.3 / 4.1 to 4.3, log2 3.0 to
+  3.2 / 1.5 to 1.7, atan 6.7 to 6.9 / 8.5, atan2 13.2 to 13.3 / 16.7 to
+  16.8, tan 9.9 to 10.4 / 4.7 to 4.9. The medium (the earth's, 10,000
+  rays of 64 steps; 262,144 densities), portable_exp then this exp:
+  transmittance 9.74 to 9.84 ms (15.2 to 15.4 ns a step) then 11.46 to
+  11.53 ms (17.9 to 18.0), density 11.9 to 12.1 ns a point then 9.8 to
+  10.0: the density faster, the march about 18% slower (the draft
+  measured the exponential alone faster, 3.7 ns against 5.0).
+- **Why the march was slower, and the fix (2026-11-18, the Mac):** not
+  the exponential. With two of `rbtfn::exp` inlined into it,
+  `densities_at` costs clang 710 against its threshold of 250, so it
+  stopped being inlined into the march's loop and the density's (clang's
+  `-Rpass-missed=inline`: "too costly to inline"); with `portable_exp`,
+  itself left out of line (cost 250), `densities_at` was 160 and went
+  inline. Each step then made a call, its densities through memory and
+  the medium's coefficients loaded again after it. `densities_at` is now
+  forced inline (`always_inline`, MSVC's `__forceinline`), which moves no
+  operation: the CRC is **still 7d88a849**, Debug and Release, and every
+  test passes. Release, the M5 Pro, best of 7, three runs each, before
+  then after: transmittance 11.94 to 11.99 ms (18.7 ns a step) then 7.48
+  to 7.60 ms (11.7 to 11.9), now 23% faster than `portable_exp`'s 9.8;
+  density 10.20 to 10.28 ns a point then 9.69 to 10.00. Windows and
+  Linux owed (MSVC's `__forceinline` not compiled).
 
 ## Cloud density (card A57, decided 2026-11-17)
 
@@ -189,6 +287,132 @@ baked from `rbtmathnoise` on the caller's jobs. Its layers' bounds a
 spherical shell or a flat slab. To be drafted with Rend's clouds (its
 item 55). Card A59 (fog near the eye) may add a height fog's and a fog
 volume's density here too.
+
+Drafted 2026-11-18: `rbtmath_clouds_draft.h` (version 1, seven critique
+passes), approved 2026-11-18 with the user, every question as recommended; built 2026-11-18 (below). A new `math/rbtmathclouds.h` (the
+density over two baked volumes and a coverage map, the same bits
+everywhere, A61's atan for the equi-angular warp) and two additions to
+`rbtmathnoise.h` (`rbtmath_noise_volume_bake`, `_sample`: tiling volumes of
+noise in bytes, PERLIN_WORLEY and WORLEY). The bake estimated at about 4.1
+s a 128^3 volume on one core (five cellular octaves a texel at the
+measured 374 ns), not the card's "cheap"; measured at the build.
+
+Card A59's half drafted 2026-11-18: `rbtmath_fog_draft.h` (version 1,
+seven critique passes), approved 2026-11-18 with the user, every question as recommended; built 2026-11-18 (below). A new
+`math/rbtmathfog.h`: a height fog's density and its transmittance over a
+segment (a plane's closed form; a sphere's by an approximation, question
+QF1), and a fog volume's density over the WORLEY volume.
+
+**The noise volumes, built 2026-11-18 on the Mac (M5 Pro, macOS 27), for
+card A59** (the clouds' density, `rbtmathclouds.h`, built later the same
+day, below):
+`rbtmath_noise_volume_bake()` and `_sample()` in `rbtmathnoise.h`, exactly
+as `rbtmath_clouds_draft.h` describes them (its section 3a and 3b written
+into the header's Definition), so card A57 takes them unchanged. Each
+texel made a row at a time on the stack (12 KiB) through the noise's own
+per-place evaluation; the read shared with the fog
+(`rbtnoise::volume_read`, `src/math/rbtmathnoise_internal.hpp`).
+`tests/rbtmathnoise_volume_tests.c` holds the clouds draft's tests 1 to 4
+and the refusals (every texel of a 16^3 of each kind against
+`rbtmath_noise_compute_points`; a 64^3 whole, in runs of 1, 7 and 64
+slices and on 1 and 4 threads, the same bytes; the tiling; 10^5 reads
+against a trilinear in double, worst 1.32e-7 against the 2^-20 bound),
+seen failing first (21 failures against stubs returning
+NOT_IMPLEMENTED). Measured (Release, one core, `rbtmathfog_bench`): a
+texel 1.96 us of either kind, a WORLEY 32^3 64 ms, a PERLIN_WORLEY 128^3
+4.1 s at that rate (the draft's estimate of 4.1 s held). Windows and
+Linux never built.
+
+**The density, built 2026-11-18 on the Mac (M5 Pro, macOS 27), Debug and
+Release** (card A57's stage 1 build, `rbtmath_clouds_draft.h` as approved,
+every question as recommended: QM1 a, QM2 a, QM3 a, QM4 a, QM5 a):
+`math/rbtmathclouds.h` (`RBTMATH_CLOUD_SHAPE`, `_BOUNDS`, `_TEXELS`,
+`_OFFSETS`, frozen; `RBTMATH_CLOUD_BOUNDS_KIND`, `_CUBE_WARP`,
+`_MAP_ADDRESS`; `RBTMATH_CLOUD_MAX_TYPES`, `_MAX_COVERAGE_SIZE`;
+`rbtmath_cloud_compute_density()`), `src/math/rbtmathclouds.cpp`
+(contraction off, its read of the volumes rbtmathnoise's
+`rbtnoise::volume_read`, the equi-angular warp's arctangent A61's
+`rbtfn::atan`). No struct type, no result code; ABI additions only. One
+shape chosen alone: a point inside the layer whose base or detail
+coordinate passes `RBTMATH_NOISE_VOLUME_MAX_COORDINATE` is refused (its
+index named), as `rbtmath_fog_volume_compute_density` refuses one, so the
+volume read's contract holds; a point outside the layer isn't read and
+isn't refused. Tests, seen failing first (452 failed checks in
+`rbtmathclouds_tests` and 12 in the bits test against a stub returning
+NOT_IMPLEMENTED):
+- `rbtmathclouds_tests`: each step of the Definition worked by hand over
+  constant volumes and maps (a profile's corners, c 0 by the map and by
+  the scale, a map-free layer's bias, d0 0, e2 1, the type blend, the
+  density factor, h outside); the density against a reference of the
+  Definition written again in the test over random volumes and maps,
+  4,096 points each of a shell of each warp and a slab of each address:
+  the same bits; a shell and a slab of the same thickness the same within
+  1e-5 at equal heights; a slab's REPEAT at s + 1 and CLAMP's edge; the
+  cube's face table along each axis, at edges and corners (ties to x,
+  then y), each face's sc and tc signs, PLAIN and EQUI_ANGULAR equal at a
+  face's centre and its edges' midpoints and different between; every
+  refusal of every check in order, its message, nothing written.
+- `rbtmathclouds_bits_tests`: FNV-1a hashes of 4,096 densities of each of
+  four layers (shells of both warps 6,361 to 6,365 km, slabs of both
+  addresses) over a 32^3 bake of each kind and a random map, recorded on
+  the Mac (`tests/data/rbtmathclouds/bits.inc`), the same in Debug and
+  Release and with subnormals flushed (FPCR.FZ); Windows and Linux to
+  match (card X25). The bakes' own hashes are `rbtmathfog_bits_tests'`.
+- `rbtnoalloc_tests`: 4,096 densities of a shell and a slab and a base
+  slice baked a frame, 100 frames: none of ours.
+- `rbt_misuse_tests` regenerated (425 calls with zeroes).
+Measured (Release, one core, `rbtmathclouds_bench`, 65,536 points over
+Nubis's sizes and a 512 map): a density 56.8 ns a point (shell, PLAIN),
+79.1 (shell, EQUI_ANGULAR), 53.6 (slab), against the draft's 60 to 120
+ns; the bake 1.90 us a texel, a PERLIN_WORLEY 128^3 3.99 s, a WORLEY 32^3
+60 ms (the draft's 4.1 s and 61 ms held). Windows and Linux never built.
+
+## Fog density (card A59, decided 2026-11-17)
+
+**Built 2026-11-18 on the Mac (M5 Pro, macOS 27), Debug and Release**:
+`math/rbtmathfog.h`, `src/math/rbtmathfog.cpp` (contraction off), every
+question as recommended (QF1 a, a closed outward depth: built as Schüler's, then fixed to the Chapman function's large-x form, below; QF2 a: held
+below the base; QF3 a: the shared WORLEY volume). Tests
+(`rbtmathfog_tests`, `rbtmathfog_bits_tests`), seen failing first (56
+failures against stubs; the bits test with nothing recorded):
+- A plane's transmittance within 1e-5 relative in tau of a 2^16-step
+  march over 10^4 segments (level, steep, crossing the base, long and
+  grazing, 1e-4 long); g continuous across 2^-4; a level segment exact.
+- **A sphere's: the Chapman function's large-x form** (fixed 2026-11-18
+  the same day; QF1's intent, a closed outward depth, its error measured).
+  The first build used c / ((c - 1) mu + 1), c = sqrt(pi x / 2), written
+  from memory as Schüler's (GPU Pro 3, 2012): measured against the Chapman
+  function itself (its integral, numerically, x from 20 to 10,000, mu 0
+  to 1) it was up to 14.8% low at mid angles (x = 10,000, mu 0.01; 13% at
+  x = 1,500, mu 0.05), which the segments' difference of two outward
+  depths carried into tau as 0.225; the segment logic was not at fault
+  (with an exact Chapman function the same segments are within the
+  form's own error). The paper couldn't be read here (its publisher's and
+  Shadertoy's pages refused the fetch), so the formula was never checked
+  against it. Now C(x, mu) = sqrt(pi x / 2) erfcx(sqrt(x / 2) mu)
+  (Wikipedia's "Chapman function", read 2026-11-18: 2% at x = 50, 0.1% at
+  x = 800), erfcx by erf's series below 2 and Laplace's continued fraction
+  from 2, within 1e-8 (the header's Definition). The form is low by about
+  1 / x straight up: 4.4% at x = 20, 1.9% at x = 50, 1.3% at x = 75,
+  0.07% at x = 1,500; that is the method's limit, for fogs of few scale
+  heights in radius. Against the march over test 4's segments: worst
+  **0.00067** at a 100 m scale height (x 1,500; bound
+  SPHERE_TAU_BOUND_100M 0.001) and **0.0129** at 2 km (x 75, on steep
+  segments: the form's 1.28% at mu 1; bound SPHERE_TAU_BOUND_2KM 0.015).
+  The first build's test bound of 0.25 is gone.
+- Bits: CRCs of 4,096 densities and transmittances of each kind, volumes
+  of each shape with and without noise, and a 32^3 bake of each kind
+  (`tests/data/rbtmathfog/bits.inc`), Debug and Release alike ("sphere
+  transmittance" re-recorded once with the fix, 0x0A9590D0AF0C2690 to
+  0xB1EBDB4C0C75E869; the rest unchanged); Windows
+  and Linux owed (card X25).
+- `rbtnoalloc_tests`: each call over 4,096 points a frame, a slice baked
+  and read: none of ours.
+- Measured (Release, one core, `rbtmathfog_bench`): a plane's density 5.2
+  ns a point (estimate 10 to 20), a plane's segment 20.5 ns (30 to 50), a
+  sphere's 137 ns (80 to 150; 49.8 ns with the first build's form), a box
+  volume with noise 18.5 ns (40 to 70), a volume's read 14.0 ns.
+Not built: Windows and Linux.
 
 ## rbtmathbvh: shapes and an instance BVH changed in place
 

@@ -75,6 +75,16 @@ typedef struct rbtrend_atmosphere_t *rbtrend_atmosphere;
 /** An atmosphere's shell (rbtrendlit.h), drawn by
  * RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
 struct RBTREND_LIT_ATMOSPHERE_SHELL;
+/** A volumetric fog near the eye: a noise volume and a froxel grid a view
+ * (rbtrendfog.h), drawn by RBTREND_COMMAND_LIT_FOG. */
+typedef struct rbtrend_fog_t *rbtrend_fog;
+/** A local fog volume (rbtrendfog.h), drawn by RBTREND_COMMAND_LIT_FOG. */
+struct RBTREND_FOG_VOLUME_INSTANCE;
+/** Volumetric clouds: noise volumes, coverage maps, looks and a record a
+ * view (rbtrendclouds.h), drawn by RBTREND_COMMAND_LIT_CLOUDS. */
+typedef struct rbtrend_clouds_t *rbtrend_clouds;
+/** A layer of cloud (rbtrendclouds.h), drawn by RBTREND_COMMAND_LIT_CLOUDS. */
+struct RBTREND_CLOUD_LAYER;
 
 /**
  * @brief What RBTREND_COMMAND_BUILD_BLAS does to its BLAS
@@ -1223,6 +1233,113 @@ enum {
 	 * It binds pipelines and sets of its own, as BLOOM does.
 	 */
 	RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS       = 51,
+	/**
+	 * Draws `_fog`'s grid for `_scene` over `_target`, outside a pass
+	 * (rbtrendfog.h): the scene's height fog (rbtrend_lit_scene_set_fog(),
+	 * its `start_distance` equal to `_far_distance`) and `_volumes`
+	 * injected into a froxel grid from the eye to `_far_distance`, its
+	 * slices spaced exponentially from `_near_distance` (the first
+	 * reaching back to the eye), lit by the scene fog's suns through their
+	 * cascaded and map shadows (a light shadowed by a traced mask is
+	 * unshadowed here) and the scene atmosphere's transmittance, and by
+	 * the scene's ambient light; blended with this scene's history in the
+	 * fog (`_history_weight`), integrated from the eye, and put over
+	 * `_target` at each texel's depth: target x T + L (a texel at the
+	 * depth's far value at `_far_distance`).
+	 *
+	 * `_scene` gives the view (its view-projection, which can be inverted,
+	 * its eye and target size), its fog, lights, shadows, ambient light,
+	 * exposure and atmosphere; its output encoding linear
+	 * (RBTREND_COLOR_ENCODING_LINEAR). `_depth` is a SHADER_RESOURCE 2D
+	 * view, DEPTH aspect, single-sampled, of the depth the surfaces were
+	 * drawn with through that view-projection at the view's target size;
+	 * `_target` a RENDER_TARGET 2D view of the picture, linear and times
+	 * the scene's exposure, of R16G16B16A16_FLOAT, R32G32B32A32_FLOAT or
+	 * R11G11B10_FLOAT at that size, left in COLOR_ATTACHMENT_OPTIMAL. Each
+	 * holds what was written earlier in the list or before it.
+	 * `_volumes` 0 to RBTREND_FOG_MAX_VOLUMES, copied at the send, each
+	 * checked as RBTREND_FOG_VOLUME_INSTANCE says. `_near_distance`
+	 * finite, above 0; `_far_distance` finite, above it.
+	 * `_history_weight` finite, 0 (none) to below 1 (0.9 is Unreal's).
+	 * `_space_shift` is this frame's origin of the scene's space in the
+	 * space of the frame before (0 where the caller's space doesn't move;
+	 * a caller drawing with the eye at the origin gives the eye's move),
+	 * finite; `_history_reset` 1 after a cut, a teleport, or anything the
+	 * history shouldn't carry, else 0 (any other value refused).
+	 *
+	 * Refused at the compile, each its message: the scene has no fog, or
+	 * its `start_distance` isn't `_far_distance`; its view or target size
+	 * no longer the depth's; no record free (RBT_RESULT_LIMIT, naming
+	 * RBTREND_FOG_DESC::max_views): every record held by this compile or
+	 * a list compiled and not yet submitted; the same scene's record held
+	 * already (the scene drawn twice in a frame); no set free in the
+	 * scene's records.
+	 *
+	 * The frame's order: after the lit surfaces, LIT_REFLECT and the
+	 * shells, before the transparent surfaces and the tone map.
+	 * Transparent surfaces see the scene's fog beyond the grid, not the
+	 * grid (RBTREND_TODO.md item 56's stage 3).
+	 *
+	 * It takes one set from `_scene`'s view-set records
+	 * (RBTREND_LIT_SCENE_DESC::max_view_sets), over `_depth` and its
+	 * record's integrated grid. It binds pipelines and sets of its own, as
+	 * BLOOM does.
+	 */
+	RBTREND_COMMAND_LIT_FOG                     = 52,
+	/**
+	 * Draws clouds over `_target`, outside a pass (rbtrendclouds.h): the
+	 * `_layers` (RBTREND_CLOUD_LAYER) of `_clouds`, marched along each view
+	 * ray of `_scene` from the eye to `_max_distance`, the surface `_depth`
+	 * holds or the layers' end, whichever is nearest, through a quarter of
+	 * the texels each way this frame, the rest filled out from the clouds'
+	 * history of this scene; each sample's density Rabbittus Math's
+	 * (rbtmath_cloud_compute_density()'s definition), lit by its layer's
+	 * lights through every layer towards them and, where the layer names
+	 * one, its atmosphere's transmittance, and by the scene's ambient light.
+	 * The result is put over `_target` with the scene atmosphere's air in
+	 * front of it where the scene has an aerial volume, and the scene's fog
+	 * (rbtrend_lit_scene_set_fog()) in front of that: target x T + L.
+	 *
+	 * `_scene` gives the view (its view-projection, which can be inverted,
+	 * its eye, its target size at most the clouds' largest), its lights,
+	 * ambient light, exposure, atmosphere and fog; its output encoding
+	 * linear. `_depth` is a SHADER_RESOURCE 2D view, DEPTH aspect,
+	 * single-sampled, of the depth the surfaces were drawn with at the
+	 * view's target size; `_target` a RENDER_TARGET 2D view of the picture,
+	 * linear and times the exposure, R16G16B16A16_FLOAT, R32G32B32A32_FLOAT
+	 * or R11G11B10_FLOAT at that size, left in COLOR_ATTACHMENT_OPTIMAL.
+	 * Each holds what was written earlier in the list or before it.
+	 * `_layers` 0 to RBTREND_CLOUDS_MAX_LAYERS, copied at the send, each
+	 * checked as RBTREND_CLOUD_LAYER says; 0 draws nothing and keeps the
+	 * history. `_max_steps` 1 to RBTREND_CLOUDS_MAX_STEPS, `_light_steps` 0
+	 * (no light march: the ambient light, and the lights unshadowed by
+	 * cloud) to RBTREND_CLOUDS_MAX_LIGHT_STEPS, `_max_distance` finite,
+	 * above 0.
+	 *
+	 * `_space_shift` is this frame's origin of the scene's space in the
+	 * space of the frame before (0 where the caller's space doesn't move; a
+	 * caller drawing with the eye at the origin gives the eye's move),
+	 * finite; `_history_reset` 1 after a cut, a teleport, or anything the
+	 * history shouldn't carry, else 0 (any other value refused).
+	 *
+	 * Refused at the compile, each with its message: a layer's look unset,
+	 * a light index out of range, a light not directional; a scene target
+	 * larger than the clouds' (RBT_RESULT_LIMIT); no record free
+	 * (RBT_RESULT_LIMIT, naming RBTREND_CLOUDS_DESC::max_views); the same
+	 * scene a second time in a frame; no set free in the scene's records.
+	 *
+	 * The frame's order: after the lit surfaces, LIT_REFLECT and
+	 * LIT_ATMOSPHERE_SHELLS, before the transparent surfaces and the tone
+	 * map. A shell layer seen from outside its top is drawn as from inside,
+	 * with no air of its own world around it, until clouds take their place
+	 * in LIT_ATMOSPHERE_SHELLS (RBTREND_TODO.md item 55's stage 2).
+	 *
+	 * It takes one set from `_scene`'s view-set records
+	 * (RBTREND_LIT_SCENE_DESC::max_view_sets), over `_depth` and its layers'
+	 * atmospheres' tables. It binds pipelines and sets of its own, as BLOOM
+	 * does.
+	 */
+	RBTREND_COMMAND_LIT_CLOUDS                  = 53,
 };
 
 /**
@@ -1711,6 +1828,54 @@ typedef struct RBTREND_COMMAND {
 			/** The picture the shells are drawn over. */
 			rbtrend_texture_view _target;
 		} _lit_atmosphere_shells; /**< RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
+		struct {
+			/** The scene: its view, fog, lights, shadows, ambient light and atmosphere. */
+			rbtrend_lit_scene _scene;
+			/** The fog: its noise and its records. */
+			rbtrend_fog _fog;
+			/** The volumes, `_volume_count` of them; copied at the send. */
+			const struct RBTREND_FOG_VOLUME_INSTANCE *_volumes;
+			/** How many: 0 to RBTREND_FOG_MAX_VOLUMES. */
+			uint32_t _volume_count;
+			/** Where the slices' spacing starts, in the scene's unit. */
+			float _near_distance;
+			/** How far from the eye the grid reaches. */
+			float _far_distance;
+			/** The history's share of a froxel: 0 to below 1. */
+			float _history_weight;
+			/** This frame's origin in the last frame's space. */
+			float _space_shift[3];
+			/** 1 starts the history again; 0 keeps it. */
+			uint32_t _history_reset;
+			/** The depth the surfaces were drawn with. */
+			rbtrend_texture_view _depth;
+			/** The picture the fog is drawn over. */
+			rbtrend_texture_view _target;
+		} _lit_fog; /**< RBTREND_COMMAND_LIT_FOG. */
+		struct {
+			/** The scene: its view, lights, ambient light, atmosphere and fog. */
+			rbtrend_lit_scene _scene;
+			/** The clouds: their volumes, maps, looks and records. */
+			rbtrend_clouds _clouds;
+			/** The layers, `_layer_count` of them; copied at the send. */
+			const struct RBTREND_CLOUD_LAYER *_layers;
+			/** How many: 0 to RBTREND_CLOUDS_MAX_LAYERS. */
+			uint32_t _layer_count;
+			/** The most samples a texel's march takes. */
+			uint32_t _max_steps;
+			/** The samples a light's march takes from each sample. */
+			uint32_t _light_steps;
+			/** How far from the eye clouds are marched, in the scene's unit. */
+			float _max_distance;
+			/** This frame's origin in the last frame's space. */
+			float _space_shift[3];
+			/** 1 starts the history again; 0 keeps it. */
+			uint32_t _history_reset;
+			/** The depth the surfaces were drawn with. */
+			rbtrend_texture_view _depth;
+			/** The picture the clouds are drawn over. */
+			rbtrend_texture_view _target;
+		} _lit_clouds; /**< RBTREND_COMMAND_LIT_CLOUDS. */
 		/**
 		 * Never read. Fixes `_params` at 120 bytes, so the command's size
 		 * stays 128 as commands are added: a new command's parameters fit

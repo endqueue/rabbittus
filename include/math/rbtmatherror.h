@@ -8,8 +8,8 @@
  * It is per call, never kept on an object, so calls that may overlap each
  * other each write only their own.
  *
- * rbtmathpoly.h, rbtmathbvh.h, rbtmathmedium.h and rbtmathnoise.h include
- * it; a caller includes any of them.
+ * rbtmathpoly.h, rbtmathbvh.h, rbtmathmedium.h, rbtmathnoise.h and
+ * rbtmathfunctions.h include it; a caller includes any of them.
  */
 
 #ifndef RBTMATHERROR_H
