@@ -91,14 +91,17 @@ float mask_visibility(Texture2D<float4> depth, int2 p, MaskParams params, out fl
     float3 c       = mask_position(depth, p, float2(size));
     float3 n       = mask_normal(depth, p, size, c);
     float3 origin  = c + n * params.normal_offset;
-    RbtrendLitDirectional d = u_lit_scene.directional[min(params.light, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS - 1))];
-    float3 light   = normalize(d.direction_versine.xyz);
-    float cos_max  = 1.0 - d.direction_versine.w;
+    // The light at the texel (a placed one's from its source, each ray
+    // stopping at its source's surface).
+    DirectionalAt at = directional_at(min(params.light, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS - 1)), c);
+    float3 light     = normalize(at.direction);
+    float cos_max    = 1.0 - at.versine;
+    float reach      = min(params.max_distance, at.reach);
     float2 turn    = float2(rt_interleaved_gradient(float2(p)), rt_interleaved_gradient(float2(p) + float2(5.588238, 5.588238)));
     uint reached   = 0u;
     for (uint i = 0u; i < params.ray_count; ++i) {
         float3 direction = cos_max >= 1.0 ? light : rt_cone(light, cos_max, frac(rt_r2(i) + turn));
-        if (rt_visible(origin, direction, params.max_distance, params.cull_mask))
+        if (rt_visible(origin, direction, reach, params.cull_mask))
             ++reached;
     }
     surface = float4(n, dot(c - u_lit_scene.eye_position.xyz, u_lit_scene.view_direction.xyz));

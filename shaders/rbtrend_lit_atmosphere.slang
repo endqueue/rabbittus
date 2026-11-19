@@ -47,21 +47,28 @@ float3 lit_atmosphere_table(float layer, float2 size, float2 uv) {
     return atmosphere_tables.SampleLevel(environment_sampler, float3(texel / u_lit_scene.atmosphere_array.xy, layer), 0.0).rgb;
 }
 
-// What reaches [position] (the scene's space) of directional light [d]:
-// the transmittance through the medium towards it for one of the scene's
-// suns, 1 for any other light or no atmosphere.
-public float3 lit_atmosphere_sun_transmittance(uint d, float3 position) {
+// What reaches [position] (the scene's space) of directional light [d]
+// along [toward] (unit, towards it: its direction there,
+// directional_at()): the transmittance through the medium for one of the
+// scene's suns, 1 for any other light or no atmosphere.
+public float3 lit_atmosphere_sun_transmittance_toward(uint d, float3 position, float3 toward) {
     if (!lit_atmosphere() || float(d) >= u_lit_scene.atmosphere_y.w)
         return float3(1.0);
     AtmosphereMedium m = lit_atmosphere_radii();
     float r, mu;
-    uint kind = surface_transmittance_ray(m, position - u_lit_scene.atmosphere_center.xyz, u_lit_scene.directional[d].direction_versine.xyz, r, mu);
+    uint kind = surface_transmittance_ray(m, position - u_lit_scene.atmosphere_center.xyz, toward, r, mu);
     if (kind == 0u)
         return float3(0.0);
     if (kind == 1u)
         return float3(1.0);
     float2 size = u_lit_scene.atmosphere_sizes.xy;
     return lit_atmosphere_table(1.0, size, transmittance_lookup_uv(m, r, mu, size));
+}
+
+// The same along the light's stored direction: a placed light's at the
+// scene's eye (what is seen from the eye reads).
+public float3 lit_atmosphere_sun_transmittance(uint d, float3 position) {
+    return lit_atmosphere_sun_transmittance_toward(d, position, u_lit_scene.directional[d].direction_versine.xyz);
 }
 
 // The transmittance from [position] (the scene's space) along

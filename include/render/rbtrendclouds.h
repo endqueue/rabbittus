@@ -335,8 +335,9 @@ typedef struct RBTREND_CLOUD_LAYER {
 	 * (0: the ambient light alone). */
 	uint32_t _light_count;
 	/** Its lights, by their places in the scene's light list: each a
-	 * directional light. A point or spot light is refused. Entries past
-	 * #_light_count are not read. */
+	 * directional light, of either kind (a placed one's direction and
+	 * radiance taken at the scene's eye, rbtrendlit.h). A point or spot
+	 * light is refused. Entries past #_light_count are not read. */
 	uint32_t _lights[RBTREND_CLOUDS_MAX_LAYER_LIGHTS];
 	/** An atmosphere its lights reach it through (rbtrendatmosphere.h), of
 	 * the scene's instance, outliving the list's submission; NULL for none

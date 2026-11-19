@@ -104,8 +104,9 @@ float3 shade_hit(Hit hit, float3 direction) {
     float3 radiance = hit.emission;
     float pdf       = 0.0;
     for (uint i = 0u; i < min(u_lit_scene.directional_count, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS)); ++i) {
-        RbtrendLitDirectional d = u_lit_scene.directional[i];
-        radiance += RT_PI * bsdf.eval(d.direction_versine.xyz, pdf) * d.radiance_disc.rgb;
+        // As the light is at the hit (a placed light's from its source).
+        DirectionalAt at = directional_at(i, hit.position);
+        radiance += RT_PI * bsdf.eval(at.direction, pdf) * at.radiance;
     }
     for (uint i = 0u; i < min(u_lit_scene.light_count, uint(RBTREND_LIT_MAX_LIGHTS)); ++i) {
         RbtrendLitLight light = u_lit_scene.lights[i];

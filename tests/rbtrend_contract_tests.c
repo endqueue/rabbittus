@@ -1129,6 +1129,12 @@ static void test_lit_light_checks(void)
     light_refused(&directional, 1, "the light is not a spot");
     directional._type = 3;
     light_refused(&directional, 1, "the light is not a spot");
+    // A placed directional light is type 3 (rbtrend_placed_light_draft.h,
+    // card L78); what set_lights takes and refuses of it needs a scene, so a
+    // device: rabbittustests' test_lit_placed_refusals.
+    CHECK(RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED == 3);
+    directional._type = RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED;
+    light_refused(&directional, 1, "the light is not a spot");
 
     // The scene's calls refuse a NULL scene first.
     dirty(&error);

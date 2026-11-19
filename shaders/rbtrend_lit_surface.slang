@@ -380,11 +380,13 @@ public LitShaded lit_shade(LitFragmentInput input) {
 
     float3 color = float3(0.0);
     for (uint d = 0u; d < min(u_lit_scene.directional_count, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS)); ++d) {
-        // Through the scene's atmosphere for its suns (1 otherwise).
-        float3 radiance = u_lit_scene.directional[d].radiance_disc.rgb * lit_atmosphere_sun_transmittance(d, in_position);
+        // Its direction and light at the fragment (a placed light's from
+        // its source), through the scene's atmosphere for its suns (1
+        // otherwise).
+        DirectionalAt at = directional_at(d, in_position);
+        float3 radiance  = at.radiance * lit_atmosphere_sun_transmittance_toward(d, in_position, at.direction);
         if (any(radiance > float3(0.0)))
-            color += shade(s, u_lit_scene.directional[d].direction_versine.xyz,
-                           radiance * directional_visibility(d, in_position, s.geometric, input.frag_coord.xy));
+            color += shade(s, at.direction, radiance * directional_visibility(d, in_position, s.geometric, input.frag_coord.xy));
     }
 
     if ((u_lit_scene.flags & RBTREND_LIT_SCENE_TILES) != 0u) {

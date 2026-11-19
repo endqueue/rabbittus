@@ -936,7 +936,9 @@ enum {
 	 * normal target is read), and `_ray_count` rays are traced from it
 	 * through `_tlas` towards the light, over the light's disc (its
 	 * RBTREND_LIT_SCENE_LIGHT `_direction` and `_radius` as the scene has
-	 * them; a radius of 0 is a hard shadow),
+	 * them; a radius of 0 is a hard shadow; a placed directional light's
+	 * direction and disc from each texel towards its source, each ray
+	 * stopping at the source's surface),
 	 * in blue-noise directions, up to `_max_distance`, against the
 	 * instances whose mask shares a bit with `_cull_mask`. The fraction that
 	 * reach the light is filtered over `_filter_radius` texels each way,
@@ -981,7 +983,8 @@ enum {
 	 * metalness and specular: every surface opaque; opacity, transmission,
 	 * the coat, the sheen and the maps are not read).
 	 * Light comes from the environment (importance-sampled), every
-	 * directional light over its disc (each one's `_radius`), emissive triangles (with multiple
+	 * directional light over its disc (each one's `_radius`; a placed one's
+	 * from each bounce, its rays stopping at its source's surface), emissive triangles (with multiple
 	 * importance sampling; a surface gives off its emission from both its
 	 * faces, as the lit surface lights a face seen from behind as its
 	 * front), and point and spot lights (without). The hemisphere of
@@ -1186,8 +1189,8 @@ enum {
 	 * at the projection's far value holds none, whatever its far plane), in
 	 * `_min_steps` to `_max_steps` steps, more for a longer ray (the most
 	 * at the shell's longest chord, 2 sqrt(top^2 - bottom^2)); the light it
-	 * gathers from the shell's lights (directional;
-	 * RBTREND_LIT_ATMOSPHERE_SHELL), by Hillaire's model with its
+	 * gathers from the shell's lights (directional, a placed one's taken at
+	 * the shell's centre; RBTREND_LIT_ATMOSPHERE_SHELL), by Hillaire's model with its
 	 * atmosphere's two tables, is added and what is behind dimmed by its
 	 * transmittance, per channel. Where the ray meets the ground sphere and
 	 * no surface is drawn, the medium's ground is drawn there, opaque, lit
@@ -1217,6 +1220,10 @@ enum {
 	 * as LIT_ATMOSPHERE skips such an atmosphere.
 	 * `_min_steps` 1 to `_max_steps`, `_max_steps` at most
 	 * RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS. `_shells` copied at the send.
+	 * A shell's light that is a point or spot light, or a placed
+	 * directional light whose source is inside or on the shell's top
+	 * sphere, is refused at the send and again at the compile, naming the
+	 * shell, the slot and the light.
 	 *
 	 * The frame's order: after the lit surfaces and LIT_REFLECT, before the
 	 * transparent surfaces and the tone map. Needs Carrottus GPU's

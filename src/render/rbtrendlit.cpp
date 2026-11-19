@@ -57,7 +57,7 @@
 
 static_assert(sizeof(RBTREND_LIT_VERTEX) == 48, "RBTREND_LIT_VERTEX is 48 bytes");
 static_assert(sizeof(RBTREND_LIT_INSTANCE) == 64, "RBTREND_LIT_INSTANCE is 64 bytes");
-static_assert(sizeof(rbtrend_lit_scene_block) == 128 + 80 * RBTREND_LIT_MAX_SHADOW_VIEWS + 80 * RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS +
+static_assert(sizeof(rbtrend_lit_scene_block) == 128 + 80 * RBTREND_LIT_MAX_SHADOW_VIEWS + 112 * RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS +
                                                  32 * RBTREND_LIT_MAX_SHADOW_VIEWS + 208 + 64 * RBTREND_LIT_MAX_LIGHTS + 7 * 16 + 5 * 16,
               "RbtrendLitScene's std140 size");
 // Vulkan's guaranteed maxUniformBufferRange, the smallest any device may
@@ -159,6 +159,8 @@ static bool rbtrend_lit_check_scene_block(rbtrend_binding_layout layout) {
 	    {"directional[0].direction_versine", MEMBER(B, directional)},
 	    {"directional[0].shadow_views", MEMBER(B, directional) + MEMBER(D, shadow_views)},
 	    {"directional[3].shadow_views", last_directional + MEMBER(D, shadow_views)},
+	    {"directional[0].place_reference", MEMBER(B, directional) + MEMBER(D, place_reference)},
+	    {"directional[3].placed_radiance_radius", last_directional + MEMBER(D, placed_radiance_radius)},
 	    {"shadows[0].params", MEMBER(B, shadows)},
 	    {"shadows[63].views", last_shadow + MEMBER(S, views)},
 	    {"eye_position", MEMBER(B, eye_position)},
@@ -2065,7 +2067,30 @@ static void rbtrend_lit_scene_resolve_fog(rbtrend_lit_scene scene) {
 	b.flags |= RBTREND_LIT_SCENE_FLAG_FOG;
 }
 
+// Each placed directional light's values at the scene's eye, into its
+// stored direction, versine and radiance (what the sky, the atmosphere's
+// tables, the fog and the clouds read): worked out again by each commit,
+// so they follow the eye set by rbtrend_lit_scene_set_view() and the
+// lights set by rbtrend_lit_scene_set_lights().
+static void rbtrend_lit_scene_resolve_placed(rbtrend_lit_scene scene) {
+	rbtrend_lit_scene_block &b = scene->block;
+	const double eye[3]        = {(double)b.eye_position[0], (double)b.eye_position[1], (double)b.eye_position[2]};
+	for (uint32_t i = 0; i < b.directional_count && i < RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS; ++i) {
+		rbtrend_lit_directional_block &d = b.directional[i];
+		if (!(d.place_reference[3] > 0.0f))
+			continue;
+		rbtrend_lit_placed_values at;
+		rbtrend_lit_placed_values_at(d, eye, at);
+		for (int c = 0; c < 3; ++c) {
+			d.direction_versine[c] = at.direction[c];
+			d.radiance_disc[c]     = at.radiance[c];
+		}
+		d.direction_versine[3] = at.versine;
+	}
+}
+
 void rbtrend_lit_scene_commit(rbtrend_lit_scene scene) {
+	rbtrend_lit_scene_resolve_placed(scene);
 	rbtrend_lit_scene_resolve_shadows(scene);
 	rbtrend_lit_scene_resolve_atmosphere(scene);
 	rbtrend_lit_scene_resolve_fog(scene);
@@ -2136,9 +2161,42 @@ bool rbtrend_lit_scene_depth_reversed(rbtrend_lit_scene scene) {
 uint32_t rbtrend_lit_scene_directional_slot(rbtrend_lit_scene scene, uint32_t light) {
 	if (light >= scene->light_count)
 		return UINT32_MAX;
-	if (scene->lights[light].type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+	if (!rbtrend_lit_type_directional(scene->lights[light].type))
 		return UINT32_MAX;
 	return scene->lights[light].slot;
+}
+
+// The rule's angular radius is capped at 0.5 (rbtrendlit.h), so its versine
+// at 1 - cos(0.5).
+static const double rbtrend_lit_placed_max_versine = 1.0 - 0.87758256189037271;
+
+void rbtrend_lit_placed_values_at(const rbtrend_lit_directional_block &d, const double point[3], rbtrend_lit_placed_values &out) {
+	double v[3];
+	double largest = 0.0;
+	for (int i = 0; i < 3; ++i) {
+		v[i]    = (double)d.place_reference[i] - point[i];
+		largest = std::fmax(largest, std::fabs(v[i]));
+	}
+	// The distance scaled by the largest part first, so no square
+	// overflows however far the source is.
+	double distance = 0.0;
+	if (largest > 0.0) {
+		const double x = v[0] / largest, y = v[1] / largest, z = v[2] / largest;
+		distance       = largest * std::sqrt(x * x + y * y + z * z);
+	}
+	const double reference = (double)d.place_reference[3];
+	const double radius    = (double)d.placed_radiance_radius[3];
+	for (int i = 0; i < 3; ++i)
+		out.direction[i] = distance > 0.0 ? (float)(v[i] / distance) : (i == 1 ? 1.0f : 0.0f);
+	const double nearest = distance > radius ? distance : radius;
+	const double k       = reference / nearest;
+	for (int i = 0; i < 3; ++i)
+		out.radiance[i] = (float)((double)d.placed_radiance_radius[i] * (k * k));
+	// 1 - cos(asin(q)) as q^2 / (1 + sqrt(1 - q^2)), so a small disc keeps
+	// its digits.
+	const double q       = radius / nearest;
+	const double versine = q * q / (1.0 + std::sqrt(1.0 - q * q));
+	out.versine          = (float)(versine < rbtrend_lit_placed_max_versine ? versine : rbtrend_lit_placed_max_versine);
 }
 
 // What the scene made, for its destroy and a failed create alike. The
@@ -2194,7 +2252,7 @@ static bool rbtrend_lit_kind_fits(RBTREND_LIT_SHADOW_KIND kind, uint32_t type) {
 	switch (kind) {
 	case RBTREND_LIT_SHADOW_KIND_MASK:
 	case RBTREND_LIT_SHADOW_KIND_CASCADES:
-		return type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL;
+		return rbtrend_lit_type_directional(type);
 	case RBTREND_LIT_SHADOW_KIND_SPOT_MAP:
 		return type == RBTREND_LIT_LIGHT_TYPE_SPOT;
 	case RBTREND_LIT_SHADOW_KIND_POINT_MAP:
@@ -2424,7 +2482,7 @@ static bool any_negative3(const float v[3]) {
 // it by its [index] if not.
 static RBT_RESULT rbtrend_lit_light_valid(const RBTREND_LIT_SCENE_LIGHT &l, uint32_t index, RBTREND_ERROR *error) {
 	const float half_pi = 1.57079632679f;
-	if (l._type > RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+	if (l._type > RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u has type %u, which is not an RBTREND_LIT_LIGHT_TYPE", index, l._type);
 	if (!all_finite(l._position, 3))
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u's _position is not finite", index);
@@ -2442,10 +2500,13 @@ static RBT_RESULT rbtrend_lit_light_valid(const RBTREND_LIT_SCENE_LIGHT &l, uint
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u's _radius is not finite", index);
 	if (any_negative3(l._radiance))
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u has a negative _radiance", index);
-	if (l._type != RBTREND_LIT_LIGHT_TYPE_POINT && length3(l._direction) == 0.0f)
+	const bool reads_direction = l._type == RBTREND_LIT_LIGHT_TYPE_SPOT || l._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL;
+	const bool directional     = rbtrend_lit_type_directional(l._type);
+	if (reads_direction && length3(l._direction) == 0.0f)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u, a spot or directional light, has a _direction of 0", index);
 	if (l._type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL && !(l._range > 0.0f))
-		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u, a point or spot light, has a _range that is not above 0", index);
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u, a point, spot or placed directional light, has a _range that is not above 0",
+		                    index);
 	if (l._type == RBTREND_LIT_LIGHT_TYPE_SPOT && l._inner_angle < 0.0f)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "spot light %u's _inner_angle is negative", index);
 	if (l._type == RBTREND_LIT_LIGHT_TYPE_SPOT && l._inner_angle > l._outer_angle)
@@ -2456,9 +2517,13 @@ static RBT_RESULT rbtrend_lit_light_valid(const RBTREND_LIT_SCENE_LIGHT &l, uint
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "directional light %u's _radius is negative", index);
 	if (l._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL && l._radius > 0.5f)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "directional light %u's _radius %g is above 0.5", index, (double)l._radius);
-	if (l._type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL && l._radius != 0.0f)
+	if (l._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED && !(l._radius > 0.0f))
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "placed directional light %u's _radius is not above 0", index);
+	if (l._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED && l._radius > 0.5f)
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "placed directional light %u's _radius %g is above 0.5", index, (double)l._radius);
+	if (!directional && l._radius != 0.0f)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u, a point or spot light, has a _radius that is not 0 (card A38)", index);
-	if (l._type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL && l._sky_disc)
+	if (!directional && l._sky_disc)
 		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "light %u, a point or spot light, has _sky_disc set", index);
 	return RBT_RESULT_OK;
 }
@@ -2490,7 +2555,7 @@ RBT_RESULT rbtrend_lit_scene_set_lights(rbtrend_lit_scene scene, const RBTREND_L
 	for (uint32_t i = 0; i < count; ++i) {
 		if (const RBT_RESULT valid = rbtrend_lit_light_valid(lights[i], i, out_error))
 			return valid;
-		if (lights[i]._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+		if (rbtrend_lit_type_directional(lights[i]._type))
 			++directional;
 		else
 			++point_or_spot;
@@ -2504,14 +2569,28 @@ RBT_RESULT rbtrend_lit_scene_set_lights(rbtrend_lit_scene scene, const RBTREND_L
 	for (rbtrend_lit_directional_block &d : b.directional) {
 		memset(d.direction_versine, 0, sizeof(d.direction_versine));
 		memset(d.radiance_disc, 0, sizeof(d.radiance_disc));
+		memset(d.place_reference, 0, sizeof(d.place_reference));
+		memset(d.placed_radiance_radius, 0, sizeof(d.placed_radiance_radius));
 	}
 	uint32_t slots[2] = {0, 0};
 	for (uint32_t i = 0; i < count; ++i) {
 		const RBTREND_LIT_SCENE_LIGHT &l = lights[i];
-		const bool is_directional       = l._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL;
+		const bool is_directional       = rbtrend_lit_type_directional(l._type);
 		const uint32_t slot             = slots[is_directional ? 1 : 0]++;
 		scene->lights[i].type           = (uint8_t)l._type;
 		scene->lights[i].slot           = (uint8_t)slot;
+		if (l._type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED) {
+			// Its place, reference and radiance there, and its source's
+			// radius, worked out in double; its values at the eye by the
+			// commit below.
+			rbtrend_lit_directional_block &d = b.directional[slot];
+			memcpy(d.place_reference, l._position, sizeof(float) * 3);
+			d.place_reference[3] = l._range;
+			memcpy(d.placed_radiance_radius, l._radiance, sizeof(float) * 3);
+			d.placed_radiance_radius[3] = (float)((double)l._range * std::sin((double)l._radius));
+			d.radiance_disc[3]          = l._sky_disc ? 1.0f : 0.0f;
+			continue;
+		}
 		if (is_directional) {
 			rbtrend_lit_directional_block &d = b.directional[slot];
 			unit3(l._direction, d.direction_versine);

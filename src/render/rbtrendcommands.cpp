@@ -741,8 +741,9 @@ static bool rbtrend_reflect_send_checks(rbtrend_command_list cmd_list, const RBT
 /* Shell [index]'s lights against [scene]'s list as it is now
  * (LIT_ATMOSPHERE_SHELLS, at the send and again at the compile, the lights
  * changing between): each one's place in the list, and its type, a
- * directional light; each its own refusal, in the array's order. Its
- * `_light_count` has been checked. False, reported, at the first that
+ * directional light, a placed one's source outside the shell's top
+ * sphere; each its own refusal, in the array's order. Its `_light_count`
+ * and `_atmosphere` have been checked. False, reported, at the first that
  * fails. */
 static bool rbtrend_shell_lights_ok(rbtrend_command_list cmd_list, rbtrend_lit_scene scene, uint32_t index, const RBTREND_LIT_ATMOSPHERE_SHELL &shell) {
 	const char *who = "LIT_ATMOSPHERE_SHELLS";
@@ -759,6 +760,23 @@ static bool rbtrend_shell_lights_ok(rbtrend_command_list cmd_list, rbtrend_lit_s
 			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
 			                          "%s: shell %u's _lights[%u] names light %u, a spot light: a shell is lit by directional lights only", who, index, j,
 			                          light);
+		if (scene->lights[light].type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED)
+			continue;
+		// A placed light's source inside or on the top sphere has no one
+		// direction from the centre: the distance in double from the floats.
+		const rbtrend_lit_directional_block &d = scene->block.directional[scene->lights[light].slot];
+		double squared                         = 0.0;
+		for (int k = 0; k < 3; ++k) {
+			const double v = (double)d.place_reference[k] - (double)shell._center[k];
+			squared += v * v;
+		}
+		const double distance = std::sqrt(squared);
+		const double top      = (double)shell._atmosphere->medium.top_radius;
+		if (distance <= top)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: shell %u's _lights[%u] names light %u, a placed directional light whose source is inside or on its top sphere "
+			                          "(%g from its centre, its top %g): no one direction lights it from its centre",
+			                          who, index, j, light, distance, top);
 	}
 	return true;
 }
@@ -987,7 +1005,7 @@ static bool rbtrend_clouds_layer_ok(rbtrend_command_list cmd_list, rbtrend_lit_s
 		if (light >= scene->light_count)
 			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _lights[%u] is %u, past the scene's %u lights", who, index, j,
 			                          light, scene->light_count);
-		if (scene->lights[light].type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+		if (!rbtrend_lit_type_directional(scene->lights[light].type))
 			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
 			                          "%s: layer %u's _lights[%u] names light %u, a %s light: clouds are lit by directional lights only", who, index, j, light,
 			                          scene->lights[light].type == RBTREND_LIT_LIGHT_TYPE_POINT ? "point" : "spot");
@@ -5188,7 +5206,8 @@ static bool rbtrend_cmd_lit_atmosphere_shells(rbtrend_command_list cmd_list, con
 	params.steps[3] = rbtrend_lit_scene_depth_reversed(scene) ? 1u : 0u;
 	// Shell [i]'s scissor into [region], and its centre and lights into
 	// params: each light's direction and illuminance at the centre, a
-	// directional light's as it is. False for a shell that draws nothing.
+	// directional light's as it is, a placed one's by the type's rule there
+	// (in double, rounded once). False for a shell that draws nothing.
 	auto prepare = [&](uint32_t i, uint32_t region[4]) {
 		const RBTREND_LIT_ATMOSPHERE_SHELL &shell = shells[i];
 		rbtrend_atmosphere a                     = shell._atmosphere;
@@ -5207,9 +5226,20 @@ static bool rbtrend_cmd_lit_atmosphere_shells(rbtrend_command_list cmd_list, con
 			}
 			if (slot == UINT32_MAX)
 				continue;
-			for (int k = 0; k < 3; ++k) {
-				params.light_direction[j][k]   = scene->block.directional[slot].direction_versine[k];
-				params.light_illuminance[j][k] = 3.14159265358979f * scene->block.directional[slot].radiance_disc[k];
+			const rbtrend_lit_directional_block &d = scene->block.directional[slot];
+			if (d.place_reference[3] > 0.0f) {
+				const double center[3] = {(double)shell._center[0], (double)shell._center[1], (double)shell._center[2]};
+				rbtrend_lit_placed_values at;
+				rbtrend_lit_placed_values_at(d, center, at);
+				for (int k = 0; k < 3; ++k) {
+					params.light_direction[j][k]   = at.direction[k];
+					params.light_illuminance[j][k] = 3.14159265358979f * at.radiance[k];
+				}
+			} else {
+				for (int k = 0; k < 3; ++k) {
+					params.light_direction[j][k]   = d.direction_versine[k];
+					params.light_illuminance[j][k] = 3.14159265358979f * d.radiance_disc[k];
+				}
 			}
 			params.light_direction[j][3] = 1.0f;
 		}
@@ -5682,7 +5712,7 @@ static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_
 			if (l._lights[j] >= scene->light_count)
 				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: layer %u's _lights[%u] is %u, past the scene's %u lights", who, i, j,
 				                          l._lights[j], scene->light_count);
-			if (scene->lights[l._lights[j]].type != RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL)
+			if (!rbtrend_lit_type_directional(scene->lights[l._lights[j]].type))
 				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
 				                          "%s: layer %u's _lights[%u] names light %u, not a directional light: clouds are lit by directional lights only", who, i,
 				                          j, l._lights[j]);

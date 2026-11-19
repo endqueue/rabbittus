@@ -416,11 +416,11 @@ static void test_slang_shaders()
         const RBTREND_SHADER_MEMBER *rect = find_member(store, scene, "shadow_views[1].rect");
         CHECK(rect && rect->type == RBTREND_UNIFORM_TYPE_VEC4 && rect->offset == 128 + 80 + 64);
         const RBTREND_SHADER_MEMBER *light = find_member(store, scene, "lights[1].radiance_type");
-        CHECK(light && light->type == RBTREND_UNIFORM_TYPE_VEC4 && light->offset == 7824 + 64 + 16);
+        CHECK(light && light->type == RBTREND_UNIFORM_TYPE_VEC4 && light->offset == 7952 + 64 + 16);
         // An array of vectors: one member, its count and stride.
         const RBTREND_SHADER_MEMBER *rotation = find_member(store, scene, "environment_rotation");
         CHECK(rotation && rotation->type == RBTREND_UNIFORM_TYPE_VEC4 && rotation->array_count == 3 && rotation->array_stride == 16 &&
-              rotation->offset == 128 + 80 * 64 + 80 * 4 + 32 * 64 + 80);
+              rotation->offset == 128 + 80 * 64 + 112 * 4 + 32 * 64 + 80);
         CHECK(find_member(store, scene, "lights.data[0].radiance_type") == nullptr);
         const RBTREND_SHADER_RESOURCE *material = find_resource(store, "u_lit_material");
         CHECK(material && strcmp(material->block_name, "RbtrendLitMaterial") == 0);

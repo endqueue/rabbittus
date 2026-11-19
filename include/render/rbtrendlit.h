@@ -90,7 +90,11 @@ extern "C" {
  * an `_SRGB` format, which converts as it is sampled. A light's radiance is
  * scaled so that a white, matte face square to it reads the light's color:
  * a directional light at radiance 1 lights a face of albedo 0.5 to 0.5; a point light
- * does so at distance 1, falling off with the square of the distance. What
+ * does so at distance 1, falling off with the square of the distance; a
+ * placed directional light (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED) at
+ * its reference distance, falling off with the square of the distance from
+ * its source, and lighting each point from the direction of its source.
+ * What
  * the surface writes is linear radiance times the view's exposure, for a
  * float target and then RBTREND_COMMAND_TONE_MAP (rbtrendcommands.h), or
  * already clamped and sRGB-encoded for an 8-bit UNORM target shown as it is
@@ -853,6 +857,10 @@ typedef struct RBTREND_LIT_VIEW {
 /**
  * @brief Sets where a scene is seen from.
  *
+ * It moves where each placed directional light
+ * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED) is seen from: what the sky
+ * and the atmosphere's tables read of it.
+ *
  * @param[in] scene Scene to change.
  * @param[in] view  Where from. Only read during the call.
  * @param[out] out_error Why it failed, when it did. May be NULL.
@@ -868,6 +876,13 @@ RBT_RESULT rbtrend_lit_scene_set_view(rbtrend_lit_scene scene, const RBTREND_LIT
 
 /**
  * @brief The kinds of light.
+ *
+ * A directional light, wherever this library says so, is one of type
+ * RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL or
+ * RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED: it lights every point it
+ * reaches with no range, isn't culled per tile, is one of
+ * RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS, may have cascades or a traced mask,
+ * and may be an atmosphere's sun or a shell's light.
  */
 typedef uint32_t RBTREND_LIT_LIGHT_TYPE;
 enum {
@@ -877,6 +892,27 @@ enum {
 	RBTREND_LIT_LIGHT_TYPE_SPOT = 1,
 	/** Light from one direction, everywhere alike: a sun, a moon. */
 	RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL = 2,
+	/**
+	 * A directional light whose source has a place: its direction, light
+	 * and disc are worked out at each point it lights from where its source
+	 * is (a system's star lighting its worlds each from its own side). It
+	 * reads `_position` (its source's place), `_range` (the distance D at
+	 * which `_radiance` and `_radius` are given, above 0), `_radiance`,
+	 * `_radius` (its disc's angular radius at D, above 0, at most 0.5) and
+	 * `_sky_disc`. With R = D sin(`_radius`) the source's radius, at a point
+	 * P a distance d from the source and d' = max(d, R): its direction is
+	 * from P towards the source, its radiance `_radiance` (D / d')^2, its
+	 * disc's angular radius min(asin(R / d'), 0.5), and a traced shadow
+	 * ray towards it stops at the source's surface, d - R. A point inside
+	 * the source reads it at the surface. What is seen from the eye (the
+	 * sky's disc, the atmosphere's sky-view and aerial volume, the
+	 * environment filled from it, the height fog and the clouds) takes its
+	 * values at the scene's eye; an atmosphere's shell at the shell's
+	 * centre (rbtrendcommands.h, RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS); a
+	 * directional light's cascades along the direction the caller fits
+	 * them by (RBTREND_LIT_CASCADE_FIT::light_direction).
+	 */
+	RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED = 3,
 };
 
 /**
@@ -886,38 +922,42 @@ enum {
 typedef struct RBTREND_LIT_SCENE_LIGHT {
 	/** Which type. */
 	RBTREND_LIT_LIGHT_TYPE _type;
-	/** Where a point or spot light is, in the scene's space. Not read for a
-	 * directional light. */
+	/** Where a point or spot light is, or where a placed directional
+	 * light's source is, in the scene's space. Not read for a directional
+	 * light (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL). */
 	float _position[3];
 	/**
 	 * A spot's axis, from the light outwards; a directional light's
 	 * direction, from the surface towards the light. Any length but 0. Not
-	 * read for a point light.
+	 * read for a point light or a placed directional light.
 	 */
 	float _direction[3];
 	/**
 	 * Its color times its strength, linear: what a white matte face square
-	 * to it reads (a point or spot light at distance 1). 0 is a light that
-	 * gives nothing.
+	 * to it reads (a point or spot light at distance 1; a placed
+	 * directional light at its #_range). 0 is a light that gives nothing.
 	 */
 	float _radiance[3];
 	/** Where a point or spot light's light has fallen to 0, smoothly: above
-	 * 0. What tiled culling bounds it by. Not read for a directional light. */
+	 * 0. What tiled culling bounds it by. A placed directional light's
+	 * reference distance: where its #_radiance and #_radius are given,
+	 * above 0. Not read for a directional light
+	 * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL). */
 	float _range;
 	/** A spot's full light within this angle of its axis, in radians... */
 	float _inner_angle;
 	/** ...fading to none at this one: #_inner_angle to pi / 2. */
 	float _outer_angle;
 	/**
-	 * A directional light's angular radius, in radians, 0 to 0.5: the
-	 * angle from its disc's centre to its edge (0.00465 for the sun seen
-	 * from the earth). Its light is spread over the disc, so it lights
+	 * A directional light's angular radius, in radians, 0 to 0.5 (a placed
+	 * one's above 0, seen from its #_range): the angle from its disc's
+	 * centre to its edge (0.00465 for the sun seen from the earth). Its light is spread over the disc, so it lights
 	 * nothing more than #_radiance; a traced shadow and the path trace
 	 * read it as the light's size. A point or spot light's: 0 (card A38).
 	 */
 	float _radius;
 	/**
-	 * A directional light only: whether RBTREND_LIT_SHADER_SKY_FRAGMENT
+	 * A directional light only (either kind): whether RBTREND_LIT_SHADER_SKY_FRAGMENT
 	 * draws its disc, at #_radius. Each texel of a disc reads pi times
 	 * #_radiance over its solid angle, 2 pi (1 - cos(_radius)). Must be
 	 * false for the other types.
@@ -947,13 +987,14 @@ typedef struct RBTREND_LIT_SCENE_LIGHT {
  *         RBT_RESULT_INVALID_ARGUMENT if @p scene is NULL, @p lights is NULL
  *         with a count above 0, or a light (named by its index) has a type
  *         that is not an RBTREND_LIT_LIGHT_TYPE, a value not finite, a
- *         negative radiance, a direction of 0 where it is read, a range not
- *         above 0 (point, spot), angles out of order or past pi / 2
- *         (spot), a radius out of 0 to 0.5 (directional) or not 0 (point,
- *         spot), or `_sky_disc` true on a point or spot light;
- *         RBT_RESULT_LIMIT if more than RBTREND_LIT_MAX_LIGHTS are point and
- *         spot lights, or more than RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS are
- *         directional.
+ *         negative radiance, a direction of 0 where it is read (spot,
+ *         directional), a range not above 0 (point, spot, placed
+ *         directional), angles out of order or past pi / 2 (spot), a radius
+ *         out of 0 to 0.5 (directional), not above 0 or above 0.5 (placed
+ *         directional) or not 0 (point, spot), or `_sky_disc` true on a
+ *         point or spot light; RBT_RESULT_LIMIT if more than
+ *         RBTREND_LIT_MAX_LIGHTS are point and spot lights, or more than
+ *         RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS are directional (either kind).
  */
 RBT_RESULT rbtrend_lit_scene_set_lights(rbtrend_lit_scene scene, const RBTREND_LIT_SCENE_LIGHT *lights, uint32_t count,
                                      RBTREND_ERROR *out_error);
@@ -1202,8 +1243,11 @@ typedef struct RBTREND_LIT_CASCADE_FIT {
 	 * (logarithmically); between, a mix of the two (Zhang's practical split
 	 * scheme). 0.75 suits most views. */
 	float split_lambda;
-	/** From the scene towards the light: the directional light's
-	 * RBTREND_LIT_SCENE_LIGHT::_direction. */
+	/** From the scene towards the light: a directional light's
+	 * RBTREND_LIT_SCENE_LIGHT::_direction; for a placed directional light,
+	 * a direction of the caller's choosing towards its source (from the
+	 * view's eye, or one held while the light turns): its shadow is
+	 * projected along it, while its shading turns per point. */
 	float light_direction[3];
 	/** How far beyond a cascade towards the light its view still catches
 	 * what casts a shadow into it, in the scene's units: the height of the
@@ -1406,8 +1450,8 @@ typedef struct RBTREND_LIT_ATMOSPHERE {
 	rbtrend_atmosphere atmosphere;
 	/** Its centre, in the scene's space: finite. Set as often as it moves. */
 	float center[3];
-	/** How many of the scene's directional lights, the first, light the
-	 * medium: 1 or 2. A scene with fewer has as many as it has; with none,
+	/** How many of the scene's directional lights (either kind), the
+	 * first in the list's order, light the medium: 1 or 2. A scene with fewer has as many as it has; with none,
 	 * nothing lights the medium (a black sky, as a night with no moon). */
 	uint32_t sun_count;
 	/** The sky-view table's width (round the eye) and height (from the
@@ -1592,9 +1636,11 @@ typedef struct RBTREND_LIT_ATMOSPHERE_SHELL {
 	 * Its lights, by their places in the scene's light list
 	 * (rbtrend_lit_scene_set_lights()): each a directional light
 	 * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL), its direction and radiance used
-	 * as they are; a directional light given a source place joins them once
-	 * Rend has one. A point or spot light is refused. Entries past
-	 * #_light_count are not read.
+	 * as they are, or a placed directional light
+	 * (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED), its direction and
+	 * radiance taken at #_center by the type's rule; a placed light whose
+	 * source is inside or on the shell's top sphere is refused. A point or
+	 * spot light is refused. Entries past #_light_count are not read.
 	 */
 	uint32_t _lights[RBTREND_LIT_ATMOSPHERE_MAX_SHELL_LIGHTS];
 } RBTREND_LIT_ATMOSPHERE_SHELL;

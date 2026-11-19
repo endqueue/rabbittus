@@ -5336,8 +5336,12 @@ blending). As built:
   one list than it holds would evict a set the list uses (fixed: card
   A67, item 63; the approved draft's "a steady frame makes none" held
   only to 16 sets until then).
-- Pending: a shell lit by a placed directional light, once item 58 is
-  built (`test_atmosphere_shell_placed_light` reports it pending).
+- ~~Pending: a shell lit by a placed directional light, once item 58 is
+  built (`test_atmosphere_shell_placed_light` reports it pending).~~ Built
+  with item 58 (2026-11-19, the Mac): a shell takes a placed light's
+  direction and illuminance at its centre, and a placed light whose
+  source is inside or on its top sphere is refused at the send and the
+  compile (`rbtrend_shell_lights_ok`); the test turned on.
 - ABI (`./check.sh --update-abi`): additions only, no break: command 51,
   its parameters, the shell struct, the two macros.
 Tests (`rabbittustests`, Metal's validation with warnings fatal, Debug
@@ -5351,7 +5355,8 @@ against hand composition), `_inside` (0.169% against section 4b; see
 the note under A65 below),
 `_far` (the ground's edge within half a texel at 1e7 and 1e9 off, no
 speckle; metres against kilometres 0.098%), `_placed_light` (point and
-spot refused; the placed light pending), `test_atmosphere_no_sky`,
+spot refused; the placed light since item 58, 2026-11-19),
+`test_atmosphere_no_sky`,
 `test_atmosphere_shell_unsupported`, `test_frame_allocations` (a scene
 switched between a sky and none every frame and two shells: 0 of ours),
 and `rbtrend_contract_tests`, `rbtrendfeatures_tests` headless.
@@ -6115,6 +6120,87 @@ beside the caller's headers (version 1, seven critique passes), approved 2026-11
 `test_atmosphere_shell_placed_light` and the refusal of a placed light
 inside a shell's top sphere (item 52's stage 4).
 
+**Built 2026-11-19 on the Mac (M5 Pro, Metal; D3D12 and Vulkan written
+through Carrottus GPU with no backend branch, never built: card X25), from
+the approved draft, every question a.**
+- `RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED` = 3 (`rbtrendlit.h`), the
+  frozen `RBTREND_LIT_SCENE_LIGHT`'s `_position` its source, `_range` its
+  reference distance D, `_radius` its disc at D; the comments the draft
+  names [CHANGED] (the type's definition of "directional light", the
+  light's members, `set_lights`' and `set_view`'s, the cascade fit's
+  `light_direction`, the atmosphere's `sun_count`, the shell's `_lights`,
+  LIT_SHADOW_MASK's, LIT_PATH_TRACE's and LIT_ATMOSPHERE_SHELLS'), and
+  the clouds' layer `_lights` (a placed light's values at the eye, as the
+  fog's draft says for the fog; shape chosen in the build).
+- `set_lights`' checks in the draft's order, each its message: the type
+  (`> DIRECTIONAL_PLACED`), a `_direction` of 0 on a spot or directional
+  light only, a `_range` not above 0 on a point, spot or placed light
+  ("a point, spot or placed directional light"), a placed light's
+  `_radius` not above 0 or above 0.5; directional of both kinds counted
+  against the four (`rbtrend_lit_type_directional()`,
+  `rbtrendlit_internal.hpp`); `rbtrend_lit_scene_directional_slot` and
+  `rbtrend_lit_kind_fits` take both, so LIT_SHADOW_MASK
+  (`rbtrendcommands.cpp`, `rbtrendraytracing.cpp`), the shells and the
+  clouds (send and compile) take a placed light.
+- The scene's directional block gains `place_reference` (the source, D;
+  D 0 for a light from one direction) and `placed_radiance_radius` (the
+  radiance at D, R = D sin(radius) in double): 32 bytes a light, the block
+  16,336 bytes of Vulkan's guaranteed 16,384. Each commit
+  (`rbtrend_lit_scene_resolve_placed`, first, so `set_lights`, `set_view`
+  and every other setter) writes a placed light's values at the eye into
+  `direction_versine` and `radiance_disc` in double, rounded once
+  (`rbtrend_lit_placed_values_at`): the sky's disc, the sky-view, the
+  aerial volume, the environment fill, the atmosphere's frame, the fog
+  and the clouds read them unchanged.
+- One shader function, `directional_at()` (`rbtrend_lit_scene.slang`): a
+  light from one direction its stored values bit for bit and an unbounded
+  reach; a placed one's direction, radiance (D / d')^2, versine
+  (q^2 / (1 + sqrt(1 - q^2)), capped at 1 - cos 0.5) and reach d - R, the
+  distance scaled by its largest part so no square overflows. Read by the
+  lit surface (with `lit_atmosphere_sun_transmittance_toward()`, the
+  transmittance along the point's own direction; the old call kept for
+  the eye's readers), LIT_SHADOW_MASK (its rays to min(`_max_distance`,
+  reach)), the path tracer's next event (min(1e30, reach)) and its misses
+  (each disc from the ray's origin), and LIT_TRACE_REFLECTIONS' hits.
+- Shells: a placed light's direction and illuminance at the shell's
+  centre in double (`rbtrend_lit_placed_values_at`); a source inside or
+  on the top sphere refused at the send and at the compile, naming the
+  shell, the slot and the light, with the distance and the top.
+- ABI: one enumerator added, no break (`abi.txt`); no version raise
+  (0.3 untagged, card X2). Misuse harnesses regenerated, unchanged.
+- Tests (rabbittustests; Metal's validation with warnings fatal, Debug
+  and Release, both devices; each seen failing first, every one refused
+  at set_lights before the build: "light 0 has type 3"):
+  `test_lit_placed_refusals` (T1), `_matches_directional` (T2: 0 apart
+  at the texel read), `_sides` (T3: the rule within 4.9e-4, the turn
+  0.0476 rad across 4 m at 40), `_inverse_square` (T4, T5: 0.25 and
+  0.0625 exactly; inside and at the surface the same, 0.07% from
+  (1 / R)^2), `_sky` (T6: every disc texel 0 apart from the ordinary
+  light's, the disc's texel 204 and 205 at D and 2D, 9 and 5 texels; the
+  sky-view the same bits), `test_atmosphere_placed_sun_through_air`
+  (T11: 9.2e-4 at 1e4 radii, a half float's step; the terminator's far
+  texel 0.0744 of its bare light against Math's 0.0743, the near one
+  black), `test_lit_placed_cascades` (T12: 31 shadowed texels each, at
+  most 1 apart), `test_rt_shadow_mask_placed` (T8: shadow 0 / lit 108;
+  beyond the source 126; penumbra 8 texels at 0.2, 4 at 0.05, 8 under an
+  ordinary light of the rule's disc), `test_rt_path_trace_placed` (T9:
+  0.9994 against 1.0000; the reflected square 0.1625 lit from its side,
+  0.0000 under a light from the eye's side), and
+  `test_atmosphere_shell_placed_light` (T10: the brightest columns 49 and
+  14 about the middle 32, an ordinary light's 49 and 49; the refusals);
+  `test_frame_allocations` (T13: 100 shell frames and 100 traced frames
+  under a placed light, the eye moved each frame: 0 of ours each);
+  `test_lit_light_refusals`' type refusal moved to 4;
+  `rbtrend_contract_tests` (the value 3). T7: every other test's printed
+  figures the same as before the build (Debug and Release outputs
+  compared, figures for figures). `rbtrendreflect_tests`' two offsets in
+  the scene block re-recorded (the directional entry 112 bytes).
+- Measured (T14, `test_lit_placed_measure`, Release, no validation, the
+  M5 Pro, submit to idle, the mean of 50 after 10, a lit face over
+  2560 x 1440; two runs, each on both devices): one ordinary light 0.650
+  to 0.743 ms (one cold first reading of 0.962), one placed light 0.643
+  to 0.730 ms: the difference, -0.012 to +0.062 ms, is inside the run's
+  noise, as the draft's estimate (under 0.01 ms) has it.
 ### 59. Block-compressed textures: created, uploaded with their levels, read back (card A54, decided 2026-11-17)
 
 Decided 2026-11-17 with you: `rbtrend_block_formats_draft.h` approved,

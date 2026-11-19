@@ -27,7 +27,12 @@ struct rbtrend_lit_light_block {
 	float outer_shadow[4];
 };
 
-/* RbtrendLitDirectional: a directional light. */
+/* RbtrendLitDirectional: a directional light, of either kind. For a
+ * placed one (RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED) direction_versine
+ * and radiance_disc's rgb hold the type's rule at the scene's eye, worked
+ * out by each commit (rbtrend_lit_scene_resolve_placed), and the shaders
+ * work out its values at each point from place_reference and
+ * placed_radiance_radius (rbtrend_lit_scene.slang, directional_at()). */
 struct rbtrend_lit_directional_block {
 	/* xyz unit, towards the light; w 1 - cos of its radius. */
 	float direction_versine[4];
@@ -39,7 +44,35 @@ struct rbtrend_lit_directional_block {
 	/* x its shadow's kind (RBTREND_LIT_DIRECTIONAL_*), y its first view, z
 	 * how many. */
 	uint32_t shadow_views[4];
+	/* A placed light's: xyz its source's place, w its reference distance
+	 * D; all 0 for a light from one direction (w 0 says which). */
+	float place_reference[4];
+	/* A placed light's: rgb its radiance at D, w its source's radius R =
+	 * D sin(its angular radius at D); 0 for a light from one direction. */
+	float placed_radiance_radius[4];
 };
+
+/* Whether a light of [type] is a directional light, of either kind
+ * (rbtrendlit.h, RBTREND_LIT_LIGHT_TYPE). */
+static inline bool rbtrend_lit_type_directional(uint32_t type) {
+	return type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL || type == RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED;
+}
+
+/* A placed directional light's values at a point, by the type's rule
+ * (rbtrendlit.h): the way towards its source, unit; 1 - cos of its disc's
+ * angular radius there; its radiance there. */
+struct rbtrend_lit_placed_values {
+	float direction[3];
+	float versine;
+	float radiance[3];
+};
+
+/* [d]'s values at [point] (the scene's space), worked out in double from
+ * the block's floats and rounded once, so the same bits on every machine
+ * (card A63's contraction off). [d] is a placed light's
+ * (place_reference[3] above 0). A point at the source's place (distance 0)
+ * takes +Y. */
+void rbtrend_lit_placed_values_at(const rbtrend_lit_directional_block &d, const double point[3], rbtrend_lit_placed_values &out);
 
 /* RbtrendLitDirectional's kinds of shadow, as the shader has them. */
 enum : uint32_t {

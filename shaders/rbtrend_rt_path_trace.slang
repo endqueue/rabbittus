@@ -441,17 +441,19 @@ float3 next_events<B : IRtBsdf>(B bsdf, Hit hit, float3 origin, TraceParams para
         }
     }
     // Each directional light over its disc (a delta light with no disc: no
-    // MIS).
+    // MIS), as it is at the hit (a placed light's from its source, its ray
+    // stopping at its source's surface).
     for (uint d = 0u; d < min(u_lit_scene.directional_count, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS)); ++d) {
-        float3 sun = u_lit_scene.directional[d].radiance_disc.rgb;
+        DirectionalAt at = directional_at(d, hit.position);
+        float3 sun       = at.radiance;
         if (!any(sun > float3(0.0, 0.0, 0.0)))
             continue;
-        float versine = u_lit_scene.directional[d].direction_versine.w;
-        float3 axis   = normalize(u_lit_scene.directional[d].direction_versine.xyz);
+        float versine = at.versine;
+        float3 axis   = normalize(at.direction);
         float cos_max = 1.0 - versine;
         bool disc     = cos_max < 1.0;
         float3 l      = disc ? rt_cone(axis, cos_max, u1) : axis;
-        if (dot(l, hit.geometric) > GRAZING && rt_visible(origin, l, 1e30, params.cull_mask)) {
+        if (dot(l, hit.geometric) > GRAZING && rt_visible(origin, l, min(1e30, at.reach), params.cull_mask)) {
             float bsdf_pdf;
             float3 f = bsdf.eval(l, bsdf_pdf);
             if (disc) {
@@ -566,10 +568,12 @@ public PathResult trace_path(uint2 pixel, uint index, uint seed, TraceParams par
             }
             add = env;
             for (uint d = 0u; d < min(u_lit_scene.directional_count, uint(RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS)); ++d) {
-                float3 sun    = u_lit_scene.directional[d].radiance_disc.rgb;
-                float versine = u_lit_scene.directional[d].direction_versine.w;
-                float cos_max = 1.0 - versine;
-                if (cos_max < 1.0 && any(sun > float3(0.0, 0.0, 0.0)) && dot(dir, normalize(u_lit_scene.directional[d].direction_versine.xyz)) >= cos_max) {
+                // Each disc as seen from the ray's origin.
+                DirectionalAt at = directional_at(d, origin);
+                float3 sun       = at.radiance;
+                float versine    = at.versine;
+                float cos_max    = 1.0 - versine;
+                if (cos_max < 1.0 && any(sun > float3(0.0, 0.0, 0.0)) && dot(dir, normalize(at.direction)) >= cos_max) {
                     float3 disc = RT_PI * sun / disc_solid_angle(versine);
                     if (bounce > 0u)
                         disc *= power_heuristic(last_bsdf_pdf, 1.0 / disc_solid_angle(versine));
