@@ -563,7 +563,25 @@ struct rbtrend_lit_builtins {
 	rbtrend_compute_pipeline clouds_march_pipeline{nullptr};
 	rbtrend_compute_pipeline clouds_reconstruct_pipeline{nullptr};
 	std::vector<format_pipeline> clouds_composite_pipelines{};
+	/* Rend's particles (rbtrendparticles_internal.hpp): their shaders by
+	 * RBTREND_PARTICLES_SHADER_INDEX_, the layouts of a step's two sets
+	 * (the simulation's set 1, the control's set 0) and of a particle
+	 * pipeline's set 2, a step's compute pipelines by the same index, and
+	 * a 3D placeholder for a system with no noise volume; each made by the
+	 * first system or the first ask for a shader or the layout. */
+	rbtrend_shader particle_shaders[11]{};
+	rbtrend_binding_layout particle_sim_layout{nullptr};
+	rbtrend_binding_layout particle_control_layout{nullptr};
+	rbtrend_binding_layout particle_draw_layout{nullptr};
+	rbtrend_compute_pipeline particle_pipelines[7]{};
+	rbtrend_texture3d placeholder_3d{nullptr};
+	rbtrend_texture_view placeholder_3d_view{nullptr};
 };
+
+/* Destroys what rbtrend_lit_builtins holds for particles
+ * (rbtrendparticles.cpp), pipelines before layouts; from
+ * rbtrend_lit_builtins_destroy(). */
+void rbtrend_particles_builtins_destroy(rbtrend_instance instance);
 
 /* Destroys what rbtrend_lit_builtins holds, pipelines before layouts, from
  * rbtrend_builtins_destroy(). */

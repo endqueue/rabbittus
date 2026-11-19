@@ -6,6 +6,7 @@
 #include "rbtrendatmosphere_internal.hpp"
 #include "rbtrendfog_internal.hpp"
 #include "rbtrendclouds_internal.hpp"
+#include "rbtrendparticles_internal.hpp"
 
 #include "math/rbtmathnoise.h"
 #include "rbtrendraytracing_internal.hpp"
@@ -521,6 +522,7 @@ void rbtrend_command_list_reset(rbtrend_command_list cmd_list) {
 	cmd_list->used_handles.clear();
 	cmd_list->buffer_states.clear();
 	cmd_list->materials.clear();
+	cmd_list->particle_steps.clear();
 	rbtrend_render_target_give_back(cmd_list);
 	cmd_list->compiled           = false;
 	cmd_list->present_swap_chain = nullptr;
@@ -571,6 +573,9 @@ static void rbtrend_cmd_point_at_copies(rbtrend_command_list cmd_list) {
 			break;
 		case RBTREND_COMMAND_LIT_CLOUDS:
 			cmd._params._lit_clouds._layers = (const RBTREND_CLOUD_LAYER *)copy;
+			break;
+		case RBTREND_COMMAND_PARTICLES_STEP:
+			cmd._params._particles_step._steps = (const RBTREND_PARTICLES_STEP *)copy;
 			break;
 		default:
 			break;
@@ -1094,6 +1099,58 @@ static bool rbtrend_clouds_send_checks(rbtrend_command_list cmd_list, const RBTR
 
 /* rbtrend_command_list_send's checks and copies. Throws std::bad_alloc from the
  * list's vectors, which rbtrend_command_list_send catches. */
+/* The checks PARTICLES_STEP makes at the send (rbtrendcommands.h), in its
+ * members' order and each step's: each its own message. False, reported,
+ * at the first. */
+static bool rbtrend_particles_send_checks(rbtrend_command_list cmd_list, const RBTREND_COMMAND &cmd) {
+	const auto &p   = cmd._params._particles_step;
+	const char *who = "PARTICLES_STEP";
+	if (!p._scene)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _scene is NULL", who);
+	if (p._scene->instance != cmd_list->instance)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _scene is of another instance", who);
+	if (p._depth) {
+		if (p._depth->instance != cmd_list->instance)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _depth is of another instance", who);
+		if (p._depth->view_type != RBTREND_TEXTURE_VIEW_TYPE_SHADER_RESOURCE || p._depth->desc.shape != RBTREND_TEXTURE_VIEW_SHAPE_2D ||
+		    p._depth->desc.aspect != RBTREND_TEXTURE_VIEW_ASPECT_DEPTH)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _depth is not a SHADER_RESOURCE 2D view of depth", who);
+	}
+	if (p._step_count > RBTREND_PARTICLES_MAX_STEPS)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _step_count %u is above RBTREND_PARTICLES_MAX_STEPS, %u", who, p._step_count,
+		                          RBTREND_PARTICLES_MAX_STEPS);
+	if (p._step_count > 0 && !p._steps)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _steps is NULL and _step_count %u", who, p._step_count);
+	for (uint32_t i = 0; i < p._step_count; ++i) {
+		const RBTREND_PARTICLES_STEP &s = p._steps[i];
+		if (!s._particles)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: step %u's _particles is NULL", who, i);
+		if (RBT_STALE(s._particles, "rbtrend_command_list_send", "_particles"))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: step %u's _particles is destroyed", who, i);
+		if (s._particles->instance != cmd_list->instance)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: step %u's _particles is of another instance", who, i);
+		for (uint32_t j = 0; j < i; ++j)
+			if (p._steps[j]._particles == s._particles)
+				return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: steps %u and %u step one system twice", who, j, i);
+		if (!(std::isfinite(s._delta_time) && s._delta_time >= 0.0f && s._delta_time <= 1.0f))
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: step %u's _delta_time %g is outside 0 to 1", who, i, (double)s._delta_time);
+		const struct {
+			const float *values;
+			uint32_t count;
+			const char *name;
+		} vectors[5] = {{s._anchor, 3, "_anchor"},
+		                {s._anchor_moved, 3, "_anchor_moved"},
+		                {s._emitter, 12, "_emitter"},
+		                {s._emitter_velocity, 3, "_emitter_velocity"},
+		                {s._wind, 3, "_wind"}};
+		for (const auto &v : vectors)
+			for (uint32_t c = 0; c < v.count; ++c)
+				if (!std::isfinite(v.values[c]))
+					return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: step %u's %s[%u] is not finite", who, i, v.name, c);
+	}
+	return true;
+}
+
 static void rbtrend_send_command_recorded(
     rbtrend_command_list cmd_list,
     RBTREND_COMMAND cmd) {
@@ -2112,6 +2169,33 @@ static void rbtrend_send_command_recorded(
 		else
 			p._layers = nullptr;
 	}
+	if (cmd._type == RBTREND_COMMAND_PARTICLES_STEP) {
+		if (!rbtrend_particles_send_checks(cmd_list, cmd)) {
+			cmd_list->recording_error = true;
+			return;
+		}
+		// The steps into the list's own storage, as the shells are.
+		auto &p = cmd._params._particles_step;
+		if (p._step_count > 0)
+			p._steps = (const RBTREND_PARTICLES_STEP *)keep(p._steps, sizeof(RBTREND_PARTICLES_STEP) * p._step_count);
+		else
+			p._steps = nullptr;
+	}
+	if (cmd._type == RBTREND_COMMAND_DRAW_PARTICLES) {
+		const rbtrend_particles particles = cmd._params._draw_particles._particles;
+		const char *fault                 = nullptr;
+		if (!particles)
+			fault = "_particles is NULL";
+		else if (RBT_STALE(particles, "rbtrend_command_list_send", "_particles"))
+			fault = "_particles is destroyed";
+		else if (particles->instance != cmd_list->instance)
+			fault = "_particles is of another instance";
+		if (fault) {
+			rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "DRAW_PARTICLES: %s", fault);
+			cmd_list->recording_error = true;
+			return;
+		}
+	}
 	if (cmd._type == RBTREND_COMMAND_LIT_AMBIENT_OCCLUSION) {
 		const auto &p = cmd._params._lit_ambient_occlusion;
 		const char *fault = nullptr;
@@ -2937,6 +3021,30 @@ static bool rbtrend_cmd_prepare_pass_images(
 			// slot was checked when the command was sent.
 			pass_slots[command._params._set_material._slot] = command._params._set_material._material->set;
 			break;
+		case RBTREND_COMMAND_DRAW_PARTICLES: {
+			// Its arguments, and its set at RBTREND_PARTICLES_SET, then read
+			// as a draw's sets are. A pipeline that isn't a particle one is
+			// refused when the command is reached.
+			rbtrend_particles particles     = command._params._draw_particles._particles;
+			rbtrend_buffer_store *arguments = &particles->arguments->parts[0].store;
+			bool known                      = false;
+			for (rbtrend_buffer_store *store : argument_stores)
+				if (store == arguments)
+					known = true;
+			if (!known)
+				rbtrend_push(argument_stores, arguments);
+			pass_slots[RBTREND_PARTICLES_SET] = particles->draw->set;
+			if (!pass_pipeline)
+				break;
+			for (uint32_t slot = 0; slot < pass_pipeline->desc._binding_layout_count; ++slot) {
+				if (!pass_slots[slot])
+					continue;
+				if (!rbtrend_pass_images_add_set(cmd_list, images, pass_slots[slot], slot, pass_pipeline->storage_writes))
+					return false;
+				rbtrend_storage_stores_add_set(stores, pass_slots[slot], cmd_list->compiled_frame, slot, pass_pipeline->storage_writes);
+			}
+			break;
+		}
 		case RBTREND_COMMAND_DRAW:
 		case RBTREND_COMMAND_DRAW_INDEXED:
 		case RBTREND_COMMAND_DRAW_INSTANCED:
@@ -5901,6 +6009,311 @@ static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_
 	return true;
 }
 
+/* ---- Particles (PARTICLES_STEP, DRAW_PARTICLES; rbtrendparticles.h) ------- */
+
+/* The stages of a step, in their order (rbtrendparticles.h, "A step on
+ * the GPU"). */
+enum : uint32_t {
+	RBTREND_PARTICLES_STAGE_CLEAR       = 0,
+	RBTREND_PARTICLES_STAGE_SIMULATE    = 1,
+	RBTREND_PARTICLES_STAGE_SPAWN       = 2,
+	RBTREND_PARTICLES_STAGE_ARGUMENTS   = 3,
+	RBTREND_PARTICLES_STAGE_SORT        = 4,
+};
+
+/* Whether [particles] has a step earlier in the compile in progress. */
+static bool rbtrend_particles_listed(rbtrend_command_list cmd_list, rbtrend_particles particles) {
+	for (const rbtrend_particles_use &use : cmd_list->particle_steps)
+		if (use.particles == particles)
+			return true;
+	return false;
+}
+
+/* Whether step [s], clearing where [clear], takes part in [stage]. */
+static bool rbtrend_particles_in_stage(const RBTREND_PARTICLES_STEP &s, uint8_t clear, uint32_t stage) {
+	const rbtrend_particles particles = s._particles;
+	switch (stage) {
+	case RBTREND_PARTICLES_STAGE_CLEAR:
+		return clear != 0;
+	case RBTREND_PARTICLES_STAGE_SPAWN:
+		return particles->has_effect && s._spawn_count > 0;
+	case RBTREND_PARTICLES_STAGE_SORT:
+		return particles->has_effect && particles->sorted;
+	default:
+		return particles->has_effect;
+	}
+}
+
+/* Moves the argument buffer of every step of [stage] into [state], each
+ * not there already, with one barrier, tracked as rbtrend_cmd_transition_
+ * store tracks one. Throws std::bad_alloc. */
+static void rbtrend_cmd_particles_arguments_to(rbtrend_command_list cmd_list, const RBTREND_PARTICLES_STEP *steps, uint32_t count, const uint8_t *clears,
+                                              uint32_t stage, CRGPU_RESOURCE_STATE state) {
+	eq::array<crgpu_buffer_barrier> &barriers = cmd_list->particle_barriers;
+	barriers.clear();
+	for (uint32_t i = 0; i < count; ++i) {
+		if (!rbtrend_particles_in_stage(steps[i], clears[i], stage))
+			continue;
+		rbtrend_buffer_store *store = &steps[i]._particles->arguments->parts[0].store;
+		rbtrend_cmd_use_store(cmd_list, store);
+		rbtrend_command_list_t::buffer_state *tracked = nullptr;
+		for (auto &known : cmd_list->buffer_states)
+			if (known.store == store)
+				tracked = &known;
+		if (!tracked) {
+			cmd_list->buffer_states.push_back({store, store->use_state});
+			tracked = &cmd_list->buffer_states.back();
+		}
+		if (tracked->state == state)
+			continue;
+		rbtrend_push(barriers, crgpu_buffer_barrier{{CR_STRUCT_TYPE_GPU_BUFFER_BARRIER, nullptr}, store->buffer, tracked->state, state});
+		tracked->state = state;
+		for (auto &hazard : cmd_list->storage_hazards) {
+			if (hazard.store != store)
+				continue;
+			hazard.accessed = false;
+			hazard.written  = false;
+		}
+	}
+	if (!barriers.empty())
+		crgpu_command_list_pipeline_barrier(cmd_list->cmd_list, barriers.data, (uint32_t)barriers.size(), nullptr, 0);
+}
+
+/* One stage of a PARTICLES_STEP over every step that takes part in it
+ * ([pipeline] Rend's for [stage], or a sort pass's [sort_pass]): every
+ * set the stage reads made ready together (one barrier for all the
+ * systems), [pipeline] bound once and [scene]'s set at slot 0 where the
+ * pipeline reads the scene, then a system's set, its push constants and
+ * its dispatch each: of [indirect]'s offset into its arguments (UINT32_MAX
+ * for a direct one), or direct of [groups] groups (0: from the stage: the
+ * clear's capacity, the spawn's count). False, reported, if a dispatch
+ * can't be recorded. Throws std::bad_alloc. */
+static bool rbtrend_cmd_particles_stage(rbtrend_command_list cmd_list, rbtrend_compute_pipeline pipeline, rbtrend_lit_scene scene,
+                                       const RBTREND_PARTICLES_STEP *steps, uint32_t count, const uint8_t *clears, uint32_t stage, uint32_t sort_pass,
+                                       uint32_t indirect, uint32_t groups) {
+	const bool control  = stage == RBTREND_PARTICLES_STAGE_CLEAR || stage == RBTREND_PARTICLES_STAGE_ARGUMENTS;
+	const uint32_t slot = control ? 0u : 1u;
+	if (control)
+		rbtrend_cmd_particles_arguments_to(cmd_list, steps, count, clears, stage, CRGPU_RESOURCE_STATE_UNORDERED_ACCESS);
+	else if (indirect != UINT32_MAX)
+		rbtrend_cmd_particles_arguments_to(cmd_list, steps, count, clears, stage, CRGPU_RESOURCE_STATE_INDIRECT_ARGUMENT);
+	eq::array<rbtrend_pass_image> &images = cmd_list->pass_images;
+	eq::array<rbtrend_pass_store> &stores = cmd_list->pass_stores;
+	images.clear();
+	stores.clear();
+	// The sort's shaders declare the scene's set and read nothing of it:
+	// it is left unbound (Metal refuses a set bound for nothing).
+	rbtrend_binding_set scene_set = control || stage == RBTREND_PARTICLES_STAGE_SORT ? nullptr : scene->material->set;
+	if (scene_set) {
+		if (!rbtrend_pass_images_add_set(cmd_list, images, scene_set, 0, pipeline->storage_writes))
+			return false;
+		rbtrend_storage_stores_add_set(stores, scene_set, cmd_list->compiled_frame, 0, pipeline->storage_writes);
+		rbtrend_cmd_use_handle(cmd_list, scene_set);
+	}
+	bool any = false;
+	for (uint32_t i = 0; i < count; ++i) {
+		if (!rbtrend_particles_in_stage(steps[i], clears[i], stage))
+			continue;
+		any                     = true;
+		rbtrend_particles p     = steps[i]._particles;
+		rbtrend_binding_set set = control ? p->control->set : p->sim->set;
+		if (!rbtrend_pass_images_add_set(cmd_list, images, set, slot, pipeline->storage_writes))
+			return false;
+		rbtrend_storage_stores_add_set(stores, set, cmd_list->compiled_frame, slot, pipeline->storage_writes);
+		rbtrend_cmd_use_handle(cmd_list, set);
+	}
+	if (!any)
+		return true;
+	for (const rbtrend_pass_store &store : stores)
+		rbtrend_cmd_use_store(cmd_list, store.store);
+	rbtrend_cmd_ready_set_resources(cmd_list, images, stores);
+
+	crgpu_command_list cmd = cmd_list->cmd_list;
+	crgpu_command_list_bind_compute_pipeline(cmd, pipeline->pipeline);
+	if (scene_set)
+		crgpu_command_list_bind_compute_descriptor_sets(cmd, pipeline->pipeline, 0, &scene_set->sets[rbtrend_binding_set_frame_slot(scene_set, cmd_list->compiled_frame)],
+		                                                1);
+	for (uint32_t i = 0; i < count; ++i) {
+		if (!rbtrend_particles_in_stage(steps[i], clears[i], stage))
+			continue;
+		rbtrend_particles p     = steps[i]._particles;
+		rbtrend_binding_set set = control ? p->control->set : p->sim->set;
+		crgpu_command_list_bind_compute_descriptor_sets(cmd, pipeline->pipeline, slot, &set->sets[rbtrend_binding_set_frame_slot(set, cmd_list->compiled_frame)], 1);
+		const uint32_t capacity = p->desc.capacity;
+		if (pipeline->push_constant_end == 0) {
+			// The scan reads none: Metal refuses bytes bound for nothing.
+		} else if (sort_pass != UINT32_MAX) {
+			const rbtrend_particles_sort_push push{{sort_pass, 0u, 0u, 0u}};
+			crgpu_command_list_push_compute_constants(cmd, pipeline->pipeline, 0, sizeof(push), &push);
+		} else {
+			const rbtrend_particles_step_push push = rbtrend_particles_push_of(steps[i], capacity, clears[i]);
+			crgpu_command_list_push_compute_constants(cmd, pipeline->pipeline, 0, sizeof(push), &push);
+		}
+		if (indirect != UINT32_MAX) {
+			const CR_RESULT sr = crgpu_command_list_dispatch_indirect(cmd, p->arguments->parts[0].store.buffer, indirect);
+			if (CR_FAILED(sr))
+				return rbtrend_cmd_report(cmd_list, rbtrend_result_from_cr(sr), "PARTICLES_STEP: an indirect dispatch can't be recorded (%s)", cr_result_str(sr));
+			continue;
+		}
+		uint32_t x = groups;
+		if (stage == RBTREND_PARTICLES_STAGE_CLEAR)
+			x = (capacity + RBTREND_PARTICLES_STEP_GROUP - 1) / RBTREND_PARTICLES_STEP_GROUP;
+		else if (stage == RBTREND_PARTICLES_STAGE_SPAWN)
+			x = ((steps[i]._spawn_count < capacity ? steps[i]._spawn_count : capacity) + RBTREND_PARTICLES_STEP_GROUP - 1) / RBTREND_PARTICLES_STEP_GROUP;
+		crgpu_command_list_dispatch(cmd, x, 1, 1);
+	}
+	return true;
+}
+
+/* PARTICLES_STEP, outside a pass: the systems' views and the scene checked
+ * again (a system's noise for NOISE, its depth for COLLISION and the
+ * command's, the scene's view for a collision), the systems listed for the
+ * submission, then the stages, each for every system before the next: the
+ * clears (a step's `_clear`, and a system's first step), the simulations
+ * (indirect), the spawns, the arguments, the counts copied to each
+ * system's readback, and the sorts' four passes of a count, a scan and a
+ * scatter. False, reported, at the first refusal or if a pipeline or set
+ * can't be made. Throws std::bad_alloc. */
+static bool rbtrend_cmd_particles_step(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command) {
+	const auto &p             = command._params._particles_step;
+	const char *who           = "PARTICLES_STEP";
+	rbtrend_instance instance = cmd_list->instance;
+	const uint32_t count      = p._step_count;
+	if (count == 0)
+		return true;
+	if (!rbtrend_particles_prepare(instance))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_REND_GPU_FAILURE, "%s: Rend's particle pipelines can't be made", who);
+	if (p._depth && !rbtrend_cmd_range_written(cmd_list, rbtrend_texture_view_range(p._depth)))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: _depth has nothing in it, from before the list or earlier in it", who);
+	bool inverse = false;
+	for (float v : p._scene->block.inverse_view_projection)
+		inverse = inverse || v != 0.0f;
+	for (uint32_t i = 0; i < count; ++i) {
+		const rbtrend_particles s = p._steps[i]._particles;
+		if (s->has_effect && (s->modules & RBTREND_PARTICLES_MODULE_NOISE) && !s->noise)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: step %u's system's effect has NOISE and it has no noise volume (rbtrend_particles_set_noise())", who, i);
+		if (s->has_effect && (s->modules & RBTREND_PARTICLES_MODULE_COLLISION) && !s->depth)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+			                          "%s: step %u's system's effect has COLLISION and it has no depth (rbtrend_particles_set_depth())", who, i);
+		if (s->depth && s->depth != p._depth)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: step %u's system's depth isn't the command's _depth", who, i);
+		if (s->has_effect && (s->modules & RBTREND_PARTICLES_MODULE_COLLISION) && !inverse)
+			return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s: the scene's view_projection can't be inverted, which step %u's collision reads",
+			                          who, i);
+	}
+	if (!rbtrend_cmd_use_material(cmd_list, p._scene->material))
+		return false;
+	// Which steps clear: their own `_clear`, and a system's first step (no
+	// step submitted, none earlier in this compile), whose buffers hold no
+	// record yet. Worked out before this command's steps are listed.
+	eq::array<uint8_t> &clear_flags = cmd_list->particle_clears;
+	clear_flags.clear();
+	for (uint32_t i = 0; i < count; ++i)
+		rbtrend_push(clear_flags, (uint8_t)0);
+	uint8_t *clears = clear_flags.data;
+	for (uint32_t i = 0; i < count; ++i) {
+		const rbtrend_particles s = p._steps[i]._particles;
+		const bool first          = s->steps_submitted == 0 && !rbtrend_particles_listed(cmd_list, s);
+		clears[i] = (uint8_t)((p._steps[i]._clear || first ? RBTREND_PARTICLES_STEP_CLEAR : 0u) | (first ? RBTREND_PARTICLES_STEP_FIRST : 0u));
+	}
+	for (uint32_t i = 0; i < count; ++i) {
+		const rbtrend_particles s = p._steps[i]._particles;
+		if (!rbtrend_cmd_use_material(cmd_list, s->sim) || !rbtrend_cmd_use_material(cmd_list, s->control))
+			return false;
+		rbtrend_cmd_use_handle(cmd_list, s);
+		rbtrend_push(cmd_list->particle_steps, rbtrend_particles_use{s, cmd_list->compiled_frame});
+	}
+
+	const rbtrend_lit_builtins &lit                = instance->builtins.lit;
+	const rbtrend_compute_pipeline *const pipelines = lit.particle_pipelines;
+	const RBTREND_PARTICLES_STEP *steps            = p._steps;
+	if (!rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_CLEAR], p._scene, steps, count, clears,
+	                                 RBTREND_PARTICLES_STAGE_CLEAR, UINT32_MAX, UINT32_MAX, 0) ||
+	    !rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_SIMULATE], p._scene, steps, count, clears,
+	                                 RBTREND_PARTICLES_STAGE_SIMULATE, UINT32_MAX, RBTREND_PARTICLES_ARGS_SIMULATE, 0) ||
+	    !rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_SPAWN], p._scene, steps, count, clears,
+	                                 RBTREND_PARTICLES_STAGE_SPAWN, UINT32_MAX, UINT32_MAX, 0) ||
+	    !rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_ARGUMENTS], p._scene, steps, count, clears,
+	                                 RBTREND_PARTICLES_STAGE_ARGUMENTS, UINT32_MAX, UINT32_MAX, 1))
+		return false;
+
+	// Each system's count into its readback's copy of this frame: every
+	// step's, a system with no effect's the clear's 0.
+	{
+		for (uint32_t i = 0; i < count; ++i) {
+			rbtrend_buffer_store *store = &steps[i]._particles->arguments->parts[0].store;
+			rbtrend_cmd_use_store(cmd_list, store);
+			rbtrend_cmd_transition_store(cmd_list, store, CRGPU_RESOURCE_STATE_COPY_SOURCE);
+		}
+		for (uint32_t i = 0; i < count; ++i) {
+			const rbtrend_particles s = steps[i]._particles;
+			crgpu_command_list_copy_buffer(cmd_list->cmd_list, s->arguments->parts[0].store.buffer, s->readback, RBTREND_PARTICLES_ARGS_ALIVE,
+			                               (uint64_t)cmd_list->compiled_frame * RBTREND_PARTICLES_READBACK_STRIDE, sizeof(uint32_t));
+		}
+	}
+
+	// The sorts: each pass's count, scan and scatter for every sorted
+	// system before the next.
+	for (uint32_t pass = 0; pass < 4; ++pass) {
+		if (!rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_SORT_COUNT], p._scene, steps, count, clears,
+		                                 RBTREND_PARTICLES_STAGE_SORT, pass, RBTREND_PARTICLES_ARGS_SORT, 0) ||
+		    !rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_SORT_SCAN], p._scene, steps, count, clears,
+		                                 RBTREND_PARTICLES_STAGE_SORT, pass, UINT32_MAX, 1) ||
+		    !rbtrend_cmd_particles_stage(cmd_list, pipelines[RBTREND_PARTICLES_SHADER_INDEX_SORT_SCATTER], p._scene, steps, count, clears,
+		                                 RBTREND_PARTICLES_STAGE_SORT, pass, RBTREND_PARTICLES_ARGS_SORT, 0))
+			return false;
+	}
+	return true;
+}
+
+/* DRAW_PARTICLES, inside a pass with [pipeline] bound: a particle pipeline
+ * (the particles' layout at RBTREND_PARTICLES_SET), the system stepped
+ * earlier in the list or in a submission before it, its depth set for
+ * SOFT, an index buffer set for a mesh ([index_buffer_bound]); its set put
+ * at RBTREND_PARTICLES_SET, the pipeline's vertex buffers and sets bound as
+ * a draw's, and an indirect draw of its last step's arguments (moved to
+ * that state before the pass), indexed for a mesh. False, reported,
+ * at the first refusal. Throws std::bad_alloc. */
+static bool rbtrend_cmd_draw_particles(rbtrend_command_list cmd_list, const RBTREND_COMMAND &command, rbtrend_graphics_pipeline pipeline,
+                                      bool index_buffer_bound, rbtrend_cmd_vertex_slot *vertex_slots, crgpu_buffer_view *applied_vertex_views, rbtrend_binding_set *slot_sets,
+                                      rbtrend_binding_set *applied_sets) {
+	rbtrend_particles particles = command._params._draw_particles._particles;
+	const char *who            = "DRAW_PARTICLES";
+	if (pipeline->is_mesh)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s with a mesh shader pipeline", who);
+	if (pipeline->desc._binding_layout_count <= RBTREND_PARTICLES_SET ||
+	    pipeline->desc._binding_layouts[RBTREND_PARTICLES_SET] != cmd_list->instance->builtins.lit.particle_draw_layout)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT,
+		                          "%s with a pipeline whose set RBTREND_PARTICLES_SET isn't of rbtrend_particles_get_layout()'s layout", who);
+	if (particles->steps_submitted == 0 && !rbtrend_particles_listed(cmd_list, particles))
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s of a system never stepped, earlier in the list or in a submission before it", who);
+	const bool mesh = particles->has_effect && particles->draw_kind == RBTREND_PARTICLE_DRAW_MESH;
+	if (mesh && !index_buffer_bound)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s of a system drawn as a mesh with no index buffer set (SET_INDEX_BUFFER)", who);
+	if ((particles->modules & RBTREND_PARTICLES_MODULE_SOFT) && !particles->depth)
+		return rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "%s of a system whose effect has SOFT and which has no depth (rbtrend_particles_set_depth())",
+		                          who);
+	rbtrend_cmd_use_handle(cmd_list, particles);
+	if (!rbtrend_cmd_put_binding_set(cmd_list, RBTREND_PARTICLES_SET, particles->draw->set, slot_sets))
+		return false;
+	RBTREND_COMMAND as_indirect;
+	memset(&as_indirect, 0, sizeof(as_indirect));
+	as_indirect._type = mesh ? RBTREND_COMMAND_DRAW_INDEXED_INDIRECT : RBTREND_COMMAND_DRAW_INDIRECT;
+	if (!rbtrend_cmd_apply_vertex_buffers(cmd_list, pipeline, vertex_slots, applied_vertex_views, as_indirect))
+		return false;
+	if (!rbtrend_cmd_apply_binding_sets(cmd_list, cmd_list->cmd_list, pipeline, slot_sets, applied_sets, cmd_list->compiled_frame))
+		return false;
+	rbtrend_buffer_store *arguments = &particles->arguments->parts[0].store;
+	rbtrend_cmd_use_store(cmd_list, arguments);
+	if (mesh)
+		crgpu_command_list_draw_indexed_indirect(cmd_list->cmd_list, arguments->buffer, RBTREND_PARTICLES_ARGS_DRAW_INDEXED, 1,
+		                                         (uint32_t)sizeof(crgpu_draw_indexed_indirect_args));
+	else
+		crgpu_command_list_draw_indirect(cmd_list->cmd_list, arguments->buffer, RBTREND_PARTICLES_ARGS_DRAW, 1, (uint32_t)sizeof(crgpu_draw_indirect_args));
+	return true;
+}
+
 /* LIT_PATH_TRACE, outside a pass (T10, T11): the TLAS's emitter table built
  * first if anything it reads changed since it was (D6), then one dispatch
  * adding _samples paths a pixel to the target's running mean, and the
@@ -6215,6 +6628,10 @@ static void rbtrend_cmd_use_command_views(rbtrend_command_list cmd_list, const R
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_clouds._depth);
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_clouds._target);
 		break;
+	case RBTREND_COMMAND_PARTICLES_STEP:
+		if (command._params._particles_step._depth)
+			rbtrend_cmd_use_handle(cmd_list, command._params._particles_step._depth);
+		break;
 	case RBTREND_COMMAND_LIT_REFLECT:
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_reflect._depth);
 		rbtrend_cmd_use_handle(cmd_list, command._params._lit_reflect._normal_roughness);
@@ -6267,6 +6684,7 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 	cmd_list->compiled_frame_number = instance->frame_number;
 	cmd_list->timer_uses.clear();
 	cmd_list->materials.clear();
+	cmd_list->particle_steps.clear();
 	if (cmd_list->recording_error) {
 		// What the recording found, at the send that found it.
 		cmd_list->report_send = cmd_list->recording_send;
@@ -6279,8 +6697,38 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 	// Every material's binding set is built before anything is recorded: a
 	// pass looks ahead at the sets its draws read (rbtrend_cmd_prepare_pass_
 	// images), and a SET_MATERIAL inside it has to have one by then.
+	// A material's set built and listed once. False if it can't be built.
+	auto prepare_material = [cmd_list](rbtrend_material material) {
+		for (rbtrend_material listed : cmd_list->materials)
+			if (listed == material)
+				return true;
+		if (!rbtrend_material_prepare(material))
+			return false;
+		cmd_list->materials.push_back(material);
+		return true;
+	};
 	try {
 		for (const RBTREND_COMMAND &command : cmd_list->commands) {
+			// A particle step's scene and its systems' two sets; a particle
+			// draw's set, which its pass looks ahead at.
+			if (command._type == RBTREND_COMMAND_PARTICLES_STEP) {
+				const auto &p = command._params._particles_step;
+				bool built    = p._step_count == 0 || prepare_material(p._scene->material);
+				for (uint32_t i = 0; built && i < p._step_count; ++i)
+					built = prepare_material(p._steps[i]._particles->sim) && prepare_material(p._steps[i]._particles->control);
+				if (!built) {
+					cmd_list->materials.clear();
+					return scope.failed(RBT_RESULT_REND_GPU_FAILURE, "the compile failed");
+				}
+				continue;
+			}
+			if (command._type == RBTREND_COMMAND_DRAW_PARTICLES) {
+				if (!prepare_material(command._params._draw_particles._particles->draw)) {
+					cmd_list->materials.clear();
+					return scope.failed(RBT_RESULT_REND_GPU_FAILURE, "the compile failed");
+				}
+				continue;
+			}
 			// A material set for a draw; and the scene of a reflection
 			// command that reads its environment and lookup texture, which
 			// the scenes' preparation below fills.
@@ -6928,6 +7376,30 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 				bound_compute_pipeline = nullptr;
 				break;
 			}
+			case RBTREND_COMMAND_PARTICLES_STEP: {
+				if (in_pass) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "PARTICLES_STEP inside a rendering pass");
+					ok = false;
+					break;
+				}
+				ok                     = rbtrend_cmd_particles_step(cmd_list, command);
+				bound_compute_pipeline = nullptr;
+				break;
+			}
+			case RBTREND_COMMAND_DRAW_PARTICLES: {
+				if (!in_pass) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "DRAW_PARTICLES outside a rendering pass");
+					ok = false;
+					break;
+				}
+				if (!bound_pipeline) {
+					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "DRAW_PARTICLES in a pass that hasn't set a pipeline");
+					ok = false;
+					break;
+				}
+				ok = rbtrend_cmd_draw_particles(cmd_list, command, bound_pipeline, index_buffer_bound, vertex_slots, applied_vertex_views, slot_sets, applied_sets);
+				break;
+			}
 			case RBTREND_COMMAND_LIT_TRACE_REFLECTIONS: {
 				if (in_pass) {
 					rbtrend_cmd_report(cmd_list, RBT_RESULT_INVALID_ARGUMENT, "LIT_TRACE_REFLECTIONS inside a rendering pass");
@@ -7026,6 +7498,7 @@ RBT_RESULT rbtrend_command_list_compile(rbtrend_command_list cmd_list, RBTREND_E
 		cmd_list->used_handles.clear();
 		cmd_list->buffer_states.clear();
 		cmd_list->materials.clear();
+		cmd_list->particle_steps.clear();
 		cmd_list->present_swap_chain = nullptr;
 	}
 	cmd_list->compiled = ok;
@@ -7148,6 +7621,10 @@ RBT_RESULT rbtrend_command_list_submit(rbtrend_command_list cmd_list, crgpu_comm
 	// Each pass timed in this submission is the slot's time for this frame.
 	for (const auto &use : cmd_list->timer_uses)
 		use.timer->written_frame[(size_t)cmd_list->compiled_frame * use.timer->slot_count + use.slot] = cmd_list->compiled_frame_number;
+	// Each particle step is counted, and the readback it writes marked.
+	for (const rbtrend_particles_use &use : cmd_list->particle_steps)
+		rbtrend_particles_submitted(use.particles, use.frame, serial);
+	cmd_list->particle_steps.clear();
 
 	// A compile is one recording of the Carrottus GPU list, and Carrottus GPU submits a
 	// recording once. The recording may now be running, so the next compile

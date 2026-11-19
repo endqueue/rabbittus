@@ -772,6 +772,16 @@ struct rbtrend_rt_access {
 };
 RBT_PLAIN_DATA(rbtrend_rt_access);
 
+/* A particle system stepped by a compile (RBTREND_COMMAND_PARTICLES_STEP,
+ * rbtrendparticles_internal.hpp), in the list's order: its submission
+ * counts the step and marks the system's readback copy of [frame] as
+ * written by it. */
+struct rbtrend_particles_use {
+	struct rbtrend_particles_t *particles;
+	uint32_t frame;
+};
+RBT_PLAIN_DATA(rbtrend_particles_use);
+
 /* Appends [item] to [array], or throws std::bad_alloc: for the compile's
  * and submit's code, which turns that into RBT_RESULT_OUT_OF_MEMORY where it
  * catches it. */
@@ -899,6 +909,15 @@ typedef struct rbtrend_command_list_t {
 	eq::array<rbtrend_upload_copy> upload_copies{};
 	eq::array<rbtrend_material> lit_materials{};
 	eq::array<uint8_t> open_labels{};
+	/* - particle_steps: the systems the last compile stepped
+	 *   (rbtrend_particles_use), for its submission.
+	 * - particle_barriers: one PARTICLES_STEP stage's indirect argument
+	 *   buffers' barriers, recorded together.
+	 * - particle_clears: each step of one PARTICLES_STEP's clear flags
+	 *   (RBTREND_PARTICLES_STEP_CLEAR, _FIRST; rbtrendparticles_internal.hpp). */
+	eq::array<rbtrend_particles_use> particle_steps{};
+	eq::array<crgpu_buffer_barrier> particle_barriers{};
+	eq::array<uint8_t> particle_clears{};
 	/* - rt_accesses: each acceleration structure's access as the compile
 	 *   walks the list (rbtrendraytracing.h's commands).
 	 * - rt_builds, rt_geometries: one run of build commands' Carrottus GPU builds

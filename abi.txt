@@ -162,6 +162,7 @@ const RBTREND_COMMAND_DRAW_INDIRECT = 17
 const RBTREND_COMMAND_DRAW_INSTANCED = 6
 const RBTREND_COMMAND_DRAW_INSTANCED_INDEXED = 7
 const RBTREND_COMMAND_DRAW_LIST = 25
+const RBTREND_COMMAND_DRAW_PARTICLES = 55
 const RBTREND_COMMAND_DRAW_TEXTURE = 35
 const RBTREND_COMMAND_END_LABEL = 27
 const RBTREND_COMMAND_END_RENDERING = 11
@@ -182,6 +183,7 @@ const RBTREND_COMMAND_LIT_SSR = 45
 const RBTREND_COMMAND_LIT_TRACE_REFLECTIONS = 46
 const RBTREND_COMMAND_NONE = 0
 const RBTREND_COMMAND_OUTLINE = 37
+const RBTREND_COMMAND_PARTICLES_STEP = 54
 const RBTREND_COMMAND_PRESENT_TEXTURE = 13
 const RBTREND_COMMAND_PUSH_CONSTANTS = 14
 const RBTREND_COMMAND_SET_BINDING_SET = 12
@@ -228,6 +230,24 @@ const RBTREND_LIT_SHADOW_KIND_POINT_MAP = 4
 const RBTREND_LIT_SHADOW_KIND_SPOT_MAP = 3
 const RBTREND_LIT_SKY_MODEL_HOSEK_WILKIE = 1
 const RBTREND_LIT_SKY_MODEL_PREETHAM = 0
+const RBTREND_PARTICLES_SHADER_BILLBOARD_VERTEX = 0
+const RBTREND_PARTICLES_SHADER_LIT_FRAGMENT = 2
+const RBTREND_PARTICLES_SHADER_MESH_VERTEX = 1
+const RBTREND_PARTICLES_SHADER_UNLIT_FRAGMENT = 3
+const RBTREND_PARTICLE_DRAW_BILLBOARD = 1
+const RBTREND_PARTICLE_DRAW_MESH = 3
+const RBTREND_PARTICLE_DRAW_NONE = 0
+const RBTREND_PARTICLE_DRAW_RIBBON = 4
+const RBTREND_PARTICLE_DRAW_STREAK = 2
+const RBTREND_PARTICLE_SHAPE_BOX = 3
+const RBTREND_PARTICLE_SHAPE_CONE = 4
+const RBTREND_PARTICLE_SHAPE_DISC = 5
+const RBTREND_PARTICLE_SHAPE_NONE = 0
+const RBTREND_PARTICLE_SHAPE_POINT = 1
+const RBTREND_PARTICLE_SHAPE_SPHERE = 2
+const RBTREND_PARTICLE_SPACE_EMITTER = 2
+const RBTREND_PARTICLE_SPACE_NONE = 0
+const RBTREND_PARTICLE_SPACE_WORLD = 1
 const RBTREND_SHADER_SCALAR_TYPE_BOOL = 4
 const RBTREND_SHADER_SCALAR_TYPE_FLOAT = 1
 const RBTREND_SHADER_SCALAR_TYPE_INT = 2
@@ -426,6 +446,20 @@ const RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC = 5040
 const RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS = 5035
 const RBT_STRUCT_TYPE_REND_LIT_VIEW = 5019
 const RBT_STRUCT_TYPE_REND_MATERIAL_DESC = 5009
+const RBT_STRUCT_TYPE_REND_PARTICLES_DESC = 5047
+const RBT_STRUCT_TYPE_REND_PARTICLE_COLLISION = 5052
+const RBT_STRUCT_TYPE_REND_PARTICLE_COLOR_OVER_LIFE = 5054
+const RBT_STRUCT_TYPE_REND_PARTICLE_EFFECT = 5048
+const RBT_STRUCT_TYPE_REND_PARTICLE_FLIPBOOK = 5056
+const RBT_STRUCT_TYPE_REND_PARTICLE_FORCES = 5050
+const RBT_STRUCT_TYPE_REND_PARTICLE_MESH = 5059
+const RBT_STRUCT_TYPE_REND_PARTICLE_NOISE = 5051
+const RBT_STRUCT_TYPE_REND_PARTICLE_RIBBON = 5060
+const RBT_STRUCT_TYPE_REND_PARTICLE_SIZE_OVER_LIFE = 5055
+const RBT_STRUCT_TYPE_REND_PARTICLE_SOFT = 5057
+const RBT_STRUCT_TYPE_REND_PARTICLE_SPAWN = 5049
+const RBT_STRUCT_TYPE_REND_PARTICLE_STREAK = 5058
+const RBT_STRUCT_TYPE_REND_PARTICLE_WRAP = 5053
 const RBT_STRUCT_TYPE_REND_RENDER_PASS_DESC = 5010
 const RBT_STRUCT_TYPE_REND_RENDER_TARGET_POOL_INFO = 5024
 const RBT_STRUCT_TYPE_REND_SAMPLER_DESC = 5008
@@ -780,6 +814,14 @@ fn rbtrend_material_set_uniform RBT_RESULT (rbtrend_material, const char *, cons
 fn rbtrend_material_set_uniform_buffer RBT_RESULT (rbtrend_material, const char *, uint32_t, rbtrend_buffer, RBTREND_ERROR *)
 fn rbtrend_material_set_uniform_bytes RBT_RESULT (rbtrend_material, const char *, uint32_t, uint32_t, const void *, RBTREND_ERROR *)
 fn rbtrend_material_set_uniform_value RBT_RESULT (rbtrend_material, RBTREND_MATERIAL_UNIFORM, const void *, RBTREND_ERROR *)
+fn rbtrend_particles_create RBT_RESULT (rbtrend_instance, const RBTREND_PARTICLES_DESC *, rbtrend_particles *, RBTREND_ERROR *)
+fn rbtrend_particles_destroy void (rbtrend_particles)
+fn rbtrend_particles_get_alive_count RBT_RESULT (rbtrend_particles, uint32_t *, uint64_t *, RBTREND_ERROR *)
+fn rbtrend_particles_get_layout RBT_RESULT (rbtrend_instance, rbtrend_binding_layout *, RBTREND_ERROR *)
+fn rbtrend_particles_get_shader RBT_RESULT (rbtrend_instance, RBTREND_PARTICLES_SHADER, rbtrend_shader *, RBTREND_ERROR *)
+fn rbtrend_particles_set_depth RBT_RESULT (rbtrend_particles, rbtrend_texture_view, _Bool, RBTREND_ERROR *)
+fn rbtrend_particles_set_effect RBT_RESULT (rbtrend_particles, const RBTREND_PARTICLE_EFFECT *, RBTREND_ERROR *)
+fn rbtrend_particles_set_noise RBT_RESULT (rbtrend_particles, rbtrend_texture_view, RBTREND_ERROR *)
 fn rbtrend_render_pass_create RBT_RESULT (rbtrend_instance, const RBTREND_RENDER_PASS_DESC *, rbtrend_render_pass *, RBTREND_ERROR *)
 fn rbtrend_render_pass_destroy void (rbtrend_render_pass)
 fn rbtrend_render_pass_get_pipeline rbtrend_graphics_pipeline (rbtrend_render_pass)
@@ -967,6 +1009,10 @@ macro RBTREND_MAX_COLOR_TARGETS CRGPU_MAX_COLOR_ATTACHMENTS
 macro RBTREND_MAX_FRAMES_IN_FLIGHT 4
 macro RBTREND_MAX_PUSH_CONSTANT_RANGES CRGPU_MAX_PUSH_CONSTANT_RANGES
 macro RBTREND_MAX_VERTEX_BINDINGS CRGPU_MAX_VERTEX_BINDINGS
+macro RBTREND_PARTICLES_MAX_CAPACITY 1048576u
+macro RBTREND_PARTICLES_MAX_STEPS 4096u
+macro RBTREND_PARTICLES_SET 2u
+macro RBTREND_PARTICLE_CURVE_MAX_KEYS 8u
 macro RBTREND_RENDER_PASS_MAX_COLOR_TARGETS CRGPU_MAX_COLOR_ATTACHMENTS
 macro RBTREND_TEXTURE_VIEW_REMAINING UINT32_MAX
 macro RBTREND_UNIFORM_TYPE_UNKNOWN UINT32_MAX
@@ -1013,6 +1059,7 @@ opaque rbtrend_instance_t
 opaque rbtrend_lit_environment_t
 opaque rbtrend_lit_scene_t
 opaque rbtrend_material_t
+opaque rbtrend_particles_t
 opaque rbtrend_render_pass_t
 opaque rbtrend_sampler_t
 opaque rbtrend_shader_t
@@ -1694,6 +1741,8 @@ field RBTREND_COMMAND._params._draw_instanced @8 struct {}
 field RBTREND_COMMAND._params._draw_instanced._vertex_count_per_instance @8 uint32_t
 field RBTREND_COMMAND._params._draw_list @8 struct {}
 field RBTREND_COMMAND._params._draw_list._list @8 rbtrend_draw_list
+field RBTREND_COMMAND._params._draw_particles @8 struct {}
+field RBTREND_COMMAND._params._draw_particles._particles @8 rbtrend_particles
 field RBTREND_COMMAND._params._draw_texture @8 struct {}
 field RBTREND_COMMAND._params._draw_texture._source @8 rbtrend_texture_view
 field RBTREND_COMMAND._params._generate_mips @8 struct {}
@@ -1729,6 +1778,8 @@ field RBTREND_COMMAND._params._lit_trace_reflections._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._outline @8 struct {}
 field RBTREND_COMMAND._params._outline._mask @8 rbtrend_texture_view
 field RBTREND_COMMAND._params._padding @8 uint8_t[120]
+field RBTREND_COMMAND._params._particles_step @8 struct {}
+field RBTREND_COMMAND._params._particles_step._scene @8 rbtrend_lit_scene
 field RBTREND_COMMAND._params._present_texture @8 struct {}
 field RBTREND_COMMAND._params._present_texture._source @8 rbtrend_texture2d
 field RBTREND_COMMAND._params._push_constants @8 struct {}
@@ -1792,6 +1843,7 @@ field RBTREND_COMMAND._params._lit_sky._sun_direction @16 float[3]
 field RBTREND_COMMAND._params._lit_ssr._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_trace_reflections._tlas @16 rbtrend_tlas
 field RBTREND_COMMAND._params._outline._target @16 rbtrend_texture_view
+field RBTREND_COMMAND._params._particles_step._depth @16 rbtrend_texture_view
 field RBTREND_COMMAND._params._present_texture._swap_chain @16 rbtrend_swap_chain
 field RBTREND_COMMAND._params._push_constants._offset @16 uint32_t
 field RBTREND_COMMAND._params._set_binding_set._set @16 rbtrend_binding_set
@@ -1824,6 +1876,7 @@ field RBTREND_COMMAND._params._lit_shadow_mask._light @24 uint32_t
 field RBTREND_COMMAND._params._lit_ssr._normal_roughness @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_trace_reflections._depth @24 rbtrend_texture_view
 field RBTREND_COMMAND._params._outline._color @24 float[4]
+field RBTREND_COMMAND._params._particles_step._steps @24 const struct RBTREND_PARTICLES_STEP *
 field RBTREND_COMMAND._params._present_texture._scaling @24 RBTREND_TEXTURE_SCALING
 field RBTREND_COMMAND._params._tone_map._exposure @24 float
 field RBTREND_COMMAND._params._bloom._knee @28 float
@@ -1845,6 +1898,7 @@ field RBTREND_COMMAND._params._lit_shadow_mask._depth @32 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_sky._intensity @32 float
 field RBTREND_COMMAND._params._lit_ssr._color @32 rbtrend_texture_view
 field RBTREND_COMMAND._params._lit_trace_reflections._normal_roughness @32 rbtrend_texture_view
+field RBTREND_COMMAND._params._particles_step._step_count @32 uint32_t
 field RBTREND_COMMAND._params._present_texture._border_color @32 float[4]
 field RBTREND_COMMAND._params._tone_map._encoding @32 RBTREND_COLOR_ENCODING
 field RBTREND_COMMAND._params._bloom._intensity @36 float
@@ -2187,6 +2241,95 @@ struct RBTREND_MATERIAL_UNIFORM size=16 align=8
 field RBTREND_MATERIAL_UNIFORM._layout @0 rbtrend_binding_layout
 field RBTREND_MATERIAL_UNIFORM._binding_index @8 uint32_t
 field RBTREND_MATERIAL_UNIFORM._member_index @12 uint32_t
+struct RBTREND_PARTICLES_DESC size=32 align=8
+field RBTREND_PARTICLES_DESC.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLES_DESC.debug_name @16 const char *
+field RBTREND_PARTICLES_DESC.capacity @24 uint32_t
+struct RBTREND_PARTICLES_STEP size=120 align=8
+field RBTREND_PARTICLES_STEP._particles @0 rbtrend_particles
+field RBTREND_PARTICLES_STEP._delta_time @8 float
+field RBTREND_PARTICLES_STEP._spawn_count @12 uint32_t
+field RBTREND_PARTICLES_STEP._seed @16 uint32_t
+field RBTREND_PARTICLES_STEP._clear @20 _Bool
+field RBTREND_PARTICLES_STEP._anchor @24 float[3]
+field RBTREND_PARTICLES_STEP._anchor_moved @36 float[3]
+field RBTREND_PARTICLES_STEP._emitter @48 float[12]
+field RBTREND_PARTICLES_STEP._emitter_velocity @96 float[3]
+field RBTREND_PARTICLES_STEP._wind @108 float[3]
+struct RBTREND_PARTICLE_COLLISION size=32 align=8
+field RBTREND_PARTICLE_COLLISION.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_COLLISION.restitution @16 float
+field RBTREND_PARTICLE_COLLISION.friction @20 float
+field RBTREND_PARTICLE_COLLISION.life_loss @24 float
+field RBTREND_PARTICLE_COLLISION.thickness @28 float
+struct RBTREND_PARTICLE_COLOR_OVER_LIFE size=184 align=8
+field RBTREND_PARTICLE_COLOR_OVER_LIFE.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_COLOR_OVER_LIFE.curve @16 RBTREND_PARTICLE_CURVE
+struct RBTREND_PARTICLE_CURVE size=164 align=4
+field RBTREND_PARTICLE_CURVE._key_count @0 uint32_t
+field RBTREND_PARTICLE_CURVE._times @4 float[8]
+field RBTREND_PARTICLE_CURVE._values @36 float[8][4]
+struct RBTREND_PARTICLE_EFFECT size=80 align=8
+field RBTREND_PARTICLE_EFFECT.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_EFFECT.space @16 RBTREND_PARTICLE_SPACE
+field RBTREND_PARTICLE_EFFECT.draw @20 RBTREND_PARTICLE_DRAW
+field RBTREND_PARTICLE_EFFECT.sort @24 _Bool
+field RBTREND_PARTICLE_EFFECT.life_min @28 float
+field RBTREND_PARTICLE_EFFECT.life_max @32 float
+field RBTREND_PARTICLE_EFFECT.color @36 float[4]
+field RBTREND_PARTICLE_EFFECT.size_min @52 float
+field RBTREND_PARTICLE_EFFECT.size_max @56 float
+field RBTREND_PARTICLE_EFFECT.rotation_min @60 float
+field RBTREND_PARTICLE_EFFECT.rotation_max @64 float
+field RBTREND_PARTICLE_EFFECT.spin_min @68 float
+field RBTREND_PARTICLE_EFFECT.spin_max @72 float
+struct RBTREND_PARTICLE_FLIPBOOK size=40 align=8
+field RBTREND_PARTICLE_FLIPBOOK.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_FLIPBOOK.columns @16 uint32_t
+field RBTREND_PARTICLE_FLIPBOOK.rows @20 uint32_t
+field RBTREND_PARTICLE_FLIPBOOK.frame_count @24 uint32_t
+field RBTREND_PARTICLE_FLIPBOOK.frames_per_second @28 float
+field RBTREND_PARTICLE_FLIPBOOK.blend @32 _Bool
+struct RBTREND_PARTICLE_FORCES size=32 align=8
+field RBTREND_PARTICLE_FORCES.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_FORCES.acceleration @16 float[3]
+field RBTREND_PARTICLE_FORCES.drag @28 float
+struct RBTREND_PARTICLE_MESH size=32 align=8
+field RBTREND_PARTICLE_MESH.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_MESH.index_count @16 uint32_t
+field RBTREND_PARTICLE_MESH.first_index @20 uint32_t
+field RBTREND_PARTICLE_MESH.vertex_offset @24 int32_t
+struct RBTREND_PARTICLE_NOISE size=40 align=8
+field RBTREND_PARTICLE_NOISE.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_NOISE.strength @16 float
+field RBTREND_PARTICLE_NOISE.frequency @20 float
+field RBTREND_PARTICLE_NOISE.scroll @24 float[3]
+struct RBTREND_PARTICLE_RIBBON size=24 align=8
+field RBTREND_PARTICLE_RIBBON.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_RIBBON.repeats @16 float
+struct RBTREND_PARTICLE_SIZE_OVER_LIFE size=184 align=8
+field RBTREND_PARTICLE_SIZE_OVER_LIFE.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_SIZE_OVER_LIFE.curve @16 RBTREND_PARTICLE_CURVE
+struct RBTREND_PARTICLE_SOFT size=24 align=8
+field RBTREND_PARTICLE_SOFT.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_SOFT.distance @16 float
+struct RBTREND_PARTICLE_SPAWN size=56 align=8
+field RBTREND_PARTICLE_SPAWN.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_SPAWN.shape @16 RBTREND_PARTICLE_SHAPE
+field RBTREND_PARTICLE_SPAWN.size @20 float[3]
+field RBTREND_PARTICLE_SPAWN.surface @32 _Bool
+field RBTREND_PARTICLE_SPAWN.spread @36 float
+field RBTREND_PARTICLE_SPAWN.speed_min @40 float
+field RBTREND_PARTICLE_SPAWN.speed_max @44 float
+field RBTREND_PARTICLE_SPAWN.inherit_velocity @48 float
+struct RBTREND_PARTICLE_STREAK size=32 align=8
+field RBTREND_PARTICLE_STREAK.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_STREAK.seconds @16 float
+field RBTREND_PARTICLE_STREAK.length_min @20 float
+field RBTREND_PARTICLE_STREAK.length_max @24 float
+struct RBTREND_PARTICLE_WRAP size=32 align=8
+field RBTREND_PARTICLE_WRAP.base @0 RBT_STRUCT_BASE
+field RBTREND_PARTICLE_WRAP.half_extents @16 float[3]
 struct RBTREND_RAY_INSTANCE size=64 align=4
 field RBTREND_RAY_INSTANCE._transform @0 float[12]
 field RBTREND_RAY_INSTANCE._blas @48 uint32_t
@@ -2820,6 +2963,26 @@ typedef RBTREND_LIT_VERTEX = struct RBTREND_LIT_VERTEX
 typedef RBTREND_LIT_VIEW = struct RBTREND_LIT_VIEW
 typedef RBTREND_MATERIAL_DESC = struct RBTREND_MATERIAL_DESC
 typedef RBTREND_MATERIAL_UNIFORM = struct RBTREND_MATERIAL_UNIFORM
+typedef RBTREND_PARTICLES_DESC = struct RBTREND_PARTICLES_DESC
+typedef RBTREND_PARTICLES_SHADER = uint32_t
+typedef RBTREND_PARTICLES_STEP = struct RBTREND_PARTICLES_STEP
+typedef RBTREND_PARTICLE_COLLISION = struct RBTREND_PARTICLE_COLLISION
+typedef RBTREND_PARTICLE_COLOR_OVER_LIFE = struct RBTREND_PARTICLE_COLOR_OVER_LIFE
+typedef RBTREND_PARTICLE_CURVE = struct RBTREND_PARTICLE_CURVE
+typedef RBTREND_PARTICLE_DRAW = enum RBTREND_PARTICLE_DRAW
+typedef RBTREND_PARTICLE_EFFECT = struct RBTREND_PARTICLE_EFFECT
+typedef RBTREND_PARTICLE_FLIPBOOK = struct RBTREND_PARTICLE_FLIPBOOK
+typedef RBTREND_PARTICLE_FORCES = struct RBTREND_PARTICLE_FORCES
+typedef RBTREND_PARTICLE_MESH = struct RBTREND_PARTICLE_MESH
+typedef RBTREND_PARTICLE_NOISE = struct RBTREND_PARTICLE_NOISE
+typedef RBTREND_PARTICLE_RIBBON = struct RBTREND_PARTICLE_RIBBON
+typedef RBTREND_PARTICLE_SHAPE = enum RBTREND_PARTICLE_SHAPE
+typedef RBTREND_PARTICLE_SIZE_OVER_LIFE = struct RBTREND_PARTICLE_SIZE_OVER_LIFE
+typedef RBTREND_PARTICLE_SOFT = struct RBTREND_PARTICLE_SOFT
+typedef RBTREND_PARTICLE_SPACE = enum RBTREND_PARTICLE_SPACE
+typedef RBTREND_PARTICLE_SPAWN = struct RBTREND_PARTICLE_SPAWN
+typedef RBTREND_PARTICLE_STREAK = struct RBTREND_PARTICLE_STREAK
+typedef RBTREND_PARTICLE_WRAP = struct RBTREND_PARTICLE_WRAP
 typedef RBTREND_RAY_INSTANCE = struct RBTREND_RAY_INSTANCE
 typedef RBTREND_RENDER_PASS_DESC = struct RBTREND_RENDER_PASS_DESC
 typedef RBTREND_RENDER_TARGET_POOL_INFO = struct RBTREND_RENDER_TARGET_POOL_INFO
@@ -2940,6 +3103,7 @@ typedef rbtrend_instance = struct rbtrend_instance_t *
 typedef rbtrend_lit_environment = struct rbtrend_lit_environment_t *
 typedef rbtrend_lit_scene = struct rbtrend_lit_scene_t *
 typedef rbtrend_material = struct rbtrend_material_t *
+typedef rbtrend_particles = struct rbtrend_particles_t *
 typedef rbtrend_render_pass = struct rbtrend_render_pass_t *
 typedef rbtrend_sampler = struct rbtrend_sampler_t *
 typedef rbtrend_shader = struct rbtrend_shader_t *

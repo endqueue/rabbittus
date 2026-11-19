@@ -26,5 +26,6 @@
 #include "render/rbtrendatmosphere.h"
 #include "render/rbtrendfog.h"
 #include "render/rbtrendclouds.h"
+#include "render/rbtrendparticles.h"
 
 #endif // RBTREND_H

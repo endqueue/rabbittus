@@ -8,7 +8,7 @@
 //
 // Handle types with no factory, not called with a destroyed handle:
 // - A Rend handle needs a GPU device, which these tests never make; rabbittustests/tests/rbtrend_gpu_tests.c, test_destroyed_handles, calls these.
-//   Not covered: rbtrend_atmosphere, rbtrend_batch, rbtrend_binding_layout, rbtrend_binding_set, rbtrend_blas, rbtrend_buffer, rbtrend_clouds, rbtrend_command_list, rbtrend_compute_pass, rbtrend_compute_pipeline, rbtrend_draw_list, rbtrend_exposure, rbtrend_fog, rbtrend_framebuffer, rbtrend_gpu_timer, rbtrend_graphics_pipeline, rbtrend_index_pool, rbtrend_instance, rbtrend_lit_environment, rbtrend_lit_scene, rbtrend_material, rbtrend_render_pass, rbtrend_sampler, rbtrend_shader, rbtrend_swap_chain, rbtrend_texture2d, rbtrend_texture3d, rbtrend_texture_view, rbtrend_tlas, rbtrend_vertex_pool.
+//   Not covered: rbtrend_atmosphere, rbtrend_batch, rbtrend_binding_layout, rbtrend_binding_set, rbtrend_blas, rbtrend_buffer, rbtrend_clouds, rbtrend_command_list, rbtrend_compute_pass, rbtrend_compute_pipeline, rbtrend_draw_list, rbtrend_exposure, rbtrend_fog, rbtrend_framebuffer, rbtrend_gpu_timer, rbtrend_graphics_pipeline, rbtrend_index_pool, rbtrend_instance, rbtrend_lit_environment, rbtrend_lit_scene, rbtrend_material, rbtrend_particles, rbtrend_render_pass, rbtrend_sampler, rbtrend_shader, rbtrend_swap_chain, rbtrend_texture2d, rbtrend_texture3d, rbtrend_texture_view, rbtrend_tlas, rbtrend_vertex_pool.
 
 #include "rbtrend.h"
 #include "archive/rbtarchive.h"
@@ -1991,6 +1991,22 @@ int main(void)
     expect_error("rbtrend_material_set_uniform_bytes", rbtrend_material_set_uniform_bytes((rbtrend_material){0}, (const char *){0}, (uint32_t){0}, (uint32_t){0}, (const void *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_material_set_uniform_value", rbtrend_material_set_uniform_value((rbtrend_material){0}, (RBTREND_MATERIAL_UNIFORM){0}, (const void *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_particles_create", rbtrend_particles_create((rbtrend_instance){0}, (const RBTREND_PARTICLES_DESC *){0}, (rbtrend_particles *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    rbtrend_particles_destroy((rbtrend_particles){0});
+    calls++;
+    expect_error("rbtrend_particles_get_alive_count", rbtrend_particles_get_alive_count((rbtrend_particles){0}, (uint32_t *){0}, (uint64_t *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_particles_get_layout", rbtrend_particles_get_layout((rbtrend_instance){0}, (rbtrend_binding_layout *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_particles_get_shader", rbtrend_particles_get_shader((rbtrend_instance){0}, (RBTREND_PARTICLES_SHADER){0}, (rbtrend_shader *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_particles_set_depth", rbtrend_particles_set_depth((rbtrend_particles){0}, (rbtrend_texture_view){0}, (_Bool){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_particles_set_effect", rbtrend_particles_set_effect((rbtrend_particles){0}, (const RBTREND_PARTICLE_EFFECT *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_particles_set_noise", rbtrend_particles_set_noise((rbtrend_particles){0}, (rbtrend_texture_view){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_render_pass_create", rbtrend_render_pass_create((rbtrend_instance){0}, (const RBTREND_RENDER_PASS_DESC *){0}, (rbtrend_render_pass *){0}, (RBTREND_ERROR *){0}));
     calls++;

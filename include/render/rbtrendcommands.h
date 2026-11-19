@@ -85,6 +85,13 @@ struct RBTREND_FOG_VOLUME_INSTANCE;
 typedef struct rbtrend_clouds_t *rbtrend_clouds;
 /** A layer of cloud (rbtrendclouds.h), drawn by RBTREND_COMMAND_LIT_CLOUDS. */
 struct RBTREND_CLOUD_LAYER;
+/** A particle system: a pool on the device, an effect, borrowed views
+ * (rbtrendparticles.h), stepped by RBTREND_COMMAND_PARTICLES_STEP and drawn
+ * by RBTREND_COMMAND_DRAW_PARTICLES. */
+typedef struct rbtrend_particles_t *rbtrend_particles;
+/** One system's step (rbtrendparticles.h), an element of
+ * RBTREND_COMMAND_PARTICLES_STEP's array. */
+struct RBTREND_PARTICLES_STEP;
 
 /**
  * @brief What RBTREND_COMMAND_BUILD_BLAS does to its BLAS
@@ -1347,6 +1354,42 @@ enum {
 	 * does.
 	 */
 	RBTREND_COMMAND_LIT_CLOUDS                  = 53,
+	/**
+	 * Steps particle systems (rbtrendparticles.h), outside a pass: each of
+	 * `_steps` (RBTREND_PARTICLES_STEP) by the stages rbtrendparticles.h's
+	 * "A step on the GPU" lists, every system's stage before the next.
+	 * `_scene` gives the eye and the view-projection the collision and the
+	 * sort read (a view-projection that can be inverted where a system
+	 * collides); `_depth` is the depth the systems collide with, NULL for
+	 * none: each system whose depth is set (rbtrend_particles_set_depth())
+	 * must have it set to this view. Recorded after that depth is drawn and
+	 * before the passes that draw the systems. `_steps` copied at the send,
+	 * 0 to RBTREND_PARTICLES_MAX_STEPS, each checked at the send in its
+	 * members' order (its own message): a NULL system or one of another
+	 * instance, a system twice, a `_delta_time` out of 0 to 1, any value not
+	 * finite. A system with no effect only clears where it would.
+	 *
+	 * Refused at the compile, each with its message: a system whose effect
+	 * has NOISE and no noise volume, or COLLISION and no depth; a system's
+	 * depth other than `_depth`; `_depth` with nothing drawn in it earlier in
+	 * the list or before it; a COLLISION with a scene whose view-projection
+	 * can't be inverted. It reads `_scene`'s own set from compute and binds
+	 * pipelines and sets of its own, as BLOOM does.
+	 */
+	RBTREND_COMMAND_PARTICLES_STEP              = 54,
+	/**
+	 * Draws `_particles` in the current pass with the pipeline the caller
+	 * set (Rend's particle shaders, rbtrendparticles.h, "Drawing": its
+	 * layouts the lit scene's, the lit material's and
+	 * rbtrend_particles_get_layout() at slots 0, 1 and 2) and the sets the
+	 * caller put at slots 0 and 1: binds the system's set at
+	 * RBTREND_PARTICLES_SET and draws indirectly what its last step left
+	 * alive. Inside a pass; the system stepped earlier in the list or in a
+	 * submission before it; for an effect with SOFT, its depth not an
+	 * attachment of the pass. A system with no alive particles draws
+	 * nothing.
+	 */
+	RBTREND_COMMAND_DRAW_PARTICLES              = 55,
 };
 
 /**
@@ -1883,6 +1926,20 @@ typedef struct RBTREND_COMMAND {
 			/** The picture the clouds are drawn over. */
 			rbtrend_texture_view _target;
 		} _lit_clouds; /**< RBTREND_COMMAND_LIT_CLOUDS. */
+		struct {
+			/** The view the systems are stepped for. */
+			rbtrend_lit_scene _scene;
+			/** The depth they collide with, or NULL. */
+			rbtrend_texture_view _depth;
+			/** The steps, `_step_count` of them; copied at the send. */
+			const struct RBTREND_PARTICLES_STEP *_steps;
+			/** How many: 0 records nothing. */
+			uint32_t _step_count;
+		} _particles_step; /**< RBTREND_COMMAND_PARTICLES_STEP. */
+		struct {
+			/** The system drawn. */
+			rbtrend_particles _particles;
+		} _draw_particles; /**< RBTREND_COMMAND_DRAW_PARTICLES. */
 		/**
 		 * Never read. Fixes `_params` at 120 bytes, so the command's size
 		 * stays 128 as commands are added: a new command's parameters fit

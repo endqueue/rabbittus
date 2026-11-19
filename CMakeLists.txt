@@ -67,6 +67,8 @@ add_library(rabbittus STATIC
         src/render/rbtrendfog.cpp
         src/render/rbtrendclouds_internal.hpp
         src/render/rbtrendclouds.cpp
+        src/render/rbtrendparticles_internal.hpp
+        src/render/rbtrendparticles.cpp
         src/archive/rbtarchive_internal.hpp
         src/archive/rbtarchive.cpp
         src/audio/rbtaudio_internal.hpp
@@ -120,6 +122,7 @@ add_library(rabbittus STATIC
         include/render/rbtrendatmosphere.h
         include/render/rbtrendfog.h
         include/render/rbtrendclouds.h
+        include/render/rbtrendparticles.h
         include/archive/rbtarchive.h
         include/audio/rbtaudio.h
         include/audio/rbtaudiocues.h
@@ -282,6 +285,17 @@ set(RABBITTUS_SHADERS
         rbtrend_clouds_march_comp
         rbtrend_clouds_reconstruct_comp
         rbtrend_clouds_composite_frag
+        rbtrend_particles_clear_comp
+        rbtrend_particles_simulate_comp
+        rbtrend_particles_spawn_comp
+        rbtrend_particles_arguments_comp
+        rbtrend_particles_sort_count_comp
+        rbtrend_particles_sort_scan_comp
+        rbtrend_particles_sort_scatter_comp
+        rbtrend_particles_vert
+        rbtrend_particles_lit_frag
+        rbtrend_particles_unlit_frag
+        rbtrend_particles_mesh_vert
 )
 # The modules the shaders import, from shaders/: every shader is compiled
 # again when one of them changes.
@@ -310,6 +324,13 @@ set(RABBITTUS_SHADER_MODULES
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_clouds_model.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_clouds_input.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_clouds_bindings.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_common.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_sim_bindings.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_control_bindings.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_draw_bindings.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_step.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_sort.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_particles_draw.slang
 )
 # The shaders that trace (rbtrendraytracing.h): inline ray queries, SPIR-V's
 # ray query capability (SPV_KHR_ray_query) and DXIL's shader model 6.5. Made

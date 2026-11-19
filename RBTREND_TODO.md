@@ -6080,9 +6080,201 @@ eye-relative offset is given each frame (Q3a). Needs item 34's indirect
 dispatch (Carrottus GPU's, a draft first), a compute sort, depth reads for
 soft particles. To be drafted, for approval, with its caller's emitter.
 Drafted 2026-11-18: `rbtrend_particles_draft.h`, with its caller's half
-beside the caller's headers (version 1, seven critique passes), approved 2026-11-18 with the user, every question as recommended; nothing built. Its questions Q1 to Q4 (each
-recommended a); it waits on Carrottus GPU's indirect dispatch (item 34,
-its draft not yet written).
+beside the caller's headers (version 1, seven critique passes), approved 2026-11-18 with the user, every question as recommended (Q1a the caller's spawn count each step, Q2a per-pixel lighting through the lit surface, Q3a a lagged alive count, Q4a the caller's noise volume).
+
+**Built 2026-11-19 on the Mac (Metal, the M5 Pro; D3D12 and Vulkan never
+built: no backend branch, every call through Carrottus GPU), the draft's
+three stages in order (section 10), each green before the next: (1)
+billboards and streaks, sorted and not, every module but MESH and RIBBON;
+(2) meshes; (3) ribbons.** On Carrottus GPU's indirect dispatch (its
+compute half, 2026-11-18): a core call, so nothing is refused for want of
+a feature. Its caller's half (drafted beside the caller's headers) is not built:
+it waits on the caller's transparency stage (the user's decision,
+2026-11-18).
+- **Public** (`render/rbtrendparticles.h`, new, the umbrella's 21st):
+  `rbtrend_particles` (typedef'd in `rbtrendcommands.h` beside the other
+  commands' handles, as the fog's is), `RBTREND_PARTICLES_DESC`,
+  `rbtrend_particles_create`/`_destroy`/`_set_effect`/`_set_noise`/
+  `_set_depth`/`_get_alive_count`/`_get_layout`/`_get_shader`, the enums
+  `RBTREND_PARTICLE_SPACE`/`_DRAW`/`_SHAPE` (NONE refused), the frozen
+  `RBTREND_PARTICLE_CURVE` and `RBTREND_PARTICLES_STEP` (120 bytes), the
+  effect and its twelve modules, the shader list (the draft's numbers:
+  `BILLBOARD_VERTEX` 0, `MESH_VERTEX` 1, `LIT_FRAGMENT` 2, `UNLIT_FRAGMENT`
+  3), the four limits. **Numbers taken:** commands
+  `RBTREND_COMMAND_PARTICLES_STEP` = 54 and `RBTREND_COMMAND_DRAW_PARTICLES`
+  = 55; struct types 5047 `PARTICLES_DESC`, 5048 `PARTICLE_EFFECT`, 5049
+  `SPAWN`, 5050 `FORCES`, 5051 `NOISE`, 5052 `COLLISION`, 5053 `WRAP`, 5054
+  `COLOR_OVER_LIFE`, 5055 `SIZE_OVER_LIFE`, 5056 `FLIPBOOK`, 5057 `SOFT`,
+  5058 `STREAK` (stage 1), 5059 `MESH` (stage 2), 5060 `RIBBON` (stage
+  3); no result code. ABI: additions only, 164 lines over the three
+  stages, none removed (`./check.sh --update-abi rabbittus` at each); no
+  version raise (0.3 untagged, card X2). Misuse harnesses regenerated at
+  each stage: `make_misuse_tests.py` (9 calls of `rbtrend_particles_*`
+  with zeroes) and `make_destroyed_tests.py` with `dead_rbtrend_particles`
+  (190 to 198 calls with a destroyed handle).
+- **Set 0 untouched:** the step's compute reads the scene's own set 0
+  (its block: the eye, the view-projection and its inverse, the view
+  direction) as LIT_FOG does, adding no binding; every buffer of a system
+  and its depth are its own sets.
+- **A system** (`src/render/rbtrendparticles_internal.hpp`, `.cpp`): five
+  device storage buffers made at create (the particles, 48 bytes each;
+  two alive lists and the dead list, 12 bytes; the sort's two key lists
+  and one value list, 12 bytes, and its counts, 64 bytes a group of 256;
+  the record, 96 bytes; the arguments, 80 bytes, storage and indirect)
+  and three materials of Rend's layouts (the simulation's set 1, the
+  control's set 0, the draw's set 2), the effect's 496-byte block written
+  into each by `set_effect` and `set_depth`; a readback of 16 bytes a frame
+  in flight, mapped. About 72 bytes a particle (the draft's estimate 76).
+  The noise and the depth are set into the materials (placeholders where
+  none: a 1-texel SNORM volume, the lit placeholder depth); the draw's set
+  holds the depth only for an effect with SOFT, so a pass without SOFT may
+  test against it.
+- **A step** (`rbtrend_cmd_particles_step`, `rbtrendcommands.cpp`): at the
+  send each step checked in member order (NULL, destroyed in Debug, of
+  another instance, a system twice, `_delta_time` 0 to 1, each vector
+  finite), copied into the list; at the compile the systems' views (NOISE
+  with no volume, COLLISION with no depth, a system's depth not the
+  command's, an inverse view-projection for a collision), then each stage
+  for every system before the next, the sets of all its systems made ready
+  together (one barrier call a stage, the indirect arguments moved
+  together), the pipeline bound once: the clear (a step's `_clear`, and a
+  system's first step: no step submitted and none earlier in the compile),
+  the simulation (indirect over the last count), the spawn (direct over
+  the count, no more than the capacity), the arguments (one thread), the
+  counts copied to each readback, and for sorted effects four passes of a
+  count, a scan and a scatter (count and scatter indirect, the scan one
+  group). Shaders: `shaders/rbtrend_particles_*` (seven compute, three
+  draw, seven modules). Which alive list is current and how many are
+  alive are the GPU's alone (the record), so a list compiled and never
+  submitted leaves nothing behind but a step not counted.
+- **The sort:** FidelityFX Parallel Sort's reduce-then-scan shape, a
+  16-bit key (log2 of the distance from the eye in 1/2048 steps over
+  2^-16 to 2^16, inverted), four passes of 4 bits; the scatter's rank
+  stable by an inclusive scan across the group of sixteen 16-bit counters
+  two to a word; pass 3 leaves the sorted values in the alive list itself,
+  so the draw reads one list either way.
+- **Atomics:** a group counts its appends, kills and spawned slots in its
+  own memory and takes them from the record with one atomic each; a
+  group's dead slots are taken by one decrement and, short, put back.
+  Spawn numbers are taken the same way and run on across clears (0 only at
+  a system's first step), so a ribbon's numbers never repeat.
+- **The lagged count:** each submission marks the frame copy it writes
+  with its serial and the step's number (`rbtrend_particles_submitted`,
+  from `rbtrend_command_list_submit`); `get_alive_count` reads the newest
+  copy whose serial `rbtrend_instance_read_completed()` has passed.
+- **The draw** (`rbtrend_cmd_draw_particles`): inside a pass, the pipeline's
+  set 2 the particles' layout, the system stepped earlier in the list or
+  submitted, a depth set for SOFT, an index buffer set for a mesh; its set
+  put at 2 (and looked ahead at by the pass's preparation, its arguments
+  moved to INDIRECT_ARGUMENT before the pass), then
+  `crgpu_command_list_draw_indirect` (six vertices an instance) or, for a
+  mesh, `_draw_indexed_indirect` from the MESH range. The lit fragment
+  shader is the lit surface's: `lit_shade()` split into
+  `lit_shade_with_base_map()` (`rbtrend_lit_surface.slang`) so the
+  flipbook's blended sample goes in; every other lit test's figures and
+  hashes the same.
+- **Ribbons:** the sort's key lists hold a table by spawn number modulo
+  the capacity (the number and the slot); a killed ribbon particle is
+  marked (its life -1); the draw draws a segment a number back from the
+  newest over the window since the last clear (at most the capacity),
+  each end looked up and drawn only when both are alive, each end's side
+  across the strip's direction from its neighbours.
+- **Tests** (rabbittustests' `rbtrend_gpu_tests`, Metal's validation with
+  warnings as asserts and shader validation, Debug and Release, both
+  devices; `rbtrend_contract_tests` headless): each first run against a
+  stub whose calls returned NOT_IMPLEMENTED (the contract test 17
+  failures; every GPU test failed at its kit or its system, 54 checks),
+  stage 2's and 3's first against the stage before (not compiling: their
+  structs undeclared; the refusals test expecting INVALID_ARGUMENT where
+  RIBBON and MESH were UNSUPPORTED). `particles_contract` (commands, struct
+  types, layouts, limits, shader numbers, every call with NULL);
+  `test_particles_refusals` (T1: every desc, effect and module field, a
+  module twice, a stranger in the chain, the views' kinds and formats,
+  NOISE and COLLISION without their views and a depth not the command's
+  at the compile, each step value at the send, the draw outside a pass,
+  never stepped, a NULL system, a pipeline without the particles' layout,
+  a destroyed system in Debug); `test_particles_spawn_count` (T2: 600 of
+  1,000, 0 after their life, 50, 0 after a clear, each with its step);
+  `_motion` (T3: semi-implicit Euler's place within a texel, 61 commands of
+  one step in one list); `_world_space` (T4: 1,000 cells, the same texels;
+  EMITTER moved 16 texels); `_wrap` (T5: 994 to 1,000 of 1,000 drawn over
+  ten cells, none outside); `_collision` (T6: at rest on a wall drawn the
+  same depth-tested as not, still a second later, 200 alive; none in front
+  without COLLISION; none survives with life_loss 1); `_sorted` (T7: the
+  near layer on top sorted either way round, the later one unsorted: seen
+  failing first with the test's own mistake, a life the colour curve never
+  reached); `_lit` (T8: the middle texel 128 against the face's 128; in a
+  cascade's shadow over the left half, 0 and 128 against the face's 0 and
+  128; its shadow half added after stage 3, passing at once: it tests code
+  built in stage 1); `_soft` (T9: 127 against 128 at half, 255 at full; the
+  pass's own depth refused); `_flipbook` (T9: frames 0 to 15 at lives k/16,
+  the blend 40, 215); `_streak` (texels 24 to 39, two rows);
+  `_noise_and_wind` (the volume's push and a drag to the wind, each to its
+  texel); `_many` (T11: 200 systems in one command and in 200, the same
+  800 texels); `_mesh` (T10: a square of 16 x 16 texels, a quarter-turned
+  diamond, three on a row, the index buffer's absence refused);
+  `_ribbon` (T10: 33 in a row lit from texel 6 to 57 with no gap, the
+  oldest 16 dead and nothing drawn to them, after a clear no segment to
+  the old trail; checked against a build without the dead mark, which
+  draws to the dead and fails); `test_frame_allocations` (T12: twenty
+  systems, every other sorted, ten spawned a frame, one step command and
+  one pass, a lagged count read: 0 of ours in 100 frames); `test_destroyed_
+  handles` with `dead_rbtrend_particles`; `test_particles_measure` (T13).
+  Every Rabbittus ctest (53), the GPU tests and the workspace's other
+  caller's suite green at each stage's end, Debug and Release.
+- **Measured** (`test_particles_measure`, Release, no validation, the M5
+  Pro, submit to idle less an empty list's (0.017 to 0.021 ms), the mean
+  of 50 after 10, three runs of both devices; against section 6):
+  - a step of 100,000 unsorted: 0.155 to 0.225 ms (estimated 0.03 to 0.05
+    ms, three to five times over); sorted 0.320 to 0.386 ms (the sort
+    about 0.16 ms for 12 dispatches);
+  - 100 systems of 1,000 in one command: 1.17 to 1.30 ms, in 100 commands
+    2.42 to 2.51 ms (estimated about 1.5 ms unbatched, 0.3 ms batched):
+    batching halves it, no more, because Carrottus GPU's Metal compute
+    encoder is serial (dispatches never overlap; its barriers are no-ops
+    over Metal's hazard tracking), so the stage-by-stage order buys fewer
+    binds and barriers, not overlap. About 12 microseconds a system a step
+    (two dispatches and a copy), the draft's 5 a dispatch;
+  - 10 sorted systems of 10,000 in one command: 0.93 to 1.11 ms (estimated
+    about 0.75 ms);
+  - 50,000 streaks of rain (two texels by twenty) over 2560 x 1440, the
+    pass's own 0.23 ms taken off: lit 1.41 to 1.77 ms, unlit 0.44 to 0.55
+    ms (estimated 0.2 to 0.4 ms lit, half that unlit: four to five times
+    over; thin quads shade 2 x 2 blocks at half use, and the lit
+    surface's whole shading runs per fragment).
+  Group-aggregated atomics changed the 100,000 step by nothing measurable
+  (0.16 ms before and after): the time is the dispatches' and the memory's,
+  not the counters'.
+- **Shapes chosen without a draft line** (open for the user's review):
+  `_anchor` read as the anchor's place in the scene's space (the draft's
+  "from the eye ... the scene's space"); a billboard faces the eye along
+  the view's ray through it (from the inverse view-projection), so an
+  orthographic view's billboards are square to it; the cone's apex at the
+  emitter's origin; a mesh turned about its space's z; EMITTER space keeps
+  particles in the emitter's frame and inherits no velocity (inherit is
+  WORLD's); NOISE adds the volume's vector times the strength to the
+  motion, not to the kept velocity; the sort's key the true distance; a
+  RIBBON with `sort` refused (INVALID_ARGUMENT), FLIPBOOK not read by a
+  ribbon; spawn numbers continue across clears; the draw's depth only for
+  SOFT; no new result code.
+- **Found:** (1) a shader that stores to one RWByteAddressBuffer at more
+  than one width (`Store` and `Store3`) gets, in SPIR-V, one variable a
+  width at the same binding, which Rend's reflection refuses ("resources
+  aren't ordered by set and binding"): the clear and arguments store a
+  word at a time (loads of mixed widths are fine). (2) Metal's validation
+  refuses push bytes and a set bound for a function that reads neither
+  ("unused binding in compute encoder"): the scan has no push range and
+  the sort's passes leave set 0 unbound. (3) Carrottus GPU's Metal compute
+  encoder is serial (above): overlap between systems needs a concurrent
+  encoder with explicit memory barriers, a Carrottus GPU change (a draft).
+- **Left:** D3D12 and Vulkan (card X25); the caller's half; shadows cast
+  by particles and lighting through a volume (later stages, the draft's
+  out of scope). When the transparency stage's RBTREND_LIT_ALPHA_MODE
+  (`rbtrend_transparency_draft.h`, not approved) lands, the particle lit
+  fragment shader passes BLEND to the shading in place of the material's
+  mode (today `lit_shade_with_base_map()` blends by opacity and a material
+  with an alpha_cutoff discards below it, as a lit surface does), and
+  `rbtrendparticles.h`'s "Out of scope" line on alpha modes goes.
 
 ### 58. A directional light given a place (card L78, decided 2026-11-17)
 

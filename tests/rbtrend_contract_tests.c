@@ -1293,6 +1293,87 @@ static void test_clouds_contract(void)
     rbtrend_clouds_destroy(NULL);
 }
 
+// Card L73's Rend half (rbtrend_particles_draft.h, section 9, T1's
+// headless half): commands 54 and 55, their parameters within
+// RBTREND_COMMAND's 120 bytes, the struct types and layouts, the frozen
+// step and curve, the limits and the shader numbers; every call with NULL,
+// each its own message. Its refusals past these need a device:
+// rabbittustests' test_particles_refusals.
+static void test_particles_contract(void)
+{
+    current_test = "particles_contract";
+    RBTREND_COMMAND command;
+    CHECK(RBTREND_COMMAND_PARTICLES_STEP == 54);
+    CHECK(RBTREND_COMMAND_DRAW_PARTICLES == 55);
+    if (sizeof(void *) == 8)
+    {
+        CHECK(sizeof(command._params._particles_step) == 32);
+        CHECK(sizeof(command._params._draw_particles) == 8);
+        CHECK(sizeof(RBTREND_PARTICLES_DESC) == 32);
+        CHECK(sizeof(RBTREND_PARTICLES_STEP) == 120);
+        CHECK(offsetof(RBTREND_PARTICLES_STEP, _anchor) == 24);
+        CHECK(offsetof(RBTREND_PARTICLES_STEP, _wind) == 108);
+    }
+    CHECK(sizeof(command._params._particles_step) <= sizeof(command._params._padding));
+    CHECK(sizeof(RBTREND_PARTICLE_CURVE) == 4 + 8 * 4 + 8 * 16);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLES_DESC == 5047);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_EFFECT == 5048);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_SPAWN == 5049);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_FORCES == 5050);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_NOISE == 5051);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_COLLISION == 5052);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_WRAP == 5053);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_COLOR_OVER_LIFE == 5054);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_SIZE_OVER_LIFE == 5055);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_FLIPBOOK == 5056);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_SOFT == 5057);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_STREAK == 5058);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_MESH == 5059);
+    CHECK(RBT_STRUCT_TYPE_REND_PARTICLE_RIBBON == 5060);
+    CHECK(offsetof(RBTREND_PARTICLES_DESC, base) == 0);
+    CHECK(offsetof(RBTREND_PARTICLE_EFFECT, base) == 0);
+    CHECK(offsetof(RBTREND_PARTICLE_EFFECT, space) == sizeof(RBT_STRUCT_BASE));
+    CHECK(RBTREND_PARTICLES_MAX_CAPACITY == 1048576u);
+    CHECK(RBTREND_PARTICLE_CURVE_MAX_KEYS == 8u);
+    CHECK(RBTREND_PARTICLES_SET == 2u);
+    CHECK(RBTREND_PARTICLES_MAX_STEPS == 4096u);
+    CHECK(RBTREND_PARTICLES_SHADER_BILLBOARD_VERTEX == 0);
+    CHECK(RBTREND_PARTICLES_SHADER_MESH_VERTEX == 1);
+    CHECK(RBTREND_PARTICLES_SHADER_LIT_FRAGMENT == 2);
+    CHECK(RBTREND_PARTICLES_SHADER_UNLIT_FRAGMENT == 3);
+    RBTREND_ERROR error;
+    rbtrend_particles particles = (rbtrend_particles)(uintptr_t)1;
+    dirty(&error);
+    CHECK(rbtrend_particles_create(NULL, NULL, &particles, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "instance is NULL") == 0);
+    CHECK(particles == NULL);
+    dirty(&error);
+    CHECK(rbtrend_particles_set_effect(NULL, NULL, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "particles is NULL") == 0);
+    dirty(&error);
+    CHECK(rbtrend_particles_set_noise(NULL, NULL, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "particles is NULL") == 0);
+    dirty(&error);
+    CHECK(rbtrend_particles_set_depth(NULL, NULL, false, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "particles is NULL") == 0);
+    uint32_t alive = 7;
+    uint64_t step = 7;
+    dirty(&error);
+    CHECK(rbtrend_particles_get_alive_count(NULL, &alive, &step, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "particles is NULL") == 0);
+    rbtrend_binding_layout layout = (rbtrend_binding_layout)(uintptr_t)1;
+    dirty(&error);
+    CHECK(rbtrend_particles_get_layout(NULL, &layout, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "instance is NULL") == 0);
+    CHECK(layout == NULL);
+    rbtrend_shader shader = (rbtrend_shader)(uintptr_t)1;
+    dirty(&error);
+    CHECK(rbtrend_particles_get_shader(NULL, RBTREND_PARTICLES_SHADER_BILLBOARD_VERTEX, &shader, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "instance is NULL") == 0);
+    CHECK(shader == NULL);
+    rbtrend_particles_destroy(NULL);
+}
+
 int main(int argc, char **argv)
 {
     print_anchor = argc > 1 && strcmp(argv[1], "--print-anchor") == 0;
@@ -1300,6 +1381,7 @@ int main(int argc, char **argv)
     test_atmosphere_shell_command();
     test_fog_grid_contract();
     test_clouds_contract();
+    test_particles_contract();
     test_lit_scene_desc();
     test_null_instance();
     test_images_null();

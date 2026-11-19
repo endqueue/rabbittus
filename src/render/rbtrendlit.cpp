@@ -1165,6 +1165,7 @@ rbtrend_binding_set rbtrend_texture_view_environment_set(rbtrend_texture_view vi
 
 void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	rbtrend_particles_builtins_destroy(instance);
 	for (const rbtrend_lit_builtins::format_pipeline &entry : lit.reflect_pipelines)
 		rbtrend_graphics_pipeline_destroy(entry.pipeline);
 	lit.reflect_pipelines.clear();

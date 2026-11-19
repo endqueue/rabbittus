@@ -349,6 +349,16 @@ public struct LitShaded {
 
 // The surface at [input]; discards a cut-out's hole.
 public LitShaded lit_shade(LitFragmentInput input) {
+    float4 base_map = float4(1.0);
+    if ((u_lit_material.maps & MAP_BASE_COLOR) != 0u)
+        base_map = base_color_map.Sample(material_sampler, map_uv(material_uv(input.uv), MAP_INDEX_BASE_COLOR));
+    return lit_shade_with_base_map(input, base_map);
+}
+
+// The same, with what the base color map gives at [input] read by the
+// caller ([base_map]; 1 where the material has none): a particle's
+// flipbook blends two frames of it (rbtrend_particles_lit_frag.slang).
+public LitShaded lit_shade_with_base_map(LitFragmentInput input, float4 base_map) {
     float3 in_position = input.position;
     float3 in_normal   = input.normal;
     float4 in_tangent  = input.tangent;
@@ -358,7 +368,7 @@ public LitShaded lit_shade(LitFragmentInput input) {
 
     float4 base = u_lit_material.base_color * input.color;
     if ((maps & MAP_BASE_COLOR) != 0u)
-        base *= base_color_map.Sample(material_sampler, map_uv(uv, MAP_INDEX_BASE_COLOR));
+        base *= base_map;
     float opacity = clamp(base.a, 0.0, 1.0);
     if (u_lit_material.alpha_cutoff > 0.0) {
         if (opacity < u_lit_material.alpha_cutoff)
