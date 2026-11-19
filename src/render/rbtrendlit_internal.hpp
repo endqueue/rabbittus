@@ -215,6 +215,33 @@ struct rbtrend_lit_material_block {
 	float attenuation[4];
 };
 
+/* RbtrendLitLayer and RbtrendLitLayered in
+ * shaders/rbtrend_lit_layered_material.slang: a layered material's block
+ * (rbtrendlit.h, "Layered materials"), the same in std140, std430 and
+ * HLSL's packing. */
+struct rbtrend_lit_layer_row {
+	float base_color[3];
+	float roughness;
+	float metalness;
+	float specular;
+	float normal_scale;
+	float occlusion_strength;
+	float height_contrast;
+	float uv_scale;
+	uint32_t projection;
+	/* Its RBTREND_LIT_COVER_RESPONSE packed into the row's spare lane: the
+	 * cover over 32767 in bits 0 to 14, the porosity in 15 to 29, bit 31
+	 * set where it has one. The exact values are the material's
+	 * (rbtrend_material_t::lit_layer_responses). */
+	uint32_t cover;
+};
+struct rbtrend_lit_layered_block {
+	float blend_depth;
+	uint32_t layer_count;
+	uint32_t reserved[2];
+	rbtrend_lit_layer_row layers[RBTREND_LIT_LAYERED_MAX_LAYERS];
+};
+
 /* RbtrendOcclusionPass in shaders/rbtrend_lit_occlusion_frag.slang. */
 struct rbtrend_occlusion_block {
 	float view_projection[16];
@@ -423,10 +450,24 @@ enum {
  * (rbtrend_builtins::lit). */
 struct rbtrend_lit_builtins {
 	/* rbtrend_lit_get_shader()'s, by RBTREND_LIT_SHADER. */
-	rbtrend_shader shaders[9]{};
+	rbtrend_shader shaders[11]{};
 	rbtrend_binding_layout scene_layout{nullptr};
 	rbtrend_binding_layout shadow_layout{nullptr};
 	rbtrend_binding_layout material_layout{nullptr};
+	/* Set 1 of the layered surface (rbtrendlit.h, "Layered materials"),
+	 * made by its first use; and the neutral arrays a layered map holds
+	 * where the caller gave none, made by the instance's first layered
+	 * create: 1 x 1, RBTREND_LIT_LAYERED_MAX_LAYERS layers each, white, the
+	 * flat normal (0.5, 0.5, 1) in half floats (exact), and ORMH (1, 1, 1,
+	 * 128/255) in bytes, by RBTREND_LIT_LAYERED_MAP. They are render
+	 * targets, filled by a clear of each layer at the top of the first
+	 * compile that binds a layered material (rbtrend_lit_prepare_layered_
+	 * neutral): Rend holds no queue of its own to upload them with. Each
+	 * array's shader view, and a render target view a layer. */
+	rbtrend_binding_layout layered_layout{nullptr};
+	rbtrend_texture2d layered_neutral[3]{};
+	rbtrend_texture_view layered_neutral_view[3]{};
+	rbtrend_texture_view layered_neutral_layers[3][RBTREND_LIT_LAYERED_MAX_LAYERS]{};
 	/* Set 0 of the light culling shader: the scene's block, and its tiles. */
 	rbtrend_shader cull_comp{nullptr};
 	rbtrend_binding_layout cull_layout{nullptr};
@@ -590,6 +631,9 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance);
 /* The placeholders and samplers, made if they aren't. False, reported, if one
  * can't be. */
 bool rbtrend_lit_prepare_resources(rbtrend_instance instance);
+
+/* The neutral arrays' clear values, by RBTREND_LIT_LAYERED_MAP. */
+extern const float rbtrend_lit_layered_neutral_texel[3][4];
 
 /* The pass of [pass], made if it isn't. NULL, reported, if it can't be. */
 rbtrend_graphics_pipeline rbtrend_lit_pass_pipeline(rbtrend_instance instance, uint32_t pass);

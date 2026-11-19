@@ -6491,8 +6491,24 @@ static bool rbtrend_cmd_prepare_lit_scenes(rbtrend_command_list cmd_list) {
 		rbtrend_cmd_report(cmd_list, RBT_RESULT_OUT_OF_MEMORY, "compile: out of memory");
 		return false;
 	}
-	bool lut_checked = false;
+	bool lut_checked     = false;
+	bool neutral_checked = false;
 	for (rbtrend_material material : materials) {
+		// A layered material: the instance's neutral arrays filled, if
+		// nothing has written them (rbtrendlit_internal.hpp), each layer
+		// cleared to its map's neutral texel.
+		if (!neutral_checked && material->layout && material->layout == lit.layered_layout && lit.layered_neutral_view[0]) {
+			neutral_checked = true;
+			for (uint32_t map = 0; map < 3; ++map) {
+				const rbtrend_texture_range range = rbtrend_texture_view_range(lit.layered_neutral_view[map]);
+				if (rbtrend_cmd_range_written(cmd_list, range))
+					continue;
+				rbtrend_cmd_transition_range(cmd_list, range, CRGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, false);
+				const float *t = rbtrend_lit_layered_neutral_texel[map];
+				for (rbtrend_texture_view layer : lit.layered_neutral_layers[map])
+					crgpu_command_list_clear_color_attachment(cmd_list->cmd_list, layer->image_view, t[0], t[1], t[2], t[3], 1, 1);
+			}
+		}
 		rbtrend_lit_scene_t *scene = material->lit_scene;
 		if (!scene)
 			continue;

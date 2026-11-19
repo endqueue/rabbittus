@@ -6,6 +6,7 @@
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_material;
+import rbtrend_lit_lighting;
 import rbtrend_lit_surface;
 import rbtrend_particles_common;
 import rbtrend_particles_draw_bindings;

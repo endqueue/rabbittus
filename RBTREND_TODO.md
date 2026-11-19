@@ -5595,6 +5595,97 @@ pass 7.3: the second of the two to be built adds the chain), with the
 weather draft's test T7 (each layer's own response). Its caller's half
 is drafted beside the caller's headers.
 
+**Built 2026-11-19 on the Mac** (Metal, the M5 Pro; D3D12 and Vulkan
+never built: no backend branch, the Slang compiled to SPIR-V and DXIL's
+reflection only on the Mac's own route). From the approved draft
+(version 4, its hash checked first), in two sub-stages, each whole:
+- **The split** (test 1 first): `rbtrend_lit_lighting.slang` holds
+  `LitFragmentInput`, the lighting (`lit_light(input, LitSurface)`), the
+  eye-facing frame (`lit_frame()`), the tangent frame
+  (`lit_tangent_normal()`), the cover and the transmission, importing no
+  material; `rbtrend_lit_surface.slang` is the lit material's reads into
+  a `LitSurface`. `test_lit_split_same_pixels` (rabbittustests) hashes six
+  pictures (a sun and a point light over every map, a coat, a sheen and
+  emission; the cover over it; the fog over that; the reflecting
+  variant's three targets) recorded from the build before the split
+  (rabbittus 30047aa): the same bits after it, both devices, Debug and
+  Release. `lit_cover()` takes the surface's cover, porosity and the
+  share that answers (`wet.x * responds`: 1 for a lit material, so its
+  bits unchanged).
+- **The layered surface**: `RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT`
+  (9) and `_REFLECT_FRAGMENT` (10); `rbtrend_lit_get_layered_material_layout`,
+  `rbtrend_lit_layered_material_create`, `_set_layer`, `_get_layer`,
+  `_set_blend_depth`, `_set_map`, `_set_sampler`; `RBTREND_LIT_LAYERED_MAP`,
+  `RBTREND_LIT_LAYER_PROJECTION`, `RBTREND_LIT_LAYER_VALUES` (struct type
+  **5061**, the next free: the draft's 5039 was taken), four constants.
+  Shaders `rbtrend_lit_layered_material.slang` (set 1: block 0, arrays 1
+  to 3, sampler 4), `rbtrend_lit_layered.slang` (steps 0 to 5),
+  `rbtrend_lit_layered_frag.slang`, `rbtrend_lit_layered_reflect_frag.slang`.
+  Set 0 untouched (the scene block's last byte stays as card A75 left
+  it); fragment sampled images 14 (the lit surface's 15), samplers 4.
+  ABI: additions only (`./check.sh --update-abi rabbittus`), no version
+  raise (0.3 untagged, card X2); both misuse harnesses regenerated
+  (rabbittus' and rabbittustests' destroyed calls, seven new calls each).
+  `check_naming.py` lists `lit_layered_material` as Rend's value object
+  beside `lit_material`.
+- **T7 (the weather draft's)**: a layer's `RBTREND_LIT_COVER_RESPONSE`
+  chained on its values; packed into its row's spare lane (the cover and
+  the porosity over 32767 in 15 bits each, bit 31 "answers"), the exact
+  values kept by the material for `_get_layer` (`rbtrend_material_t::
+  lit_layer_responses`, 128 bytes at create, copied by
+  `rbtrend_material_copy()`); the pixel blends cover, porosity and the
+  share that answers by w'.
+- **Shapes chosen within the contract** (for review): the neutral arrays
+  are render targets cleared, a layer at a time, at the top of the first
+  compile that binds a layered material, as an environment's cubes are
+  (Rend holds no queue to upload them through at create); the normal one
+  is half floats so (0.5, 0.5, 1) is exact, the others bytes (ORMH's
+  height the byte 128). A clear of non-zero values may draw D3D12's
+  debug-layer warning of a mismatched clear value (the textures are made
+  with a zeroed one): to be seen on Windows. The triplanar weights read
+  location 1's normal turned to the eye before it is turned back (a face
+  seen from behind reads its front's planes, as the lit surface lights its
+  front). At d = 0 (or wherever no layer is left by the band) the largest
+  a takes the pixel whole, ties to the lower entry, as the draft says.
+- **Tests** (rabbittustests, Metal under API and shader validation with
+  warnings fatal, Debug and Release, both devices): test 1 above;
+  `test_layered_refusals` (7, 12, 13's getter: every refusal its own
+  check and message, a 2D view and one of too few layers refused, a
+  sampler of another instance, a lit material's call refusing a layered
+  one, a TLAS's table refusing it where ray queries exist, get_layer's
+  round trip exact, values staged), `_weights` (2), `_height_blend` (3:
+  0.2 one layer, 2 a third and two thirds, 0 the higher whole, contrast 0
+  and depth 100 within 1%, a zero-weight high entry dropped), `_four` (4),
+  `_triplanar` (5: a checker square on q.xy, q.zy and q.xz by the turn;
+  the neutral normal lit as the face), `_reflect` (6: the colour target
+  the plain variant's bits, roughness 0.5 of 0.2 and 0.8), `_gradients`
+  (9: every texel its layer's level 2 across a depth-0 switch, none of
+  another level), `_normals` (10: a UV and a triplanar layer flat, then
+  one bent, the blend's normal by the test's own arithmetic under suns
+  from +z and +x), `_index_past_count` (13), `_cover` (T7);
+  `test_frame_allocations` with a layered square set each frame: 0 of
+  ours (8). Contract tests (rbtrendreflect_tests): `test_layered_block`
+  (11: every member's offset from the reflection against the C++ block)
+  and `test_layered_sets` (14). Seen failing first: every GPU test against
+  a build whose create returned RBT_RESULT_NOT_IMPLEMENTED; and three
+  behavioural tests against a mutated shader (the turn ignored: the
+  triplanar checker's q.zy and q.xz cases stripes; the d = 0 fallback
+  removed: black; an index past the count clamped: green), the last after
+  the test was corrected (its entry 1 had named the very layer a clamp
+  gives). The two contract tests were written after the shaders; their
+  first run failed by the test's own lookup, not the code.
+- **Measured** (Release, no validation, `RABBITTUSTESTS_MEASURE=1
+  test_layered_measure`: a face over 2560 x 1440 of 1024-texel maps,
+  submit to idle, the mean of 50 after 10, both devices, two runs): the
+  lit surface with four maps 0.72 to 0.86 ms; layered, one UV layer 1.09
+  to 1.11, two 1.29 to 1.30, four 1.67 to 1.71, four TRIPLANAR (36 reads)
+  2.99 to 3.01. The draft costed reads, not milliseconds (3 to 6 typical
+  against the lit surface's 4; 36 at worst): about 1.5 times the lit
+  surface for typical ground, 4 times at the worst.
+- **Owed**: D3D12 and Vulkan; a sampler above anisotropy 1 still waits
+  on S49; the later stages (anti-tiling, weights from a texture) as the
+  draft's section 4, each when a caller asks.
+
 ### 54. A view-model pass: a second pass with its own field of view, depth cleared (card A58, decided 2026-11-17: drafted when wanted)
 
 Asked for by you on 2026-11-17: a draft, when wanted, for drawing chosen
@@ -6742,8 +6833,9 @@ question as recommended (Q1a one set of values a scene, varied per pixel
 by slope and a snow line; Q2a a material without a response takes no
 cover; Q3a the traced paths without it). Built 2026-11-19 on the Mac
 (Metal, the M5 Pro; D3D12 and Vulkan never built: no backend branch).
-The draft's T7 (the layered surface) waits on item 53's build. Its
-caller's half, drafted beside the caller's headers, is not built here.
+The draft's T7 (the layered surface) was built with item 53 on
+2026-11-19 (`test_layered_cover`). Its caller's half, drafted beside the
+caller's headers, is not built here.
 - **Public** (`rbtrendlit.h`): `RBTREND_LIT_COVER_FRAME` (NONE refused,
   ROUND, FLAT), `RBTREND_LIT_COVER` (struct type 5045),
   `rbtrend_lit_scene_set_cover(scene, cover, out_error)` (NULL for none;

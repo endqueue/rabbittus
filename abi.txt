@@ -206,6 +206,12 @@ const RBTREND_INDEX_STRIDE_UINT32 = 4
 const RBTREND_LIT_COVER_FRAME_FLAT = 2
 const RBTREND_LIT_COVER_FRAME_NONE = 0
 const RBTREND_LIT_COVER_FRAME_ROUND = 1
+const RBTREND_LIT_LAYERED_MAP_BASE_COLOR = 0
+const RBTREND_LIT_LAYERED_MAP_NORMAL = 1
+const RBTREND_LIT_LAYERED_MAP_ORMH = 2
+const RBTREND_LIT_LAYER_PROJECTION_NONE = 0
+const RBTREND_LIT_LAYER_PROJECTION_TRIPLANAR = 2
+const RBTREND_LIT_LAYER_PROJECTION_UV = 1
 const RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL = 2
 const RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED = 3
 const RBTREND_LIT_LIGHT_TYPE_POINT = 0
@@ -216,6 +222,8 @@ const RBTREND_LIT_MAP_NORMAL = 1
 const RBTREND_LIT_MAP_ORM = 2
 const RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT = 4
 const RBTREND_LIT_SHADER_DEPTH_FRAGMENT = 1
+const RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT = 9
+const RBTREND_LIT_SHADER_LAYERED_SURFACE_REFLECT_FRAGMENT = 10
 const RBTREND_LIT_SHADER_SHADOW_VERTEX = 3
 const RBTREND_LIT_SHADER_SHADOW_VERTEX_COLOR = 7
 const RBTREND_LIT_SHADER_SKY_FRAGMENT = 5
@@ -440,6 +448,7 @@ const RBT_STRUCT_TYPE_REND_LIT_COVER = 5045
 const RBT_STRUCT_TYPE_REND_LIT_COVER_RESPONSE = 5046
 const RBT_STRUCT_TYPE_REND_LIT_ENVIRONMENT_DESC = 5017
 const RBT_STRUCT_TYPE_REND_LIT_FOG = 5041
+const RBT_STRUCT_TYPE_REND_LIT_LAYER_VALUES = 5061
 const RBT_STRUCT_TYPE_REND_LIT_LIGHT_SHADOW = 5034
 const RBT_STRUCT_TYPE_REND_LIT_MATERIAL_VALUES = 5018
 const RBT_STRUCT_TYPE_REND_LIT_SCENE_DESC = 5040
@@ -772,10 +781,17 @@ fn rbtrend_lit_environment_create RBT_RESULT (rbtrend_instance, const RBTREND_LI
 fn rbtrend_lit_environment_destroy void (rbtrend_lit_environment)
 fn rbtrend_lit_environment_get_specular_mip_count uint32_t (rbtrend_lit_environment)
 fn rbtrend_lit_fit_cascades RBT_RESULT (const RBTREND_LIT_CASCADE_FIT *, RBTREND_LIT_SHADOW_MAPS *, RBTREND_ERROR *)
+fn rbtrend_lit_get_layered_material_layout RBT_RESULT (rbtrend_instance, rbtrend_binding_layout *, RBTREND_ERROR *)
 fn rbtrend_lit_get_material_layout RBT_RESULT (rbtrend_instance, rbtrend_binding_layout *, RBTREND_ERROR *)
 fn rbtrend_lit_get_scene_layout RBT_RESULT (rbtrend_instance, rbtrend_binding_layout *, RBTREND_ERROR *)
 fn rbtrend_lit_get_shader RBT_RESULT (rbtrend_instance, RBTREND_LIT_SHADER, rbtrend_shader *, RBTREND_ERROR *)
 fn rbtrend_lit_get_shadow_layout RBT_RESULT (rbtrend_instance, rbtrend_binding_layout *, RBTREND_ERROR *)
+fn rbtrend_lit_layered_material_create RBT_RESULT (rbtrend_instance, uint32_t, rbtrend_material *, RBTREND_ERROR *)
+fn rbtrend_lit_layered_material_get_layer RBT_RESULT (rbtrend_material, uint32_t, RBTREND_LIT_LAYER_VALUES *, RBTREND_ERROR *)
+fn rbtrend_lit_layered_material_set_blend_depth RBT_RESULT (rbtrend_material, float, RBTREND_ERROR *)
+fn rbtrend_lit_layered_material_set_layer RBT_RESULT (rbtrend_material, uint32_t, const RBTREND_LIT_LAYER_VALUES *, RBTREND_ERROR *)
+fn rbtrend_lit_layered_material_set_map RBT_RESULT (rbtrend_material, RBTREND_LIT_LAYERED_MAP, rbtrend_texture_view, RBTREND_ERROR *)
+fn rbtrend_lit_layered_material_set_sampler RBT_RESULT (rbtrend_material, rbtrend_sampler, RBTREND_ERROR *)
 fn rbtrend_lit_material_create RBT_RESULT (rbtrend_instance, rbtrend_material *, RBTREND_ERROR *)
 fn rbtrend_lit_material_get_map_uv_transform RBT_RESULT (rbtrend_material, RBTREND_LIT_MAP, float *, RBTREND_ERROR *)
 fn rbtrend_lit_material_get_values RBT_RESULT (rbtrend_material, RBTREND_LIT_MATERIAL_VALUES *, RBTREND_ERROR *)
@@ -994,6 +1010,10 @@ macro RBTREND_LIT_ATMOSPHERE_MAX_SKY_VIEW_STEPS 128u
 macro RBTREND_LIT_ATMOSPHERE_MIN_AERIAL_SIZE 8u
 macro RBTREND_LIT_ATMOSPHERE_MIN_SKY_VIEW_SIZE 32u
 macro RBTREND_LIT_FOG_MAX_SUNS 2u
+macro RBTREND_LIT_LAYERED_INPUT_LAYERS 8u
+macro RBTREND_LIT_LAYERED_MAX_LAYERS 16u
+macro RBTREND_LIT_LAYERED_NO_LAYER 0xFFu
+macro RBTREND_LIT_LAYERED_PIXEL_LAYERS 4u
 macro RBTREND_LIT_MATERIAL_SET 1u
 macro RBTREND_LIT_MAX_CASCADES 4u
 macro RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS 4u
@@ -2166,6 +2186,17 @@ field RBTREND_LIT_FOG.end_distance @84 float
 field RBTREND_LIT_FOG.max_opacity @88 float
 struct RBTREND_LIT_INSTANCE size=64 align=4
 field RBTREND_LIT_INSTANCE.transform @0 float[16]
+struct RBTREND_LIT_LAYER_VALUES size=64 align=8
+field RBTREND_LIT_LAYER_VALUES.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_LAYER_VALUES.base_color @16 float[3]
+field RBTREND_LIT_LAYER_VALUES.roughness @28 float
+field RBTREND_LIT_LAYER_VALUES.metalness @32 float
+field RBTREND_LIT_LAYER_VALUES.specular @36 float
+field RBTREND_LIT_LAYER_VALUES.normal_scale @40 float
+field RBTREND_LIT_LAYER_VALUES.occlusion_strength @44 float
+field RBTREND_LIT_LAYER_VALUES.height_contrast @48 float
+field RBTREND_LIT_LAYER_VALUES.uv_scale @52 float
+field RBTREND_LIT_LAYER_VALUES.projection @56 RBTREND_LIT_LAYER_PROJECTION
 struct RBTREND_LIT_LIGHT_SHADOW size=32 align=8
 field RBTREND_LIT_LIGHT_SHADOW.base @0 RBT_STRUCT_BASE
 field RBTREND_LIT_LIGHT_SHADOW._kind @16 RBTREND_LIT_SHADOW_KIND
@@ -2948,6 +2979,9 @@ typedef RBTREND_LIT_COVER_RESPONSE = struct RBTREND_LIT_COVER_RESPONSE
 typedef RBTREND_LIT_ENVIRONMENT_DESC = struct RBTREND_LIT_ENVIRONMENT_DESC
 typedef RBTREND_LIT_FOG = struct RBTREND_LIT_FOG
 typedef RBTREND_LIT_INSTANCE = struct RBTREND_LIT_INSTANCE
+typedef RBTREND_LIT_LAYERED_MAP = uint32_t
+typedef RBTREND_LIT_LAYER_PROJECTION = uint32_t
+typedef RBTREND_LIT_LAYER_VALUES = struct RBTREND_LIT_LAYER_VALUES
 typedef RBTREND_LIT_LIGHT_SHADOW = struct RBTREND_LIT_LIGHT_SHADOW
 typedef RBTREND_LIT_LIGHT_TYPE = uint32_t
 typedef RBTREND_LIT_MAP = uint32_t

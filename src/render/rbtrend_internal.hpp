@@ -1400,6 +1400,12 @@ typedef struct rbtrend_material_t {
 	 * (rbtrendraytracing_internal.hpp, D4), on a device with ray queries; 0
 	 * for any other material. */
 	uint32_t rt_lit_slot{0};
+	/* A layered material's layers' RBTREND_LIT_COVER_RESPONSE, exact, two
+	 * floats a layer (cover, porosity), for
+	 * rbtrend_lit_layered_material_get_layer(): its block holds them packed.
+	 * Allocated by rbtrend_lit_layered_material_create(); NULL for any other
+	 * material. */
+	float *lit_layer_responses{nullptr};
 } rbtrend_material_t;
 
 /* For a compile: builds [material]'s binding set if it has none, or again if

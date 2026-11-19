@@ -1908,6 +1908,8 @@ int main(void)
     calls++;
     expect_error("rbtrend_lit_fit_cascades", rbtrend_lit_fit_cascades((const RBTREND_LIT_CASCADE_FIT *){0}, (RBTREND_LIT_SHADOW_MAPS *){0}, (RBTREND_ERROR *){0}));
     calls++;
+    expect_error("rbtrend_lit_get_layered_material_layout", rbtrend_lit_get_layered_material_layout((rbtrend_instance){0}, (rbtrend_binding_layout *){0}, (RBTREND_ERROR *){0}));
+    calls++;
     expect_error("rbtrend_lit_get_material_layout", rbtrend_lit_get_material_layout((rbtrend_instance){0}, (rbtrend_binding_layout *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_get_scene_layout", rbtrend_lit_get_scene_layout((rbtrend_instance){0}, (rbtrend_binding_layout *){0}, (RBTREND_ERROR *){0}));
@@ -1915,6 +1917,18 @@ int main(void)
     expect_error("rbtrend_lit_get_shader", rbtrend_lit_get_shader((rbtrend_instance){0}, (RBTREND_LIT_SHADER){0}, (rbtrend_shader *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_get_shadow_layout", rbtrend_lit_get_shadow_layout((rbtrend_instance){0}, (rbtrend_binding_layout *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_layered_material_create", rbtrend_lit_layered_material_create((rbtrend_instance){0}, (uint32_t){0}, (rbtrend_material *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_layered_material_get_layer", rbtrend_lit_layered_material_get_layer((rbtrend_material){0}, (uint32_t){0}, (RBTREND_LIT_LAYER_VALUES *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_layered_material_set_blend_depth", rbtrend_lit_layered_material_set_blend_depth((rbtrend_material){0}, (float){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_layered_material_set_layer", rbtrend_lit_layered_material_set_layer((rbtrend_material){0}, (uint32_t){0}, (const RBTREND_LIT_LAYER_VALUES *){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_layered_material_set_map", rbtrend_lit_layered_material_set_map((rbtrend_material){0}, (RBTREND_LIT_LAYERED_MAP){0}, (rbtrend_texture_view){0}, (RBTREND_ERROR *){0}));
+    calls++;
+    expect_error("rbtrend_lit_layered_material_set_sampler", rbtrend_lit_layered_material_set_sampler((rbtrend_material){0}, (rbtrend_sampler){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_material_create", rbtrend_lit_material_create((rbtrend_instance){0}, (rbtrend_material *){0}, (RBTREND_ERROR *){0}));
     calls++;

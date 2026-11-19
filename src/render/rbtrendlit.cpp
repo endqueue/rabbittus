@@ -10,6 +10,7 @@
 #include "rbtrendclouds_internal.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -42,6 +43,8 @@
 #include "rbtrend_exposure_adapt_histogram_frag.package.inc"
 #include "rbtrend_tone_map_frag.package.inc"
 #include "rbtrend_lit_surface_reflect_frag.package.inc"
+#include "rbtrend_lit_layered_frag.package.inc"
+#include "rbtrend_lit_layered_reflect_frag.package.inc"
 #include "rbtrend_lit_hiz_frag.package.inc"
 #include "rbtrend_lit_hiz_down_frag.package.inc"
 #include "rbtrend_lit_ssr_comp.package.inc"
@@ -65,6 +68,11 @@ static_assert(sizeof(rbtrend_lit_scene_block) == 128 + 80 * RBTREND_LIT_MAX_SHAD
 // block keeps under this one on every device.
 static_assert(sizeof(rbtrend_lit_scene_block) <= 16384, "RbtrendLitScene fits Vulkan's guaranteed uniform buffer range");
 static_assert(sizeof(rbtrend_lit_material_block) == 288, "RbtrendLitMaterial's std140 size");
+static_assert(sizeof(rbtrend_lit_layer_row) == 48, "RbtrendLitLayer's std140 size: three float4");
+static_assert(offsetof(rbtrend_lit_layered_block, layers) == 16, "a layered block's first layer at 16");
+static_assert(sizeof(rbtrend_lit_layered_block) == 784, "RbtrendLitLayered's std140 size: 16 + 48 x 16");
+static_assert(offsetof(rbtrend_lit_layer_row, metalness) == 16 && offsetof(rbtrend_lit_layer_row, height_contrast) == 32,
+              "a layer's three float4");
 static_assert(sizeof(rbtrend_lit_shadow_pass_block) == 64, "RbtrendLitShadowPass's std140 size");
 static_assert(sizeof(rbtrend_occlusion_block) == 176, "RbtrendOcclusionPass's std140 size");
 static_assert(sizeof(rbtrend_hosek_sky_block) == 160, "RbtrendHosekSky's std140 size");
@@ -231,6 +239,29 @@ static bool rbtrend_lit_check_material_block(rbtrend_binding_layout layout) {
 	return rbtrend_lit_check_block(layout, 0, "RbtrendLitMaterial", (uint32_t)sizeof(B), members, COUNT_OF(members));
 }
 
+static bool rbtrend_lit_check_layered_block(rbtrend_binding_layout layout) {
+	typedef rbtrend_lit_layered_block B;
+	typedef rbtrend_lit_layer_row R;
+	const uint32_t last = MEMBER(B, layers) + (uint32_t)sizeof(R) * (RBTREND_LIT_LAYERED_MAX_LAYERS - 1);
+	const expected_member members[] = {
+	    {"blend_depth", MEMBER(B, blend_depth)},
+	    {"layer_count", MEMBER(B, layer_count)},
+	    {"layers[0].base_color", MEMBER(B, layers)},
+	    {"layers[0].roughness", MEMBER(B, layers) + MEMBER(R, roughness)},
+	    {"layers[0].metalness", MEMBER(B, layers) + MEMBER(R, metalness)},
+	    {"layers[0].specular", MEMBER(B, layers) + MEMBER(R, specular)},
+	    {"layers[0].normal_scale", MEMBER(B, layers) + MEMBER(R, normal_scale)},
+	    {"layers[0].occlusion_strength", MEMBER(B, layers) + MEMBER(R, occlusion_strength)},
+	    {"layers[0].height_contrast", MEMBER(B, layers) + MEMBER(R, height_contrast)},
+	    {"layers[0].uv_scale", MEMBER(B, layers) + MEMBER(R, uv_scale)},
+	    {"layers[0].projection", MEMBER(B, layers) + MEMBER(R, projection)},
+	    {"layers[0].cover", MEMBER(B, layers) + MEMBER(R, cover)},
+	    {"layers[15].base_color", last},
+	    {"layers[15].cover", last + MEMBER(R, cover)},
+	};
+	return rbtrend_lit_check_block(layout, 0, "RbtrendLitLayered", (uint32_t)sizeof(B), members, COUNT_OF(members));
+}
+
 static bool rbtrend_lit_check_shadow_pass_block(rbtrend_binding_layout layout) {
 	const expected_member members[] = {{"view_projection", 0}};
 	return rbtrend_lit_check_block(layout, 0, "RbtrendLitShadowPass", (uint32_t)sizeof(rbtrend_lit_shadow_pass_block), members, 1);
@@ -262,7 +293,7 @@ static bool rbtrend_lit_check_occlusion_block(rbtrend_binding_layout layout) {
 static const struct {
 	const RBTREND_SHADER_PACKAGE *package;
 	const char *name;
-} s_lit_shaders[9] = {
+} s_lit_shaders[11] = {
     {&rbtrend_lit_frag_package, "surface fragment"},
     {&rbtrend_lit_depth_frag_package, "depth fragment"},
     {&rbtrend_lit_vert_package, "surface vertex"},
@@ -272,6 +303,8 @@ static const struct {
     {&rbtrend_lit_color_vert_package, "colored surface vertex"},
     {&rbtrend_lit_shadow_color_vert_package, "colored shadow vertex"},
     {&rbtrend_lit_surface_reflect_frag_package, "reflecting surface fragment"},
+    {&rbtrend_lit_layered_frag_package, "layered surface fragment"},
+    {&rbtrend_lit_layered_reflect_frag_package, "reflecting layered surface fragment"},
 };
 
 static rbtrend_shader rbtrend_lit_shader(rbtrend_instance instance, uint32_t which) {
@@ -1208,7 +1241,7 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	lit.histogram_pipeline           = nullptr;
 	rbtrend_binding_layout *layouts[] = {&lit.shell_input_layout, &lit.reflect_input_layout, &lit.ssr_input_layout, &lit.ssr_scene_layout,  &lit.tone_map_layout,
 	                                    &lit.pass_layout,          &lit.occlusion_layout, &lit.hosek_layout,       &lit.histogram_layout,
-	                                    &lit.cull_depth_layout,    &lit.cull_layout,      &lit.material_layout,    &lit.shadow_layout,
+	                                    &lit.cull_depth_layout,    &lit.cull_layout,      &lit.material_layout,    &lit.layered_layout, &lit.shadow_layout,
 	                                    &lit.scene_layout,         &lit.atmosphere_layout, &lit.fog_layout,         &lit.fog_integrate_layout,
 	                                    &lit.fog_apply_layout,     &lit.clouds_input_layout, &lit.clouds_layout,   &lit.clouds_march_layout,
 	                                    &lit.clouds_reconstruct_layout, &lit.clouds_composite_layout};
@@ -1247,6 +1280,16 @@ void rbtrend_lit_builtins_destroy(rbtrend_instance instance) {
 	for (rbtrend_shader &shader : lit.shaders) {
 		rbtrend_shader_destroy(shader);
 		shader = nullptr;
+	}
+	for (uint32_t map = 0; map < 3; ++map) {
+		for (rbtrend_texture_view &view : lit.layered_neutral_layers[map]) {
+			rbtrend_texture_view_destroy(view);
+			view = nullptr;
+		}
+		rbtrend_texture_view_destroy(lit.layered_neutral_view[map]);
+		lit.layered_neutral_view[map] = nullptr;
+		rbtrend_texture2d_destroy(lit.layered_neutral[map]);
+		lit.layered_neutral[map] = nullptr;
 	}
 	rbtrend_sampler *samplers[] = {&lit.shadow_sampler_reversed, &lit.shadow_sampler, &lit.environment_sampler, &lit.material_sampler};
 	for (rbtrend_sampler *sampler : samplers) {
@@ -1378,7 +1421,7 @@ RBT_RESULT rbtrend_lit_get_shader(rbtrend_instance instance, RBTREND_LIT_SHADER 
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "instance is NULL");
 	if (RBT_STALE(instance, "rbtrend_lit_get_shader", "instance"))
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "instance is destroyed");
-	if (shader > RBTREND_LIT_SHADER_SURFACE_REFLECT_FRAGMENT)
+	if (shader > RBTREND_LIT_SHADER_LAYERED_SURFACE_REFLECT_FRAGMENT)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "%u is not an RBTREND_LIT_SHADER", shader);
 	if (!out_shader)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_shader is NULL");
@@ -1774,6 +1817,405 @@ RBT_RESULT rbtrend_lit_material_set_sampler(rbtrend_material material, rbtrend_s
 	if (sampler && RBT_STALE(sampler, "rbtrend_lit_material_set_sampler", "sampler"))
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "sampler is destroyed");
 	return rbtrend_material_set_sampler(material, "material_sampler", 0, sampler ? sampler : material->instance->builtins.lit.material_sampler, out_error);
+}
+
+// ---- Layered materials (rbtrendlit.h, "Layered materials") --------------------------
+
+} // extern "C"
+
+const float rbtrend_lit_layered_neutral_texel[3][4] = {
+    {1.0f, 1.0f, 1.0f, 1.0f},
+    {0.5f, 0.5f, 1.0f, 1.0f},
+    // The byte 128 an 8-bit source writes for a height of 0.5.
+    {1.0f, 1.0f, 1.0f, 128.0f / 255.0f},
+};
+
+static const char *const s_layered_bindings[3] = {"layered_base_color", "layered_normal", "layered_ormh"};
+
+// rbtrend_lit_get_layered_material_layout's work: the instance's layout,
+// made on first use from both layered fragments. NULL, reported, if it
+// can't be.
+static rbtrend_binding_layout rbtrend_lit_layered_layout(rbtrend_instance instance) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	if (lit.layered_layout)
+		return lit.layered_layout;
+	rbtrend_shader shaders[2] = {rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT),
+	                            rbtrend_lit_shader(instance, RBTREND_LIT_SHADER_LAYERED_SURFACE_REFLECT_FRAGMENT)};
+	if (!shaders[0])
+		return nullptr;
+	if (!shaders[1])
+		return nullptr;
+	rbtrend_binding_layout layout = nullptr;
+	(void)rbtrend_binding_layout_create_from_shaders(instance, shaders, 2, RBTREND_LIT_MATERIAL_SET, &layout, nullptr);
+	if (!layout) {
+		rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "the binding layout of Rend's layered materials can't be created");
+		return nullptr;
+	}
+	if (!rbtrend_lit_check_layered_block(layout)) {
+		rbtrend_binding_layout_destroy(layout);
+		return nullptr;
+	}
+	lit.layered_layout = layout;
+	return layout;
+}
+
+// The instance's three neutral arrays and their views, made if they
+// aren't: never written here (the first compile binding a layered material
+// clears them, rbtrend_cmd_prepare_lit_scenes). False, reported, if one
+// can't be.
+static bool rbtrend_lit_layered_neutral(rbtrend_instance instance) {
+	rbtrend_lit_builtins &lit = instance->builtins.lit;
+	static const CRGPU_FORMAT formats[3] = {CRGPU_FORMAT_R8G8B8A8_UNORM, CRGPU_FORMAT_R16G16B16A16_FLOAT, CRGPU_FORMAT_R8G8B8A8_UNORM};
+	for (uint32_t map = 0; map < 3; ++map) {
+		if (!lit.layered_neutral[map]) {
+			RBTREND_TEXTURE2D_DESC desc{};
+			desc.base         = rbt_struct_base(RBT_STRUCT_TYPE_REND_TEXTURE2D_DESC);
+			desc.width        = 1;
+			desc.height       = 1;
+			desc.format       = formats[map];
+			desc.usage        = RBTREND_TEXTURE_USAGE_BIT_SHADER_RESOURCE | RBTREND_TEXTURE_USAGE_BIT_RENDER_TARGET;
+			desc.mip_levels   = 1;
+			desc.array_layers = RBTREND_LIT_LAYERED_MAX_LAYERS;
+			desc.sample_count = 1;
+			desc.debug_name   = "rbtrend layered neutral array";
+			(void)rbtrend_texture2d_create(instance, &desc, &lit.layered_neutral[map], nullptr);
+			if (!lit.layered_neutral[map]) {
+				rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's layered neutral array can't be created");
+				return false;
+			}
+		}
+		RBTREND_TEXTURE_VIEW_DESC vd{};
+		vd.base   = rbt_struct_base(RBT_STRUCT_TYPE_REND_TEXTURE_VIEW_DESC);
+		vd.aspect = RBTREND_TEXTURE_VIEW_ASPECT_COLOR;
+		vd.mip_count = 1;
+		if (!lit.layered_neutral_view[map]) {
+			vd.type        = RBTREND_TEXTURE_VIEW_TYPE_SHADER_RESOURCE;
+			vd.shape       = RBTREND_TEXTURE_VIEW_SHAPE_2D_ARRAY;
+			vd.base_layer  = 0;
+			vd.layer_count = RBTREND_LIT_LAYERED_MAX_LAYERS;
+			(void)rbtrend_texture_view_create_2d(lit.layered_neutral[map], &vd, &lit.layered_neutral_view[map], nullptr);
+			if (!lit.layered_neutral_view[map]) {
+				rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's layered neutral view can't be created");
+				return false;
+			}
+		}
+		for (uint32_t layer = 0; layer < RBTREND_LIT_LAYERED_MAX_LAYERS; ++layer) {
+			if (lit.layered_neutral_layers[map][layer])
+				continue;
+			vd.type        = RBTREND_TEXTURE_VIEW_TYPE_RENDER_TARGET;
+			vd.shape       = RBTREND_TEXTURE_VIEW_SHAPE_2D;
+			vd.base_layer  = layer;
+			vd.layer_count = 1;
+			(void)rbtrend_texture_view_create_2d(lit.layered_neutral[map], &vd, &lit.layered_neutral_layers[map][layer], nullptr);
+			if (!lit.layered_neutral_layers[map][layer]) {
+				rbtrend_report(instance, RBT_RESULT_REND_GPU_FAILURE, "Rend's layered neutral layer view can't be created");
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+// [material]'s block, through [out_slot], if it is a layered material;
+// RBT_RESULT_INVALID_ARGUMENT, [error] saying why, if not. [who] is the
+// public call, for the destroyed-handle check (rbtstale.hpp).
+static RBT_RESULT rbtrend_lit_layered_slot(const char *who, rbtrend_material material, rbtrend_material_slot **out_slot, RBTREND_ERROR *error) {
+	if (!material)
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "material is NULL");
+	if (RBT_STALE(material, who, "material"))
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "material is destroyed");
+	if (!material->layout)
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "material is not a layered material (rbtrend_lit_layered_material_create)");
+	if (material->layout != material->instance->builtins.lit.layered_layout)
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "material is not a layered material (rbtrend_lit_layered_material_create)");
+	rbtrend_material_slot *slot = rbtrend_lit_block_slot(material, "u_lit_layered");
+	if (!slot)
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "the material has no layered block");
+	if (slot->block_size < sizeof(rbtrend_lit_layered_block))
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "the material's layered block is too small");
+	if (!material->lit_layer_responses)
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "the material has no layers' responses");
+	*out_slot = slot;
+	return RBT_RESULT_OK;
+}
+
+static uint32_t rbtrend_lit_layered_count(const rbtrend_material_slot *slot) {
+	rbtrend_lit_layered_block block;
+	memcpy(&block, slot->bytes, sizeof(block));
+	return block.layer_count;
+}
+
+// [value], 0 to 1, over 32767, rounded to the nearest.
+static uint32_t rbtrend_lit_q15(float value) {
+	return (uint32_t)(value * 32767.0f + 0.5f);
+}
+
+// A layer's chain: its type RBTREND_LIT_LAYER_VALUES', then an
+// RBTREND_LIT_COVER_RESPONSE, once, or nothing: the response into
+// [out_response], NULL for none.
+static RBT_RESULT rbtrend_lit_layer_chain(RBTREND_ERROR *error, const char *name, const RBT_STRUCT_BASE *base,
+                                          const RBTREND_LIT_COVER_RESPONSE **out_response) {
+	*out_response = nullptr;
+	if (base->type != RBT_STRUCT_TYPE_REND_LIT_LAYER_VALUES)
+		return rbtrend_fail(error, RBT_RESULT_STRUCT_WRONG_TYPE, "%s %s", name, rbt_struct_check_message(RBT_RESULT_STRUCT_WRONG_TYPE));
+	for (const RBT_STRUCT_BASE *link = base->next; link; link = link->next) {
+		if (link->type != RBT_STRUCT_TYPE_REND_LIT_COVER_RESPONSE)
+			return rbtrend_fail(error, RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN,
+			                    "%s has a struct chained on other than RBTREND_LIT_COVER_RESPONSE, the one it takes", name);
+		if (*out_response)
+			return rbtrend_fail(error, RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN, "%s has RBTREND_LIT_COVER_RESPONSE chained on twice", name);
+		*out_response = (const RBTREND_LIT_COVER_RESPONSE *)link;
+	}
+	return RBT_RESULT_OK;
+}
+
+// A value of layer [layer] in [lo, hi] and finite: RBT_RESULT_OK, or the
+// refusal "layer <n>: <field> is <value>; it must be <range>".
+static RBT_RESULT rbtrend_lit_layer_value(RBTREND_ERROR *error, uint32_t layer, const char *field, float value, float lo, float hi, const char *range) {
+	if (!finite(value))
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "layer %u: %s is %g; it must be %s", layer, field, (double)value, range);
+	if (!(value >= lo))
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "layer %u: %s is %g; it must be %s", layer, field, (double)value, range);
+	if (!(value <= hi))
+		return rbtrend_fail(error, RBT_RESULT_INVALID_ARGUMENT, "layer %u: %s is %g; it must be %s", layer, field, (double)value, range);
+	return RBT_RESULT_OK;
+}
+
+extern "C" {
+
+RBT_RESULT rbtrend_lit_get_layered_material_layout(rbtrend_instance instance, rbtrend_binding_layout *out_layout, RBTREND_ERROR *out_error) {
+	return rbtrend_lit_layout_result("rbtrend_lit_get_layered_material_layout", instance, rbtrend_lit_layered_layout, "layered materials", out_layout,
+	                                 out_error);
+}
+
+RBT_RESULT rbtrend_lit_layered_material_create(rbtrend_instance instance, uint32_t layer_count, rbtrend_material *out_material, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	if (out_material)
+		*out_material = nullptr;
+	if (!instance)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "instance is NULL");
+	if (RBT_STALE(instance, "rbtrend_lit_layered_material_create", "instance"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "instance is destroyed");
+	RBTREND_ENTER(instance, "rbtrend_lit_layered_material_create");
+	if (layer_count == 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer_count is 0; it must be 1 to %u", RBTREND_LIT_LAYERED_MAX_LAYERS);
+	if (layer_count > RBTREND_LIT_LAYERED_MAX_LAYERS)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer_count is %u; it must be 1 to %u", layer_count, RBTREND_LIT_LAYERED_MAX_LAYERS);
+	if (!out_material)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_material is NULL");
+	rbtrend_binding_layout layout = nullptr;
+	if (const RBT_RESULT made = rbtrend_lit_get_layered_material_layout(instance, &layout, out_error))
+		return made;
+	if (!rbtrend_lit_prepare_resources(instance))
+		return rbtrend_fail(out_error, RBT_RESULT_REND_GPU_FAILURE, "Rend's lit resources can't be made");
+	if (!rbtrend_lit_layered_neutral(instance))
+		return rbtrend_fail(out_error, RBT_RESULT_REND_GPU_FAILURE, "Rend's layered neutral arrays can't be made");
+	float *responses = (float *)calloc(RBTREND_LIT_LAYERED_MAX_LAYERS * 2, sizeof(float));
+	if (!responses)
+		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the material's layers");
+	RBTREND_MATERIAL_DESC desc{};
+	desc.base                = rbt_struct_base(RBT_STRUCT_TYPE_REND_MATERIAL_DESC);
+	desc._layout             = layout;
+	rbtrend_material material = nullptr;
+	if (const RBT_RESULT made = rbtrend_material_create(instance, &desc, &material, out_error)) {
+		free(responses);
+		return made;
+	}
+	material->lit_layer_responses   = responses;
+	const rbtrend_lit_builtins &lit = instance->builtins.lit;
+	RBT_RESULT set                   = rbtrend_material_set_sampler(material, "layered_sampler", 0, lit.material_sampler, out_error);
+	for (uint32_t map = 0; map < 3; ++map)
+		if (set == RBT_RESULT_OK)
+			set = rbtrend_material_set_texture(material, s_layered_bindings[map], 0, lit.layered_neutral_view[map], out_error);
+	rbtrend_material_slot *slot = nullptr;
+	if (set == RBT_RESULT_OK)
+		set = rbtrend_lit_layered_slot("rbtrend_lit_layered_material_create", material, &slot, out_error);
+	if (set != RBT_RESULT_OK) {
+		rbtrend_material_destroy(material);
+		return set;
+	}
+	rbtrend_lit_layered_block block{};
+	block.blend_depth = 0.2f;
+	block.layer_count = layer_count;
+	for (rbtrend_lit_layer_row &row : block.layers) {
+		for (float &c : row.base_color)
+			c = 1.0f;
+		row.roughness          = 0.5f;
+		row.metalness          = 0.0f;
+		row.specular           = 0.5f;
+		row.normal_scale       = 1.0f;
+		row.occlusion_strength = 1.0f;
+		row.height_contrast    = 0.0f;
+		row.uv_scale           = 1.0f;
+		row.projection         = RBTREND_LIT_LAYER_PROJECTION_UV;
+		row.cover              = 0;
+	}
+	memcpy(slot->bytes, &block, sizeof(block));
+	slot->dirty   = true;
+	*out_material = material;
+	return RBT_RESULT_OK;
+}
+
+RBT_RESULT rbtrend_lit_layered_material_set_layer(rbtrend_material material, uint32_t layer, const RBTREND_LIT_LAYER_VALUES *values, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	rbtrend_material_slot *slot = nullptr;
+	if (const RBT_RESULT layered = rbtrend_lit_layered_slot("rbtrend_lit_layered_material_set_layer", material, &slot, out_error))
+		return layered;
+	RBTREND_ENTER(material->instance, "rbtrend_lit_layered_material_set_layer");
+	const uint32_t count = rbtrend_lit_layered_count(slot);
+	if (layer >= count)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer is %u; the material has %u", layer, count);
+	if (!values)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "values is NULL");
+	const RBTREND_LIT_COVER_RESPONSE *response = nullptr;
+	if (const RBT_RESULT base = rbtrend_lit_layer_chain(out_error, "values", &values->base, &response))
+		return base;
+	const RBTREND_LIT_LAYER_VALUES &v = *values;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "base_color[0]", v.base_color[0], 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "base_color[1]", v.base_color[1], 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "base_color[2]", v.base_color[2], 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "roughness", v.roughness, 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "metalness", v.metalness, 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "specular", v.specular, 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "normal_scale", v.normal_scale, 0.0f, FLT_MAX, "finite, at least 0"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "occlusion_strength", v.occlusion_strength, 0.0f, 1.0f, "0 to 1"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "height_contrast", v.height_contrast, 0.0f, 4.0f, "0 to 4"))
+		return r;
+	if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "uv_scale", v.uv_scale, FLT_MIN, FLT_MAX, "finite, above 0"))
+		return r;
+	if (v.projection == RBTREND_LIT_LAYER_PROJECTION_NONE)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer %u: projection is %u; it must be UV (1) or TRIPLANAR (2)", layer, v.projection);
+	if (v.projection > RBTREND_LIT_LAYER_PROJECTION_TRIPLANAR)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer %u: projection is %u; it must be UV (1) or TRIPLANAR (2)", layer, v.projection);
+	if (response) {
+		if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "the response's cover", response->cover, 0.0f, 1.0f, "0 to 1"))
+			return r;
+		if (const RBT_RESULT r = rbtrend_lit_layer_value(out_error, layer, "the response's porosity", response->porosity, 0.0f, 1.0f, "0 to 1"))
+			return r;
+	}
+	rbtrend_lit_layered_block block;
+	memcpy(&block, slot->bytes, sizeof(block));
+	rbtrend_lit_layer_row &row = block.layers[layer];
+	memcpy(row.base_color, v.base_color, sizeof(row.base_color));
+	row.roughness          = v.roughness;
+	row.metalness          = v.metalness;
+	row.specular           = v.specular;
+	row.normal_scale       = v.normal_scale;
+	row.occlusion_strength = v.occlusion_strength;
+	row.height_contrast    = v.height_contrast;
+	row.uv_scale           = v.uv_scale;
+	row.projection         = v.projection;
+	row.cover = response ? (rbtrend_lit_q15(response->cover) | (rbtrend_lit_q15(response->porosity) << 15) | 0x80000000u) : 0u;
+	material->lit_layer_responses[layer * 2 + 0] = response ? response->cover : 0.0f;
+	material->lit_layer_responses[layer * 2 + 1] = response ? response->porosity : 0.0f;
+	memcpy(slot->bytes, &block, sizeof(block));
+	slot->dirty = true;
+	return RBT_RESULT_OK;
+}
+
+RBT_RESULT rbtrend_lit_layered_material_get_layer(rbtrend_material material, uint32_t layer, RBTREND_LIT_LAYER_VALUES *out_values, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	rbtrend_material_slot *slot = nullptr;
+	if (const RBT_RESULT layered = rbtrend_lit_layered_slot("rbtrend_lit_layered_material_get_layer", material, &slot, out_error))
+		return layered;
+	RBTREND_ENTER(material->instance, "rbtrend_lit_layered_material_get_layer");
+	const uint32_t count = rbtrend_lit_layered_count(slot);
+	if (layer >= count)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "layer is %u; the material has %u", layer, count);
+	if (!out_values)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_values is NULL");
+	RBTREND_LIT_COVER_RESPONSE *chained = nullptr;
+	{
+		const RBTREND_LIT_COVER_RESPONSE *found = nullptr;
+		if (const RBT_RESULT base = rbtrend_lit_layer_chain(out_error, "out_values", &out_values->base, &found))
+			return base;
+		chained = (RBTREND_LIT_COVER_RESPONSE *)found;
+	}
+	rbtrend_lit_layered_block block;
+	memcpy(&block, slot->bytes, sizeof(block));
+	const rbtrend_lit_layer_row &row = block.layers[layer];
+	if (chained && (row.cover & 0x80000000u) == 0)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_values has a response chained on, and layer %u has no RBTREND_LIT_COVER_RESPONSE",
+		                    layer);
+	if (chained) {
+		chained->cover    = material->lit_layer_responses[layer * 2 + 0];
+		chained->porosity = material->lit_layer_responses[layer * 2 + 1];
+	}
+	RBTREND_LIT_LAYER_VALUES &v = *out_values;
+	memcpy(v.base_color, row.base_color, sizeof(v.base_color));
+	v.roughness          = row.roughness;
+	v.metalness          = row.metalness;
+	v.specular           = row.specular;
+	v.normal_scale       = row.normal_scale;
+	v.occlusion_strength = row.occlusion_strength;
+	v.height_contrast    = row.height_contrast;
+	v.uv_scale           = row.uv_scale;
+	v.projection         = row.projection;
+	return RBT_RESULT_OK;
+}
+
+RBT_RESULT rbtrend_lit_layered_material_set_blend_depth(rbtrend_material material, float depth, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	rbtrend_material_slot *slot = nullptr;
+	if (const RBT_RESULT layered = rbtrend_lit_layered_slot("rbtrend_lit_layered_material_set_blend_depth", material, &slot, out_error))
+		return layered;
+	RBTREND_ENTER(material->instance, "rbtrend_lit_layered_material_set_blend_depth");
+	if (!finite(depth))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "depth is %g; it must be finite", (double)depth);
+	if (!(depth >= 0.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "depth is %g; it must be at least 0", (double)depth);
+	rbtrend_lit_layered_block block;
+	memcpy(&block, slot->bytes, sizeof(block));
+	block.blend_depth = depth;
+	memcpy(slot->bytes, &block, sizeof(block));
+	slot->dirty = true;
+	return RBT_RESULT_OK;
+}
+
+RBT_RESULT rbtrend_lit_layered_material_set_map(rbtrend_material material, RBTREND_LIT_LAYERED_MAP map, rbtrend_texture_view view, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	rbtrend_material_slot *slot = nullptr;
+	if (const RBT_RESULT layered = rbtrend_lit_layered_slot("rbtrend_lit_layered_material_set_map", material, &slot, out_error))
+		return layered;
+	RBTREND_ENTER(material->instance, "rbtrend_lit_layered_material_set_map");
+	if (map > RBTREND_LIT_LAYERED_MAP_ORMH)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "%u is not an RBTREND_LIT_LAYERED_MAP", map);
+	if (view && RBT_STALE(view, "rbtrend_lit_layered_material_set_map", "view"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "view is destroyed");
+	if (view && view->instance != material->instance)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "view is of another instance");
+	if (view && view->desc.type != RBTREND_TEXTURE_VIEW_TYPE_SHADER_RESOURCE)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "view is not a SHADER_RESOURCE view");
+	if (view && view->desc.aspect != RBTREND_TEXTURE_VIEW_ASPECT_COLOR)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "view is not a view of color");
+	if (view && view->desc.shape != RBTREND_TEXTURE_VIEW_SHAPE_2D_ARRAY)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "view is not a 2D array (RBTREND_TEXTURE_VIEW_SHAPE_2D_ARRAY)");
+	const uint32_t count = rbtrend_lit_layered_count(slot);
+	if (view && view->desc.layer_count < count)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "view has %u layers; the material has %u", view->desc.layer_count, count);
+	rbtrend_texture_view given = view ? view : material->instance->builtins.lit.layered_neutral_view[map];
+	return rbtrend_material_set_texture(material, s_layered_bindings[map], 0, given, out_error);
+}
+
+RBT_RESULT rbtrend_lit_layered_material_set_sampler(rbtrend_material material, rbtrend_sampler sampler, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	rbtrend_material_slot *slot = nullptr;
+	if (const RBT_RESULT layered = rbtrend_lit_layered_slot("rbtrend_lit_layered_material_set_sampler", material, &slot, out_error))
+		return layered;
+	RBTREND_ENTER(material->instance, "rbtrend_lit_layered_material_set_sampler");
+	if (sampler && RBT_STALE(sampler, "rbtrend_lit_layered_material_set_sampler", "sampler"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "sampler is destroyed");
+	if (sampler && sampler->instance != material->instance)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "sampler is of another instance");
+	return rbtrend_material_set_sampler(material, "layered_sampler", 0, sampler ? sampler : material->instance->builtins.lit.material_sampler, out_error);
 }
 
 } // extern "C"

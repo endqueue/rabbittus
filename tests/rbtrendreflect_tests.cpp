@@ -21,6 +21,9 @@
 #include "rbtrend_exposure_histogram_comp.spv.inc"
 #include "rbtrend_lit_cull_comp.spv.inc"
 #include "rbtrend_lit_frag.spv.inc"
+#include "rbtrend_lit_layered_frag.spv.inc"
+#include "rbtrend_lit_layered_reflect_frag.spv.inc"
+#include "rbtrend_lit_surface_reflect_frag.spv.inc"
 #include "rbtrend_lit_shadow_vert.spv.inc"
 #include "rbtrend_lit_vert.spv.inc"
 // The tables the build wrote for them (cmake/rbtrend_slang.cmake).
@@ -32,6 +35,9 @@
 #include "rbtrend_lit_vert.reflection.inc"
 // Slang's reflection JSON of one, whose SPIR-V drops inputs it declares.
 #include "rbtrend_lit_shadow_vert.reflection.json.inc"
+#include <stddef.h>
+#include "rbtrendlit_internal.hpp"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -724,6 +730,126 @@ static void test_table_refusals()
     printf("rbtrendreflect_tests: a %zu-byte table cut at every length: %u refused, none read past its end\n", size, refused);
 }
 
+// Test 11 of rbtrend_lit_layers_draft.h: the layered block's offsets, read
+// back from the layered fragments' reflection, are those its C++ writer
+// uses (rbtrendlit_internal.hpp's rbtrend_lit_layered_block): the blend
+// depth and the layer count at 0 and 4, a layer at 16 + 48 i, three
+// float4 each, 784 bytes.
+static void test_layered_block()
+{
+    current_test = "test_layered_block";
+    typedef rbtrend_lit_layered_block B;
+    typedef rbtrend_lit_layer_row R;
+    struct expected
+    {
+        const char *name;
+        size_t offset;
+    } members[] = {
+        {"blend_depth", offsetof(B, blend_depth)},
+        {"layer_count", offsetof(B, layer_count)},
+        {"layers[0].base_color", offsetof(B, layers) + offsetof(R, base_color)},
+        {"layers[0].roughness", offsetof(B, layers) + offsetof(R, roughness)},
+        {"layers[0].metalness", offsetof(B, layers) + offsetof(R, metalness)},
+        {"layers[0].specular", offsetof(B, layers) + offsetof(R, specular)},
+        {"layers[0].normal_scale", offsetof(B, layers) + offsetof(R, normal_scale)},
+        {"layers[0].occlusion_strength", offsetof(B, layers) + offsetof(R, occlusion_strength)},
+        {"layers[0].height_contrast", offsetof(B, layers) + offsetof(R, height_contrast)},
+        {"layers[0].uv_scale", offsetof(B, layers) + offsetof(R, uv_scale)},
+        {"layers[0].projection", offsetof(B, layers) + offsetof(R, projection)},
+        {"layers[0].cover", offsetof(B, layers) + offsetof(R, cover)},
+        {"layers[15].base_color", offsetof(B, layers) + 15 * sizeof(R)},
+        {"layers[15].cover", offsetof(B, layers) + 15 * sizeof(R) + offsetof(R, cover)},
+    };
+    CHECK(offsetof(B, layers) == 16 && sizeof(R) == 48 && sizeof(B) == 784);
+    const uint32_t *spirv[2] = {rbtrend_lit_layered_frag_spirv, rbtrend_lit_layered_reflect_frag_spirv};
+    const size_t words[2] = {sizeof(rbtrend_lit_layered_frag_spirv) / 4, sizeof(rbtrend_lit_layered_reflect_frag_spirv) / 4};
+    for (int i = 0; i < 2; ++i)
+    {
+        rbtrend_reflection_store store;
+        std::string error;
+        CHECK(rbtrend_reflect_spirv(spirv[i], words[i], CRGPU_SHADER_STAGE_FRAGMENT, &store, &error));
+        const RBTREND_SHADER_RESOURCE *block = find_resource(store, "u_lit_layered");
+        CHECK(block != nullptr);
+        if (!block)
+            continue;
+        CHECK(block->set == 1 && block->binding == 0 && block->block_size == sizeof(B));
+        for (const expected &m : members)
+        {
+            // Members of an array of structs are reflected by their full
+            // names, element 0's and the last's ("layers[15].cover").
+            const RBTREND_SHADER_MEMBER *found = find_member(store, block, m.name);
+            if (!found)
+            {
+                printf("  %s: %s not in the reflection\n", current_test, m.name);
+                CHECK(found != nullptr);
+                continue;
+            }
+            CHECK(found->offset == m.offset);
+        }
+    }
+}
+
+// Test 14: the layered fragments' sets as the lit surface's: set 0 the
+// scene's sixteen bindings (0 to 15), set 1 exactly the layered layout's
+// five (the block at 0, the base colour, normal and ORMH arrays at 1 to 3,
+// the sampler at 4) and nothing of the lit material's; at most 16 sampled
+// images and 16 samplers in the fragment stage, the lit surface's (and its
+// reflecting twin's) too, against Vulkan's floor a stage.
+static void test_layered_sets()
+{
+    current_test = "test_layered_sets";
+    struct shader
+    {
+        const char *name;
+        const uint32_t *spirv;
+        size_t words;
+        bool layered;
+    } shaders[4] = {
+        {"layered", rbtrend_lit_layered_frag_spirv, sizeof(rbtrend_lit_layered_frag_spirv) / 4, true},
+        {"layered reflecting", rbtrend_lit_layered_reflect_frag_spirv, sizeof(rbtrend_lit_layered_reflect_frag_spirv) / 4, true},
+        {"lit", rbtrend_lit_frag_spirv, sizeof(rbtrend_lit_frag_spirv) / 4, false},
+        {"lit reflecting", rbtrend_lit_surface_reflect_frag_spirv, sizeof(rbtrend_lit_surface_reflect_frag_spirv) / 4, false},
+    };
+    for (const shader &sh : shaders)
+    {
+        rbtrend_reflection_store store;
+        std::string error;
+        CHECK(rbtrend_reflect_spirv(sh.spirv, sh.words, CRGPU_SHADER_STAGE_FRAGMENT, &store, &error));
+        uint32_t set0 = 0, set1 = 0, images = 0, samplers = 0, set0_mask = 0;
+        for (const RBTREND_SHADER_RESOURCE &r : store.resources)
+        {
+            if (r.set == 0)
+            {
+                ++set0;
+                set0_mask |= 1u << r.binding;
+            }
+            if (r.set == 1)
+                ++set1;
+            if (r.type == CRGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                images += r.count;
+            if (r.type == CRGPU_DESCRIPTOR_TYPE_SAMPLER)
+                samplers += r.count;
+        }
+        printf("  %s: %s: set 0 %u bindings, set 1 %u, %u sampled images, %u samplers\n", current_test, sh.name, set0, set1, images, samplers);
+        CHECK(set0 == 16 && set0_mask == 0xFFFFu);
+        CHECK(images <= 16 && samplers <= 16);
+        if (sh.layered)
+        {
+            CHECK(set1 == 5);
+            const char *names[5] = {"u_lit_layered", "layered_base_color", "layered_normal", "layered_ormh", "layered_sampler"};
+            for (uint32_t b = 0; b < 5; ++b)
+            {
+                const RBTREND_SHADER_RESOURCE *r = find_resource(store, names[b]);
+                CHECK(r && r->set == 1 && r->binding == b);
+            }
+            CHECK(!find_resource(store, "u_lit_material"));
+            CHECK(images == 14);
+        }
+        else
+            CHECK(images == 15);
+    }
+}
+
 int main()
 {
     test_vertex_shader();
@@ -738,6 +864,8 @@ int main()
     test_tool_output();
     test_declared_inputs();
     test_table_refusals();
+    test_layered_block();
+    test_layered_sets();
     if (failures)
     {
         printf("%d check(s) failed\n", failures);

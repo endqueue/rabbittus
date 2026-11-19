@@ -43,7 +43,8 @@ extern "C" {
  *   per draw (a draw list binds it, at slot 1).
  * Sets 2 and 3 are the caller's, for its vertex shader (a camera, say).
  * A pipeline names Rend's two layouts at slots 0 and 1, and its own after
- * them; a caller's vertex shader declares nothing in sets 0 and 1. A pass
+ * them (a layered pipeline names the scene's layout at slot 0 and
+ * rbtrend_lit_get_layered_material_layout() at slot 1); a caller's vertex shader declares nothing in sets 0 and 1. A pass
  * that renders a shadow binds, at set 0, the material
  * rbtrend_lit_scene_get_shadow_pass_material() gives for the light and view
  * it renders (of rbtrend_lit_get_shadow_layout()), which holds the matrix the
@@ -69,6 +70,24 @@ extern "C" {
  * refuses a pipeline whose fragment shader reads what its vertex shader
  * doesn't write, and D3D12 matches the stages by register in order
  * (Carrottus GPU's rule: every output from location 0 up to the last one read).
+ *
+ * For the layered fragment shaders (RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT
+ * and its reflecting twin) it writes five more after the five, every one:
+ * - `layout(location = 5) out vec4` and `layout(location = 6) out vec4`:
+ *   the weights of the eight entries of location 7, each at least 0;
+ * - `layout(location = 7) flat out uvec2`: the eight entries' layer
+ *   indices, a byte each (entry e in byte e % 4 of component e / 4),
+ *   RBTREND_LIT_LAYERED_NO_LAYER for none (an index at or past the
+ *   material's layer count reads as none); the same at every vertex of a
+ *   primitive (a flat output is read from one of them);
+ * - `layout(location = 8) out vec3`: the triplanar place, in the
+ *   projection's frame, in the units a layer's `uv_scale` divides (0 where
+ *   no layer is triplanar);
+ * - `layout(location = 9) flat out vec4`: the projection's frame's turn
+ *   into the positions' space, a unit quaternion (x, y, z, w);
+ *   (0, 0, 0, 1) where they are one. The triplanar weights and normals read
+ *   location 1's normal turned back by it.
+ * Location 2 is the texture coordinate UV layers read, times their scale.
  *
  * The same holds for a caller's vertex shader in a pass that renders a
  * shadow map or a depth pre-pass with RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT:
@@ -258,6 +277,21 @@ enum {
 	 * with no surface, which nothing reflects.
 	 */
 	RBTREND_LIT_SHADER_SURFACE_REFLECT_FRAGMENT = 8,
+	/**
+	 * The layered surface (@ref rbtrend_lit_layered "Layered materials"):
+	 * reads locations 0 to 9 and a layered material at set
+	 * RBTREND_LIT_MATERIAL_SET (rbtrend_lit_get_layered_material_layout()),
+	 * the scene at set RBTREND_LIT_SCENE_SET as the lit surface does, and
+	 * lights the blend with the lit surface's lighting. Opaque: its opacity
+	 * is the color's alpha at location 4; no cut-out.
+	 */
+	RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT = 9,
+	/**
+	 * The layered surface writing the two reflection targets as
+	 * RBTREND_LIT_SHADER_SURFACE_REFLECT_FRAGMENT does, from the blended
+	 * surface: a pipeline with it has the same three color targets.
+	 */
+	RBTREND_LIT_SHADER_LAYERED_SURFACE_REFLECT_FRAGMENT = 10,
 };
 
 /**
@@ -651,6 +685,269 @@ RBT_RESULT rbtrend_lit_material_get_map_uv_transform(rbtrend_material material, 
  *         instance.
  */
 RBT_RESULT rbtrend_lit_material_set_sampler(rbtrend_material material, rbtrend_sampler sampler, RBTREND_ERROR *out_error);
+
+/* ---- Layered materials -------------------------------------------------- */
+
+/**
+ * @anchor rbtrend_lit_layered
+ * @par Layered materials
+ * A surface of several materials at once, in proportions that change
+ * across it (a terrain's grass, sand, rock and snow; a site's gravel and
+ * paving; a wall with moss painted in): a layered material, bound at set
+ * RBTREND_LIT_MATERIAL_SET of a pipeline with
+ * RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT, holds up to
+ * RBTREND_LIT_LAYERED_MAX_LAYERS layers' values and three 2D texture
+ * arrays (base color, normal, ORMH), layer i of each map at array layer i.
+ * The caller's vertex shader hands each pixel the weights of eight layers
+ * (locations 5 to 7) and the triplanar inputs (8 and 9). Each pixel:
+ * 0. takes the screen-space gradients of the texture coordinate and the
+ *    triplanar place once, before any branch; every read below samples
+ *    with them (so which layers neighbouring pixels read never picks a
+ *    wrong mip along their edge);
+ * 1. keeps the RBTREND_LIT_LAYERED_PIXEL_LAYERS largest weights above 0
+ *    that name a layer (ties to the lower entry), renormalised to sum 1;
+ *    with none it reads layer idx[0] whole, or layer 0 where that is none;
+ * 2. reads each kept layer's ORMH (h its alpha, c its height_contrast),
+ *    a = w + c h, and with the material's blend depth d,
+ *    w' = w x max(a - max(a) + d, 0), renormalised (Mishkinis's band, 2013,
+ *    times the weight as Unity HDRP's height transition): at d = 0 only the
+ *    largest a, whole (ties to the lower entry); as d grows, the weights
+ *    themselves;
+ * 3. reads each layer with w' above 0 by its projection: UV at the texture
+ *    coordinate times uv_scale, its normal through the tangent frame;
+ *    TRIPLANAR on the three planes of the triplanar place (q.zy, q.xz,
+ *    q.xy) times uv_scale, weighted by the projection frame's normal to the
+ *    fourth power, each plane's normal by the whiteout blend (Golus, 2017)
+ *    turned into the positions' space by location 9's quaternion;
+ * 4. blends base color, occlusion, roughness, metalness, specular and each
+ *    layer's normal (in the positions' space, its normal_scale applied) by
+ *    w', the normal normalised, times location 4's color; and each layer's
+ *    RBTREND_LIT_COVER_RESPONSE, chained on its values, by w' (a layer with
+ *    none answers none of the scene's cover);
+ * 5. lights the blend with the lit surface's lighting.
+ * A layer has no clear coat, sheen, transmission or cut-out. A layered
+ * material takes no entry in the instance's lit-material table, so a traced
+ * path can't name it (rbtrend_tlas refuses it). Reads a pixel: a UV layer
+ * 3, a TRIPLANAR one 9, at most four layers.
+ */
+
+/** @brief The most layers a layered material has: a layer's index is a byte of location 7, its values a row of the block. */
+#define RBTREND_LIT_LAYERED_MAX_LAYERS 16u
+/** @brief The layers' weights (locations 5 and 6) and indices (location 7) a fragment receives. */
+#define RBTREND_LIT_LAYERED_INPUT_LAYERS 8u
+/** @brief The most layers a pixel blends: its heaviest. */
+#define RBTREND_LIT_LAYERED_PIXEL_LAYERS 4u
+/** @brief The index at location 7 that names no layer. */
+#define RBTREND_LIT_LAYERED_NO_LAYER 0xFFu
+
+/**
+ * @brief The layout of set RBTREND_LIT_MATERIAL_SET of a layered pipeline:
+ * what a layered material fills (its block at binding 0, the base color,
+ * normal and ORMH arrays at 1 to 3, a sampler at 4). The instance's: don't
+ * destroy it.
+ *
+ * @param[in]  instance   Instance the layout is of.
+ * @param[out] out_layout Receives the layout; NULL on failure.
+ * @param[out] out_error  Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT if @p instance or
+ *         @p out_layout is NULL; or RBT_RESULT_REND_GPU_FAILURE if it can't
+ *         be made.
+ */
+RBT_RESULT rbtrend_lit_get_layered_material_layout(rbtrend_instance instance, rbtrend_binding_layout *out_layout, RBTREND_ERROR *out_error);
+
+/** @brief The maps of a layered material, each a 2D array whose layer i is layer i's. */
+typedef uint32_t RBTREND_LIT_LAYERED_MAP;
+enum {
+	/** rgb times the layer's base color; alpha not read. An `_SRGB` format
+	 * for colors stored as sRGB. White where none is given. */
+	RBTREND_LIT_LAYERED_MAP_BASE_COLOR = 0,
+	/** A tangent-space normal map, stored 0 to 1 (z up). Flat where none. */
+	RBTREND_LIT_LAYERED_MAP_NORMAL = 1,
+	/** Occlusion in red, roughness in green, metalness in blue (as
+	 * RBTREND_LIT_MAP_ORM), the layer's height in alpha, 0 to 1. (1, 1, 1,
+	 * 128/255) where none: the byte an 8-bit source holds for 0.5. */
+	RBTREND_LIT_LAYERED_MAP_ORMH = 2,
+};
+
+/** @brief How a layer's maps are read. */
+typedef uint32_t RBTREND_LIT_LAYER_PROJECTION;
+enum {
+	/** Refused. */
+	RBTREND_LIT_LAYER_PROJECTION_NONE = 0,
+	/** At the texture coordinate (location 2) times `uv_scale`. */
+	RBTREND_LIT_LAYER_PROJECTION_UV = 1,
+	/** On three planes of the triplanar place (location 8) times `uv_scale`. */
+	RBTREND_LIT_LAYER_PROJECTION_TRIPLANAR = 2,
+};
+
+/**
+ * @brief A layer's values, each multiplying its maps as a lit material's
+ * do. An RBTREND_LIT_COVER_RESPONSE may be chained on: how the layer
+ * answers its scene's cover (none: it takes none).
+ */
+typedef struct RBTREND_LIT_LAYER_VALUES {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_LAYER_VALUES, and its chain (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/** Linear, each 0 to 1, times the base color map. */
+	float base_color[3];
+	/** 0 to 1, times the ORMH map's green; below 0.045 taken as 0.045. */
+	float roughness;
+	/** 0 to 1, times its blue. */
+	float metalness;
+	/** A dielectric's reflectance, 0 to 1 (0.5 is 4%). */
+	float specular;
+	/** How strongly the normal map bends the normal: finite, at least 0; 1 as the map is. */
+	float normal_scale;
+	/** How much of the ORMH map's red is applied, 0 to 1. */
+	float occlusion_strength;
+	/** How much the height (alpha) shifts the layer's share: 0 to 4. */
+	float height_contrast;
+	/** Repeats a unit of the texture coordinate or triplanar place: finite,
+	 * above 0 (1 / a tile's size, for a caller whose units are metres). */
+	float uv_scale;
+	/** An RBTREND_LIT_LAYER_PROJECTION, not NONE. */
+	RBTREND_LIT_LAYER_PROJECTION projection;
+} RBTREND_LIT_LAYER_VALUES;
+
+/**
+ * @brief Creates a layered material: an rbtrend_material of
+ * rbtrend_lit_get_layered_material_layout(), bound at set
+ * RBTREND_LIT_MATERIAL_SET of a layered pipeline, destroyed with
+ * rbtrend_material_destroy().
+ *
+ * Every layer starts white, half rough (0.5), a dielectric of specular 0.5,
+ * normal scale 1, occlusion strength 1, height contrast 0, uv_scale 1,
+ * RBTREND_LIT_LAYER_PROJECTION_UV, with no cover response; the blend depth
+ * 0.2; every map the instance's neutral array (1 x 1, sixteen layers, made
+ * by the instance's first layered create and filled by the first compile
+ * that binds a layered material); Rend's sampler (linear, mipmapped,
+ * repeating). Its block, 784 bytes whatever the layer count, is allocated
+ * here, and nothing after. It takes no entry in the lit-material table.
+ *
+ * @param[in]  instance     Instance the material is of.
+ * @param[in]  layer_count  1 to RBTREND_LIT_LAYERED_MAX_LAYERS.
+ * @param[out] out_material Receives the material; NULL on failure.
+ * @param[out] out_error    Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT if @p instance is NULL,
+ *         @p layer_count is 0 or past RBTREND_LIT_LAYERED_MAX_LAYERS, or
+ *         @p out_material is NULL (each its own check); or the code it
+ *         can't be made with.
+ */
+RBT_RESULT rbtrend_lit_layered_material_create(rbtrend_instance instance, uint32_t layer_count, rbtrend_material *out_material, RBTREND_ERROR *out_error);
+
+/**
+ * @brief Sets one layer's values, staged in the material's block and
+ * copied in the next submission, as rbtrend_lit_material_set_values()'s
+ * are: a frame already submitted reads what it was submitted with.
+ *
+ * @param[in] material Material to change.
+ * @param[in] layer    Below the material's layer count.
+ * @param[in] values   The values, based (RBT_STRUCT_TYPE_REND_LIT_LAYER_VALUES),
+ *                     an RBTREND_LIT_COVER_RESPONSE chained on or none. Only
+ *                     read during the call.
+ * @param[out] out_error Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; otherwise, with nothing changed, each its own
+ *         check in this order: RBT_RESULT_INVALID_ARGUMENT if @p material
+ *         is NULL or not of the layered layout, @p layer is out of range,
+ *         or @p values is NULL; the struct codes for `values->base`
+ *         (RBT_RESULT_STRUCT_WRONG_TYPE, RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN
+ *         for a struct chained on other than a response,
+ *         RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN for two); then
+ *         RBT_RESULT_INVALID_ARGUMENT for a field not finite or out of its
+ *         range, in declaration order, the response's after, the message
+ *         "layer <n>: <field> is <value>; it must be <range>".
+ */
+RBT_RESULT rbtrend_lit_layered_material_set_layer(rbtrend_material material, uint32_t layer, const RBTREND_LIT_LAYER_VALUES *values, RBTREND_ERROR *out_error);
+
+/**
+ * @brief Reads one layer's values back: the last set, staged or not, as
+ * rbtrend_lit_material_get_values() does for a lit material.
+ *
+ * An RBTREND_LIT_COVER_RESPONSE chained onto @p out_values by the caller
+ * receives the layer's response; the chain is left as the caller made it.
+ *
+ * @param[in]  material   Material to read: of the layered layout.
+ * @param[in]  layer      Below the material's layer count.
+ * @param[out] out_values Receives the values; its base set by the caller
+ *                        (RBT_STRUCT_TYPE_REND_LIT_LAYER_VALUES), a
+ *                        response chained on or none.
+ * @param[out] out_error  Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; otherwise, with nothing written, each its own
+ *         check in this order: RBT_RESULT_INVALID_ARGUMENT if @p material
+ *         is NULL or not of the layered layout, @p layer is out of range,
+ *         or @p out_values is NULL; the struct codes for its base and
+ *         chain; RBT_RESULT_INVALID_ARGUMENT where a response is chained on
+ *         and the layer has none.
+ */
+RBT_RESULT rbtrend_lit_layered_material_get_layer(rbtrend_material material, uint32_t layer, RBTREND_LIT_LAYER_VALUES *out_values, RBTREND_ERROR *out_error);
+
+/**
+ * @brief Sets the blend depth d (@ref rbtrend_lit_layered "Layered
+ * materials", step 2), in the units of a layer's weight plus its contrast
+ * times its height: 0 is a hard edge where those cross (only the highest
+ * shows); 0.1 to 0.3 the usual height blend; as d grows the blend tends to
+ * the weights alone. The material's, one for the blend. Staged as
+ * rbtrend_lit_layered_material_set_layer()'s values are.
+ *
+ * @param[in]  material  Material to change: of the layered layout.
+ * @param[in]  depth     Finite, at least 0.
+ * @param[out] out_error Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT, nothing changed, for a
+ *         NULL @p material, one not of the layered layout, a depth not
+ *         finite, or a depth below 0 (each its own check and message).
+ */
+RBT_RESULT rbtrend_lit_layered_material_set_blend_depth(rbtrend_material material, float depth, RBTREND_ERROR *out_error);
+
+/**
+ * @brief Puts a texture array in one of a layered material's maps, or puts
+ * back Rend's neutral one.
+ *
+ * @param[in] material Material to change.
+ * @param[in] map      Which map.
+ * @param[in] view     A SHADER_RESOURCE view of shape
+ *                     RBTREND_TEXTURE_VIEW_SHAPE_2D_ARRAY of color, of at
+ *                     least the material's layer count of layers, in a
+ *                     format a shader reads as floats; or NULL for the
+ *                     neutral array. It must outlive the material, or be
+ *                     replaced before the next compile after it goes.
+ * @param[out] out_error Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; otherwise RBT_RESULT_INVALID_ARGUMENT, nothing
+ *         changed, if @p material is NULL or not layered, @p map is not an
+ *         RBTREND_LIT_LAYERED_MAP, or @p view is of another instance, not a
+ *         SHADER_RESOURCE view of color, not a 2D array, or has too few
+ *         layers (each its own check and message).
+ */
+RBT_RESULT rbtrend_lit_layered_material_set_map(rbtrend_material material, RBTREND_LIT_LAYERED_MAP map, rbtrend_texture_view view, RBTREND_ERROR *out_error);
+
+/**
+ * @brief Puts the sampler every map is read through, or puts back Rend's,
+ * as rbtrend_lit_material_set_sampler(). A caller wanting anisotropy
+ * (ground at grazing angles) gives a sampler made with it, on a device
+ * that takes it: until Carrottus GPU reports a device's anisotropic
+ * filtering, a level above 1 is outside Vulkan's rules.
+ *
+ * @param[in]  material  Material to change: of the layered layout.
+ * @param[in]  sampler   A sampler of the material's instance, or NULL for
+ *                       Rend's (linear, mipmapped, repeating). It must
+ *                       outlive the material, or be replaced before the
+ *                       next compile after it goes.
+ * @param[out] out_error Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT, nothing changed, for a
+ *         NULL @p material, one not of the layered layout, or a sampler of
+ *         another instance (each its own check and message).
+ *
+ * @warning The sampler is kept, not copied: destroying it while the
+ *          material may still be compiled into a frame is the caller's
+ *          error, as for rbtrend_lit_layered_material_set_map()'s view.
+ */
+RBT_RESULT rbtrend_lit_layered_material_set_sampler(rbtrend_material material, rbtrend_sampler sampler, RBTREND_ERROR *out_error);
 
 /* ---- Environments -------------------------------------------------------- */
 

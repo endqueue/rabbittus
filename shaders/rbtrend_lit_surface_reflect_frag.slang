@@ -5,11 +5,12 @@
 // specular light reaches the picture with at target 2 (R8G8B8A8_UNORM, its
 // alpha 0 and unread). The reflection commands read the two
 // (rbtrendcommands.h: LIT_SSR, LIT_TRACE_REFLECTIONS, LIT_REFLECT).
-// rbtrend_lit_surface.slang has the shading.
+// rbtrend_lit_surface.slang has the reads, rbtrend_lit_lighting.slang the lighting.
 
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_material;
+import rbtrend_lit_lighting;
 import rbtrend_lit_surface;
 
 struct ReflectingOutput {

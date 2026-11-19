@@ -239,6 +239,8 @@ set(RABBITTUS_SHADERS
         rbtrend_lit_color_vert
         rbtrend_lit_frag
         rbtrend_lit_surface_reflect_frag
+        rbtrend_lit_layered_frag
+        rbtrend_lit_layered_reflect_frag
         rbtrend_lit_shadow_vert
         rbtrend_lit_shadow_color_vert
         rbtrend_lit_depth_frag
@@ -306,7 +308,10 @@ set(RABBITTUS_SHADER_MODULES
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_environment.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_material.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_bindings.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_lighting.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_surface.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_layered_material.slang
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_layered.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_lit_shadow_pass.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_batch.slang
         ${CMAKE_CURRENT_SOURCE_DIR}/shaders/rbtrend_batch_inputs.slang

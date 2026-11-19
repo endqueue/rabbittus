@@ -1,4 +1,5 @@
 
+#include "render/rbtrendlit.h"
 #include "render/rbtrendmaterial.h"
 #include "rbtrend_internal.hpp"
 #include "rbtrendimages_internal.hpp"
@@ -136,6 +137,7 @@ rbtrend_material_t::~rbtrend_material_t() {
 	free(this->entries);
 	free(this->resource_serial);
 	free(this->sampler_serial);
+	free(this->lit_layer_responses);
 }
 
 static bool rbtrend_material_type_reads_view(CRGPU_DESCRIPTOR_TYPE type) {
@@ -503,6 +505,15 @@ RBT_RESULT rbtrend_material_copy(
 	if (!result->entries || !result->resource_serial || !result->sampler_serial) {
 		RBTREND_DESTRUCT__T(result, rbtrend_material_t);
 		return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the material's entries");
+	}
+	// A layered material's exact responses, the source's.
+	if (source->lit_layer_responses) {
+		result->lit_layer_responses = (float *)calloc(RBTREND_LIT_LAYERED_MAX_LAYERS * 2, sizeof(float));
+		if (!result->lit_layer_responses) {
+			RBTREND_DESTRUCT__T(result, rbtrend_material_t);
+			return rbtrend_fail(out_error, RBT_RESULT_OUT_OF_MEMORY, "no memory for the material's layers");
+		}
+		memcpy(result->lit_layer_responses, source->lit_layer_responses, sizeof(float) * RBTREND_LIT_LAYERED_MAX_LAYERS * 2);
 	}
 	// Every resource the source holds, the same handles: they are the
 	// caller's, shared by both.
