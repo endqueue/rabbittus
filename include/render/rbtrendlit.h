@@ -112,7 +112,11 @@ extern "C" {
  * part, the hemisphere at the reflection and the environment's prefiltered
  * mips for the specular part, weighted by the split sum's scale and bias
  * from Rend's BRDF lookup texture, as Unreal and Hazel do. A face seen
- * from behind is lit as its front.
+ * from behind is lit as its front. A scene's cover (rbtrend_lit_scene_set_cover())
+ * wets and snows a material that answers it between its material's reads
+ * and its lighting: Lagarde's porous wetness, then snow by slope and
+ * height; the traced paths (RBTREND_COMMAND_LIT_PATH_TRACE and traced
+ * reflections) see every material bare.
  *
  * @par What a compile does for a scene
  * The first compile that binds a lit scene makes the instance's BRDF lookup
@@ -523,19 +527,34 @@ RBT_RESULT rbtrend_lit_material_create(rbtrend_instance instance, rbtrend_materi
  * reads it, so a frame already submitted reads the values it was submitted
  * with.
  *
+ * An RBTREND_LIT_COVER_RESPONSE may be chained on: how the material
+ * answers its scene's cover. Without one the material takes no cover, so
+ * setting values with none takes a response set before away.
+ *
  * @param[in] material Material to change.
- * @param[in] values   The values. Only read during the call.
+ * @param[in] values   The values, and a response chained on or none. Only
+ *                     read during the call.
  * @param[out] out_error Why it failed, when it did. May be NULL.
  *
  * @return RBT_RESULT_OK; otherwise RBT_RESULT_INVALID_ARGUMENT or the failure's
  *         own code (rbtrendcontext.h, "Results and errors"), with nothing
  *         changed, if an argument is NULL, @p material is not of
- *         rbtrend_lit_get_material_layout(), or a value is not finite.
+ *         rbtrend_lit_get_material_layout(), or a value is not finite;
+ *         RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN for a struct chained on other
+ *         than a response and RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN for two
+ *         responses, checked with `values->base`, before any value; and
+ *         RBT_RESULT_INVALID_ARGUMENT for a response's field out of its
+ *         range, after the values', each its own check in member order.
  */
 RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTREND_LIT_MATERIAL_VALUES *values, RBTREND_ERROR *out_error);
 
 /**
  * @brief Reads a lit material's values back.
+ *
+ * An RBTREND_LIT_COVER_RESPONSE chained onto @p out_values by the caller
+ * (its `base.type` set) receives the material's response; the chain is
+ * left as the caller made it. With nothing chained, `base.next` is set to
+ * NULL.
  *
  * @param[in]  material   Material to read.
  * @param[out] out_values Receives the values.
@@ -544,7 +563,10 @@ RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTR
  * @return RBT_RESULT_OK; otherwise RBT_RESULT_INVALID_ARGUMENT or the failure's
  *         own code (rbtrendcontext.h, "Results and errors"), with nothing
  *         written, if an argument is NULL or @p material is not of
- *         rbtrend_lit_get_material_layout().
+ *         rbtrend_lit_get_material_layout(); then the struct codes for a
+ *         chain holding other than one RBTREND_LIT_COVER_RESPONSE, and
+ *         RBT_RESULT_INVALID_ARGUMENT where a response is chained on and the
+ *         material has none (it takes no cover).
  */
 RBT_RESULT rbtrend_lit_material_get_values(rbtrend_material material, RBTREND_LIT_MATERIAL_VALUES *out_values, RBTREND_ERROR *out_error);
 
@@ -1607,6 +1629,108 @@ typedef struct RBTREND_LIT_FOG {
  *         `fog->base`. Nothing changes on failure.
  */
 RBT_RESULT rbtrend_lit_scene_set_fog(rbtrend_lit_scene scene, const RBTREND_LIT_FOG *fog, RBTREND_ERROR *out_error);
+
+/* ---- Cover --------------------------------------------------------------- */
+
+/** How a cover's up and height are found. */
+typedef enum RBTREND_LIT_COVER_FRAME RBT_ENUM_BASE {
+	/** Not chosen: refused. */
+	RBTREND_LIT_COVER_FRAME_NONE = 0,
+	/** Up is away from a centre; height is the distance from it. */
+	RBTREND_LIT_COVER_FRAME_ROUND = 1,
+	/** Up is one direction; height is along it from an origin. */
+	RBTREND_LIT_COVER_FRAME_FLAT = 2,
+} RBTREND_LIT_COVER_FRAME;
+
+/**
+ * @brief Snow and wetness over a scene's lit surfaces, set each frame as
+ * the weather changes. No field has a default.
+ *
+ * At each lit pixel whose material answers the cover
+ * (RBTREND_LIT_COVER_RESPONSE), after its material's reads and before its
+ * lighting, with N the face's geometric normal turned to the eye (not its
+ * normal map's, so snow lies on the shape):
+ *   - Wet, first (Lagarde's porous model): with w = #RBTREND_LIT_COVER::wetness, the base
+ *     colour times lerp(1, 0.2, w x the response's `porosity`), the
+ *     roughness lerped towards #RBTREND_LIT_COVER::wet_roughness by w; metalness kept.
+ *   - Snow, over it: s = #RBTREND_LIT_COVER::snow_amount x smoothstep(#RBTREND_LIT_COVER::slope_begin,
+ *     #RBTREND_LIT_COVER::slope_full, dot(N, up)) x smoothstep(#RBTREND_LIT_COVER::snow_line, #RBTREND_LIT_COVER::snow_line +
+ *     #RBTREND_LIT_COVER::snow_band, height) x the response's `cover`; the base colour,
+ *     roughness, metalness and shading normal blend by s towards
+ *     #RBTREND_LIT_COVER::snow_color, #RBTREND_LIT_COVER::snow_roughness, 0 and N. Emission is kept.
+ *
+ * Up and height: ROUND, up = normalize(P - #RBTREND_LIT_COVER::point), height = |P - #RBTREND_LIT_COVER::point|;
+ * FLAT, up = normalize(#RBTREND_LIT_COVER::up), height = dot(P - #RBTREND_LIT_COVER::point, up). Worked out in
+ * float at the pixel: a round centre 6.4e6 units from the scene's origin
+ * puts the height's step at 0.5 units.
+ *
+ * Kept in 48 bytes of the scene's block: #RBTREND_LIT_COVER::snow_color and #RBTREND_LIT_COVER::snow_roughness
+ * are held as half floats (within 1/2048 of each value), the rest as
+ * floats.
+ */
+typedef struct RBTREND_LIT_COVER {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_COVER, and its chain (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/** Its frame: ROUND or FLAT. */
+	RBTREND_LIT_COVER_FRAME frame;
+	/** ROUND: the centre; FLAT: the origin; the scene's space, finite. */
+	float point[3];
+	/** FLAT: up, any length but 0, finite; not read for ROUND. */
+	float up[3];
+	/** How much snow lies where it can, 0 to 1. */
+	float snow_amount;
+	/** The snow's colour, linear, each 0 to 1. */
+	float snow_color[3];
+	/** The snow's roughness, 0 to 1. */
+	float snow_roughness;
+	/** Snow begins on faces whose up-facing cosine is above this: -1 to 1. */
+	float slope_begin;
+	/** ...and lies fully above this: #slope_begin to 1 (equal: a step). */
+	float slope_full;
+	/** The height below which no snow lies, in the scene's unit: finite. */
+	float snow_line;
+	/** The height over which snow comes in above the line: above 0, finite. */
+	float snow_band;
+	/** How wet surfaces are, 0 to 1. */
+	float wetness;
+	/** The roughness a fully wet surface tends to, 0 to 1. */
+	float wet_roughness;
+} RBTREND_LIT_COVER;
+
+/**
+ * @brief Sets a scene's cover, or none (NULL, as a scene starts). Copied
+ * into the scene's block; allocates nothing, so it is set every frame.
+ * From the next submission, every lit surface of the scene whose material
+ * answers the cover (RBTREND_LIT_COVER_RESPONSE) is wetted and snowed by
+ * RBTREND_LIT_COVER's rule; the traced paths (RBTREND_COMMAND_LIT_PATH_TRACE,
+ * traced reflections) see their materials bare.
+ *
+ * @param[in]  scene     The scene.
+ * @param[in]  cover     The cover, or NULL. Only read during the call.
+ * @param[out] out_error Why it failed, when it did. May be NULL.
+ *
+ * @return RBT_RESULT_OK; RBT_RESULT_INVALID_ARGUMENT for a NULL scene or a
+ *         field out of its range, each its own check and message, in the
+ *         struct's order; the struct codes for `cover->base`. Nothing
+ *         changes on failure.
+ */
+RBT_RESULT rbtrend_lit_scene_set_cover(rbtrend_lit_scene scene, const RBTREND_LIT_COVER *cover, RBTREND_ERROR *out_error);
+
+/**
+ * @brief How a material answers its scene's cover (RBTREND_LIT_COVER),
+ * chained onto its RBTREND_LIT_MATERIAL_VALUES
+ * (rbtrend_lit_material_set_values()). A material without one takes no
+ * cover at all: neither snow nor wetness. Read back by
+ * rbtrend_lit_material_get_values() with the rest.
+ */
+typedef struct RBTREND_LIT_COVER_RESPONSE {
+	/** This struct's type, RBT_STRUCT_TYPE_REND_LIT_COVER_RESPONSE, chained (rbtcore.h, "Struct bases"). */
+	RBT_STRUCT_BASE base;
+	/** How much of the scene's snow lies on it, 0 to 1. */
+	float cover;
+	/** How porous it is, 0 (wet only on top: darkens nothing) to 1. */
+	float porosity;
+} RBTREND_LIT_COVER_RESPONSE;
 
 /** The most steps a texel's march takes in RBTREND_COMMAND_LIT_ATMOSPHERE_SHELLS. */
 #define RBTREND_LIT_ATMOSPHERE_MAX_SHELL_STEPS 128u

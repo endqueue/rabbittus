@@ -1948,6 +1948,8 @@ int main(void)
     calls++;
     expect_error("rbtrend_lit_scene_set_bent_normals", rbtrend_lit_scene_set_bent_normals((rbtrend_lit_scene){0}, (_Bool){0}, (RBTREND_ERROR *){0}));
     calls++;
+    expect_error("rbtrend_lit_scene_set_cover", rbtrend_lit_scene_set_cover((rbtrend_lit_scene){0}, (const RBTREND_LIT_COVER *){0}, (RBTREND_ERROR *){0}));
+    calls++;
     expect_error("rbtrend_lit_scene_set_fog", rbtrend_lit_scene_set_fog((rbtrend_lit_scene){0}, (const RBTREND_LIT_FOG *){0}, (RBTREND_ERROR *){0}));
     calls++;
     expect_error("rbtrend_lit_scene_set_light_shadow", rbtrend_lit_scene_set_light_shadow((rbtrend_lit_scene){0}, (uint32_t){0}, (const RBTREND_LIT_LIGHT_SHADOW *){0}, (RBTREND_ERROR *){0}));

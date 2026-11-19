@@ -63,6 +63,8 @@ public static const uint RBTREND_LIT_SCENE_ATMOSPHERE       = 512u; // the atmos
 public static const uint RBTREND_LIT_SCENE_AERIAL           = 1024u; // atmosphere_aerial holds its aerial volume
 public static const uint RBTREND_LIT_SCENE_SKY              = 2048u; // the atmosphere's sky-view table, layer 0, holds its sky (none with no sky)
 public static const uint RBTREND_LIT_SCENE_FOG              = 4096u; // the fog_* members hold the scene's height fog (rbtrend_lit_scene_set_fog())
+public static const uint RBTREND_LIT_SCENE_COVER            = 8192u; // the cover_* members hold the scene's cover (rbtrend_lit_scene_set_cover())
+public static const uint RBTREND_LIT_SCENE_COVER_ROUND      = 16384u; // the cover's frame is round: cover_frame.xyz its centre
 
 // Every matrix is column-major in memory, as the CPU writes it.
 public struct RbtrendLitScene {
@@ -108,6 +110,11 @@ public struct RbtrendLitScene {
     public float4 fog_albedo;              // rgb its albedo; w its phase's g
     public float4 fog_range;               // x its start, y its end, z its least transmittance, w its scale height
     public float4 fog_light;               // x how many of the directional lights, the first, light it; y its ambient share
+    // The scene's cover, where RBTREND_LIT_SCENE_COVER is set
+    // (rbtrend_lit_scene_set_cover(); rbtrend_lit_surface.slang reads it).
+    public float4 cover_frame;             // xyz a round frame's centre or a flat one's unit up; w the snow line's height along it
+    public float4 cover_snow;              // x slope_begin, y 1 / (slope_full - slope_begin); z 1 / the band; w the amount
+    public float4 cover_wet;               // x the wetness, y its roughness; z, w half floats: the snow's red and green, its blue and roughness
 };
 [[vk::binding(0, 0)]] public ConstantBuffer<RbtrendLitScene> u_lit_scene : register(b0, space0);
 

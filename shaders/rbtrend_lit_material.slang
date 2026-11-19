@@ -24,6 +24,10 @@ public struct RbtrendLitMaterial {
     public float clearcoat;        // 0 to 1: how much of a clear coat there is
     public float clearcoat_roughness;
     public uint maps;
+    // Its RBTREND_LIT_COVER_RESPONSE (rbtrend_lit_surface.slang reads it).
+    public float cover_amount;     // how much of the scene's snow lies on it
+    public float cover_porosity;   // how porous it is, for the scene's wetness
+    public float cover_responds;   // 1 if it answers the scene's cover; 0: it takes none
     public float4 uv_transform[2]; // rows of a 2x3 matrix, before every map
     // Each map's own, after uv_transform: rows 2m and 2m + 1 for map m
     // (base color, normal, ORM, emission, as the MAP_ bits number them).

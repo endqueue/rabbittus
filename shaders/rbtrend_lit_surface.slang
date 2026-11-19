@@ -294,6 +294,48 @@ float3 transmitted(Surface s, float3 position, float4 frag_coord) {
     return behind;
 }
 
+float cover_smoothstep(float t) {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// The scene's cover over a material that answers it (rbtrendlit.h,
+// RBTREND_LIT_COVER): wet first (Lagarde's porous model: the albedo
+// darkened by the porosity, the roughness lowered by the water's film),
+// then snow over it by the geometric normal's slope and the height
+// against the snow line, blending the albedo, roughness, metalness and
+// shading normal towards the snow's. [geometric] is the face's normal
+// turned to the eye.
+void lit_cover(float3 position, float3 geometric, inout float3 albedo, inout float roughness, inout float metalness, inout float3 n) {
+    float4 frame = u_lit_scene.cover_frame;
+    float4 snow  = u_lit_scene.cover_snow;
+    float4 wet   = u_lit_scene.cover_wet;
+    albedo *= lerp(1.0, 0.2, wet.x * u_lit_material.cover_porosity);
+    roughness = lerp(roughness, wet.y, wet.x);
+    float3 up;
+    float height;
+    if ((u_lit_scene.flags & RBTREND_LIT_SCENE_COVER_ROUND) != 0u) {
+        float3 d = position - frame.xyz;
+        height   = length(d);
+        up       = height > 0.0 ? d / height : float3(0.0);
+    } else {
+        up     = frame.xyz;
+        height = dot(position, up);
+    }
+    float slope = cover_smoothstep(saturate((dot(geometric, up) - snow.x) * snow.y));
+    float above = cover_smoothstep(saturate((height - frame.w) * snow.z));
+    float s     = snow.w * slope * above * u_lit_material.cover_amount;
+    if (s > 0.0) {
+        uint rg          = asuint(wet.z);
+        uint ba          = asuint(wet.w);
+        float3 color     = float3(f16tof32(rg & 0xffffu), f16tof32(rg >> 16), f16tof32(ba & 0xffffu));
+        albedo           = lerp(albedo, color, s);
+        roughness        = lerp(roughness, f16tof32(ba >> 16), s);
+        metalness        = metalness * (1.0 - s);
+        n                = safe_normalize(lerp(n, geometric, s), geometric);
+    }
+    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
+}
+
 // What lit_shade() works out for a fragment: the picture's color
 // (premultiplied by the opacity), and for the reflecting variant the
 // shading normal, the roughness, and the weight the environment's specular
@@ -364,6 +406,10 @@ public LitShaded lit_shade(LitFragmentInput input) {
     float metalness       = clamp(u_lit_material.metalness * orm.b, 0.0, 1.0);
     float3 albedo         = max(base.rgb, float3(0.0));
     s.roughness           = clamp(u_lit_material.roughness * orm.g, MIN_ROUGHNESS, 1.0);
+    // The scene's cover, where it has one and the material answers it: the
+    // branch the same for every invocation of a draw.
+    if ((u_lit_scene.flags & RBTREND_LIT_SCENE_COVER) != 0u && u_lit_material.cover_responds > 0.0)
+        lit_cover(in_position, s.geometric, albedo, s.roughness, metalness, s.n);
     s.f0                  = lerp(float3(0.08 * clamp(u_lit_material.specular, 0.0, 1.0)), albedo, metalness);
     s.diffuse             = albedo * (1.0 - metalness);
     // Transmission takes that share of the diffuse lobe: the light that

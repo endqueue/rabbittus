@@ -201,6 +201,9 @@ const RBTREND_DRAW_LIST_ORDER_SUBMITTED = 1
 const RBTREND_INDEX_STRIDE_NONE = 0
 const RBTREND_INDEX_STRIDE_UINT16 = 2
 const RBTREND_INDEX_STRIDE_UINT32 = 4
+const RBTREND_LIT_COVER_FRAME_FLAT = 2
+const RBTREND_LIT_COVER_FRAME_NONE = 0
+const RBTREND_LIT_COVER_FRAME_ROUND = 1
 const RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL = 2
 const RBTREND_LIT_LIGHT_TYPE_DIRECTIONAL_PLACED = 3
 const RBTREND_LIT_LIGHT_TYPE_POINT = 0
@@ -413,6 +416,8 @@ const RBT_STRUCT_TYPE_REND_LIT_AMBIENT = 5023
 const RBT_STRUCT_TYPE_REND_LIT_ATMOSPHERE = 5037
 const RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR = 5038
 const RBT_STRUCT_TYPE_REND_LIT_CASCADE_FIT = 5022
+const RBT_STRUCT_TYPE_REND_LIT_COVER = 5045
+const RBT_STRUCT_TYPE_REND_LIT_COVER_RESPONSE = 5046
 const RBT_STRUCT_TYPE_REND_LIT_ENVIRONMENT_DESC = 5017
 const RBT_STRUCT_TYPE_REND_LIT_FOG = 5041
 const RBT_STRUCT_TYPE_REND_LIT_LIGHT_SHADOW = 5034
@@ -753,6 +758,7 @@ fn rbtrend_lit_scene_set_ambient RBT_RESULT (rbtrend_lit_scene, const RBTREND_LI
 fn rbtrend_lit_scene_set_ambient_occlusion RBT_RESULT (rbtrend_lit_scene, rbtrend_texture_view, float, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_atmosphere RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_ATMOSPHERE *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_bent_normals RBT_RESULT (rbtrend_lit_scene, _Bool, RBTREND_ERROR *)
+fn rbtrend_lit_scene_set_cover RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_COVER *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_fog RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_FOG *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_light_shadow RBT_RESULT (rbtrend_lit_scene, uint32_t, const RBTREND_LIT_LIGHT_SHADOW *, RBTREND_ERROR *)
 fn rbtrend_lit_scene_set_lights RBT_RESULT (rbtrend_lit_scene, const RBTREND_LIT_SCENE_LIGHT *, uint32_t, RBTREND_ERROR *)
@@ -2071,6 +2077,24 @@ field RBTREND_LIT_CASCADE_FIT.light_direction @84 float[3]
 field RBTREND_LIT_CASCADE_FIT.caster_distance @96 float
 field RBTREND_LIT_CASCADE_FIT.map_size @100 uint32_t
 field RBTREND_LIT_CASCADE_FIT.reversed_depth @104 _Bool
+struct RBTREND_LIT_COVER size=88 align=8
+field RBTREND_LIT_COVER.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_COVER.frame @16 RBTREND_LIT_COVER_FRAME
+field RBTREND_LIT_COVER.point @20 float[3]
+field RBTREND_LIT_COVER.up @32 float[3]
+field RBTREND_LIT_COVER.snow_amount @44 float
+field RBTREND_LIT_COVER.snow_color @48 float[3]
+field RBTREND_LIT_COVER.snow_roughness @60 float
+field RBTREND_LIT_COVER.slope_begin @64 float
+field RBTREND_LIT_COVER.slope_full @68 float
+field RBTREND_LIT_COVER.snow_line @72 float
+field RBTREND_LIT_COVER.snow_band @76 float
+field RBTREND_LIT_COVER.wetness @80 float
+field RBTREND_LIT_COVER.wet_roughness @84 float
+struct RBTREND_LIT_COVER_RESPONSE size=24 align=8
+field RBTREND_LIT_COVER_RESPONSE.base @0 RBT_STRUCT_BASE
+field RBTREND_LIT_COVER_RESPONSE.cover @16 float
+field RBTREND_LIT_COVER_RESPONSE.porosity @20 float
 struct RBTREND_LIT_ENVIRONMENT_DESC size=24 align=8
 field RBTREND_LIT_ENVIRONMENT_DESC.base @0 RBT_STRUCT_BASE
 field RBTREND_LIT_ENVIRONMENT_DESC.specular_size @16 uint32_t
@@ -2775,6 +2799,9 @@ typedef RBTREND_LIT_ATMOSPHERE = struct RBTREND_LIT_ATMOSPHERE
 typedef RBTREND_LIT_ATMOSPHERE_SHELL = struct RBTREND_LIT_ATMOSPHERE_SHELL
 typedef RBTREND_LIT_CASCADE_ANCHOR = struct RBTREND_LIT_CASCADE_ANCHOR
 typedef RBTREND_LIT_CASCADE_FIT = struct RBTREND_LIT_CASCADE_FIT
+typedef RBTREND_LIT_COVER = struct RBTREND_LIT_COVER
+typedef RBTREND_LIT_COVER_FRAME = enum RBTREND_LIT_COVER_FRAME
+typedef RBTREND_LIT_COVER_RESPONSE = struct RBTREND_LIT_COVER_RESPONSE
 typedef RBTREND_LIT_ENVIRONMENT_DESC = struct RBTREND_LIT_ENVIRONMENT_DESC
 typedef RBTREND_LIT_FOG = struct RBTREND_LIT_FOG
 typedef RBTREND_LIT_INSTANCE = struct RBTREND_LIT_INSTANCE

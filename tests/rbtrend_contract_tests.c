@@ -414,6 +414,12 @@ static void test_materials_and_lit_null(void)
     CHECK(rbtrend_lit_material_set_values(NULL, &material_values, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(strcmp(error.message, "material is NULL") == 0);
     CHECK(rbtrend_lit_material_get_values(NULL, &material_values, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    // A scene's cover (card L74): a NULL scene refused before the cover is read.
+    RBTREND_LIT_COVER cover;
+    memset(&cover, 0, sizeof(cover));
+    CHECK(rbtrend_lit_scene_set_cover(NULL, &cover, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(strcmp(error.message, "scene is NULL") == 0);
+    CHECK(rbtrend_lit_scene_set_cover(NULL, NULL, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(rbtrend_lit_material_set_map(NULL, RBTREND_LIT_MAP_BASE_COLOR, NULL, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(rbtrend_lit_material_set_sampler(NULL, NULL, &error) == RBT_RESULT_INVALID_ARGUMENT);
 

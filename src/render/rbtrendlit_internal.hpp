@@ -149,6 +149,19 @@ struct rbtrend_lit_scene_block {
 	float fog_albedo[4];
 	float fog_range[4];
 	float fog_light[4];
+	/* The scene's cover, where RBTREND_LIT_SCENE_FLAG_COVER is set
+	 * (rbtrend_lit_scene_set_cover()), written by the call; with
+	 * RBTREND_LIT_SCENE_FLAG_COVER_ROUND its frame is round. cover_frame:
+	 * xyz a round frame's centre or a flat one's unit up, w the height
+	 * the snow line is at along it (round: the line; flat: the line plus
+	 * the origin's height along up, in double); cover_snow: x and y the
+	 * slope's t = up-facing cosine times x plus y, z 1 / the band, w the
+	 * amount; cover_wet: x the wetness, y its roughness, z the snow's
+	 * red and green and w its blue and roughness as half floats, the low
+	 * half first. */
+	float cover_frame[4];
+	float cover_snow[4];
+	float cover_wet[4];
 };
 
 /* Bits of rbtrend_lit_scene_block::flags, as the shader has them. */
@@ -164,6 +177,8 @@ enum : uint32_t {
 	RBTREND_LIT_SCENE_FLAG_AERIAL          = 1024u,
 	RBTREND_LIT_SCENE_FLAG_SKY             = 2048u,
 	RBTREND_LIT_SCENE_FLAG_FOG             = 4096u,
+	RBTREND_LIT_SCENE_FLAG_COVER           = 8192u,
+	RBTREND_LIT_SCENE_FLAG_COVER_ROUND     = 16384u,
 };
 
 /* RbtrendLitShadowPass in shaders/rbtrend_lit_shadow_pass.slang. */
@@ -185,7 +200,11 @@ struct rbtrend_lit_material_block {
 	float clearcoat;
 	float clearcoat_roughness;
 	uint32_t maps;
-	float padding[3];
+	/* Its RBTREND_LIT_COVER_RESPONSE: how much snow, how porous, and 1 if
+	 * it has one (0: it takes no cover). */
+	float cover_amount;
+	float cover_porosity;
+	float cover_responds;
 	float uv_transform[8];
 	/* Each map's own, after uv_transform: two rows (vec4s) a map, in
 	 * RBTREND_LIT_MAP order. */

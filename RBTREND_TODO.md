@@ -5586,11 +5586,14 @@ against Vulkan's floor of 16. Tests 13 and 14 added.
 
 **The cover stage (snow, wetness; card L74's, which this item's draft
 carded as "a cover input"):** drafted 2026-11-18 as
-`rbtrend_weather_draft.h` (version 1, seven critique passes), not
-approved; nothing built: `rbtrend_lit_scene_set_cover()` for both lit
-surfaces, a material's or layer's `RBTREND_LIT_COVER_RESPONSE` chained
-on; Q1 to Q3, each recommended a. Its caller's half is drafted beside
-the caller's headers.
+`rbtrend_weather_draft.h` (version 1, seven critique passes), approved
+2026-11-18, every question as recommended. Built for the plain lit
+surface on 2026-11-19 (item 64). This item's layered surface, when
+built, takes the response chained onto `RBTREND_LIT_LAYER_VALUES` and
+reads the scene's cover through the shared lighting (the weather draft's
+pass 7.3: the second of the two to be built adds the chain), with the
+weather draft's test T7 (each layer's own response). Its caller's half
+is drafted beside the caller's headers.
 
 ### 54. A view-model pass: a second pass with its own field of view, depth cleared (card A58, decided 2026-11-17: drafted when wanted)
 
@@ -6539,6 +6542,94 @@ no backend branch), with its caller's half the same session.
   (abi, doxygen, conventions, caller-names, struct-bases, plain-data,
   naming and the hosts' check); the first caller's half built and run
   with it, recorded in that caller's own TODO.
+
+### 64. A scene's cover: snow and wetness on lit surfaces (card L74's Rend half, decided 2026-11-18)
+
+Decided 2026-11-18 with you: `rbtrend_weather_draft.h` approved, every
+question as recommended (Q1a one set of values a scene, varied per pixel
+by slope and a snow line; Q2a a material without a response takes no
+cover; Q3a the traced paths without it). Built 2026-11-19 on the Mac
+(Metal, the M5 Pro; D3D12 and Vulkan never built: no backend branch).
+The draft's T7 (the layered surface) waits on item 53's build. Its
+caller's half, drafted beside the caller's headers, is not built here.
+- **Public** (`rbtrendlit.h`): `RBTREND_LIT_COVER_FRAME` (NONE refused,
+  ROUND, FLAT), `RBTREND_LIT_COVER` (struct type 5045),
+  `rbtrend_lit_scene_set_cover(scene, cover, out_error)` (NULL for none;
+  checks in the struct's order, each its own message),
+  `RBTREND_LIT_COVER_RESPONSE {base; cover; porosity}` (5046) chained
+  onto `RBTREND_LIT_MATERIAL_VALUES`; the "Shading" paragraph, and
+  `rbtrend_lit_material_set_values()`'s and `_get_values()`'s comments.
+  ABI: additions only (`./check.sh --update-abi`), no version raise (0.3
+  untagged, card X2). Misuse harnesses regenerated (one new call each).
+- **The scene's block** was 16,336 of the 16,384 bytes Vulkan
+  guarantees; the cover takes the last 48 (three float4s, appended:
+  nothing moved), so **the block is now full**: the next scene setting
+  needs room made first (a second scene block binding is impossible, set
+  0's sixteen are taken; push constants, a material-layer route or
+  repacking are the alternatives). The draft's fields don't fit 48 bytes
+  as floats (14 scalars after folding), so set_cover folds them on the
+  CPU and packs two lanes: `cover_frame` (a round frame's centre, or a
+  flat frame's unit up; w the snow line's height along it, a flat one's
+  origin folded in in double), `cover_snow` (slope_begin, 1 / the slope's
+  span (3e38 where begin equals full: a step), 1 / the band, the amount),
+  `cover_wet` (the wetness, its roughness, then the snow's colour and
+  roughness as four half floats, rounded to nearest even on the CPU,
+  `f16tof32` in the shader: within 1/2048, said in the header). Flags
+  COVER 8192 (the draft's 4096 had gone to the fog) and COVER_ROUND
+  16384.
+- **The material's block:** the response in the three spare floats after
+  `maps` (`cover_amount`, `cover_porosity`, `cover_responds`), its size
+  unchanged (288). `set_values` writes all three every time: values with
+  no response chained take a response set before away. `get_values`
+  fills a response the caller chains on, and refuses one
+  (INVALID_ARGUMENT, nothing written) where the material has none; with
+  nothing chained it sets `base.next` to NULL as before.
+- **Shader** (`rbtrend_lit_surface.slang`, `lit_cover()`): in
+  `lit_shade()` after the normal map, before f0 and the diffuse, under
+  the scene's flag and the material's `cover_responds` (uniform
+  branches): wet first (albedo times lerp(1, 0.2, w x porosity),
+  roughness lerped to the wet roughness), then snow by the turned
+  geometric normal's slope and the height (round: |P - centre|; flat:
+  dot(P, up)) against the line, s = amount x both smoothsteps x cover;
+  only where s > 0 the albedo, roughness, metalness and shading normal
+  blend (so a cover of no snow leaves the normal's bits alone); the
+  roughness clamped to 0.045 to 1 after. The traced table's entries are
+  made from the block's other fields (`rbtrend_rt_lit_entry_of`), so the
+  path tracer and traced reflections see the material bare (Q3a), with
+  no change there.
+- **Tests** (rabbittustests, Metal's validation with warnings as asserts,
+  Debug and Release, both devices; each seen failing first against a
+  stub returning NOT_IMPLEMENTED and the old set_values, which refused
+  any chain): `test_lit_cover_refusals` (T1: every field, the frame 0
+  and 3, a flat up of 0 and a round one's accepted, the struct codes,
+  the response's fields, its chain twice and a foreign struct on
+  set_values and get_values, a response asked of a material with none,
+  nothing changed by a refusal), `test_lit_cover_off` (T2: no cover, a
+  response with no cover, and a cover of no snow and no wetness the same
+  texels, hash 06a6f47e768ba383 before and after the build, Debug and
+  Release), `test_lit_cover_snow_slope` (T3: 255 facing up, 134 at a
+  cosine of 0.7 against 134, 38 bare at 0.3, a normal-mapped face 255
+  against its bare 102), `test_lit_cover_snow_line` (T4: flat rows
+  exactly the reference; round, a centre 6.4e6 off, within 2 levels of
+  it, the tolerance 6), `test_lit_cover_wet` (T5: 26 against 25.5 at
+  porosity 1, 77 at wetness 0.5, 128 sealed; the highlight's middle 129
+  to 255 wet, its corner 128 to 123), `test_lit_cover_response` (T6: 128
+  with no response under everything, 191 at cover 0.5, 77 at porosity
+  0.5, 128 again after values with none), `test_frame_allocations` (T8:
+  a cover set every frame: 0 of ours), and `rbtrend_contract_tests` (a
+  NULL scene, headless). Every other GPU test's printed figures the same
+  as before the build (Debug and Release logs compared line for line).
+- **Measured** (`test_lit_cover_measure`, Release, no validation, the M5
+  Pro, submit to idle, a lit face over 2560 x 1440, three rounds of the
+  mean of 50 after 10): three runs, each on both devices: no cover
+  0.653 to 0.673 ms warm (the first device's first readings 0.890 and
+  1.057 ms, cold, not counted); a cover its material doesn't answer
+  -0.023 to +0.007 ms from none (the uniform branch: nothing measurable);
+  snowed and wet (a round frame, every pixel in the ramps) +0.034 to
+  +0.055 ms, two to three times the draft's estimate (under 0.02 ms by
+  counting ALU): the half-float unpacking and the normal's renormalising
+  weren't counted, and submit-to-idle readings at this size move by
+  about 0.02 ms.
 
 ## Suggested order
 

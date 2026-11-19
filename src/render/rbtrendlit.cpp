@@ -58,7 +58,7 @@
 static_assert(sizeof(RBTREND_LIT_VERTEX) == 48, "RBTREND_LIT_VERTEX is 48 bytes");
 static_assert(sizeof(RBTREND_LIT_INSTANCE) == 64, "RBTREND_LIT_INSTANCE is 64 bytes");
 static_assert(sizeof(rbtrend_lit_scene_block) == 128 + 80 * RBTREND_LIT_MAX_SHADOW_VIEWS + 112 * RBTREND_LIT_MAX_DIRECTIONAL_LIGHTS +
-                                                 32 * RBTREND_LIT_MAX_SHADOW_VIEWS + 208 + 64 * RBTREND_LIT_MAX_LIGHTS + 7 * 16 + 5 * 16,
+                                                 32 * RBTREND_LIT_MAX_SHADOW_VIEWS + 208 + 64 * RBTREND_LIT_MAX_LIGHTS + 7 * 16 + 5 * 16 + 3 * 16,
               "RbtrendLitScene's std140 size");
 // Vulkan's guaranteed maxUniformBufferRange, the smallest any device may
 // report; Carrottus GPU reports no limit of its own for a uniform buffer, so the
@@ -195,6 +195,9 @@ static bool rbtrend_lit_check_scene_block(rbtrend_binding_layout layout) {
 	    {"fog_albedo", MEMBER(B, fog_albedo)},
 	    {"fog_range", MEMBER(B, fog_range)},
 	    {"fog_light", MEMBER(B, fog_light)},
+	    {"cover_frame", MEMBER(B, cover_frame)},
+	    {"cover_snow", MEMBER(B, cover_snow)},
+	    {"cover_wet", MEMBER(B, cover_wet)},
 	    {"lights[0].position_range", MEMBER(B, lights)},
 	    {"lights[0].outer_shadow", MEMBER(B, lights) + MEMBER(L, outer_shadow)},
 	    {"lights[127].outer_shadow", last_light + MEMBER(L, outer_shadow)},
@@ -217,6 +220,9 @@ static bool rbtrend_lit_check_material_block(rbtrend_binding_layout layout) {
 	    {"clearcoat", MEMBER(B, clearcoat)},
 	    {"clearcoat_roughness", MEMBER(B, clearcoat_roughness)},
 	    {"maps", MEMBER(B, maps)},
+	    {"cover_amount", MEMBER(B, cover_amount)},
+	    {"cover_porosity", MEMBER(B, cover_porosity)},
+	    {"cover_responds", MEMBER(B, cover_responds)},
 	    {"uv_transform", MEMBER(B, uv_transform)},
 	    {"map_uv_transform", MEMBER(B, map_uv_transform)},
 	    {"transmission", MEMBER(B, transmission)},
@@ -1555,6 +1561,25 @@ RBT_RESULT rbtrend_lit_material_create(rbtrend_instance instance, rbtrend_materi
 	return RBT_RESULT_OK;
 }
 
+// [base]'s type RBTREND_LIT_MATERIAL_VALUES', and its chain an
+// RBTREND_LIT_COVER_RESPONSE, once, or nothing: the response into
+// [out_response], NULL for none.
+static RBT_RESULT rbtrend_lit_response_chain(RBTREND_ERROR *error, const char *name, const RBT_STRUCT_BASE *base,
+                                             const RBTREND_LIT_COVER_RESPONSE **out_response) {
+	*out_response = nullptr;
+	if (base->type != RBT_STRUCT_TYPE_REND_LIT_MATERIAL_VALUES)
+		return rbtrend_fail(error, RBT_RESULT_STRUCT_WRONG_TYPE, "%s %s", name, rbt_struct_check_message(RBT_RESULT_STRUCT_WRONG_TYPE));
+	for (const RBT_STRUCT_BASE *link = base->next; link; link = link->next) {
+		if (link->type != RBT_STRUCT_TYPE_REND_LIT_COVER_RESPONSE)
+			return rbtrend_fail(error, RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN, "%s has a struct chained on other than RBTREND_LIT_COVER_RESPONSE, the one it takes",
+			                    name);
+		if (*out_response)
+			return rbtrend_fail(error, RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN, "%s has RBTREND_LIT_COVER_RESPONSE chained on twice", name);
+		*out_response = (const RBTREND_LIT_COVER_RESPONSE *)link;
+	}
+	return RBT_RESULT_OK;
+}
+
 RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTREND_LIT_MATERIAL_VALUES *values, RBTREND_ERROR *out_error) {
 	rbtrend_error_clear(out_error);
 	rbtrend_material_slot *slot = nullptr;
@@ -1562,7 +1587,8 @@ RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTR
 		return lit;
 	if (!values)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "values is NULL");
-	if (const RBT_RESULT base = rbtrend_base_check(out_error, "values", &values->base, RBT_STRUCT_TYPE_REND_LIT_MATERIAL_VALUES))
+	const RBTREND_LIT_COVER_RESPONSE *response = nullptr;
+	if (const RBT_RESULT base = rbtrend_lit_response_chain(out_error, "values", &values->base, &response))
 		return base;
 	const RBTREND_LIT_MATERIAL_VALUES &v = *values;
 	if (!all_finite(v.base_color, 4) || !all_finite(v.emission, 3) || !finite(v.roughness) || !finite(v.metalness) || !finite(v.specular) ||
@@ -1571,8 +1597,27 @@ RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTR
 	    !finite(v.transmission) || !finite(v.ior) || !finite(v.thickness) || !all_finite(v.attenuation_color, 3) || !finite(v.attenuation_distance)) {
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "a value is not a finite number");
 	}
+	if (response) {
+		if (!finite(response->cover))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's cover is not finite");
+		if (!(response->cover >= 0.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's cover, %g, is below 0", (double)response->cover);
+		if (!(response->cover <= 1.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's cover, %g, is above 1", (double)response->cover);
+		if (!finite(response->porosity))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's porosity is not finite");
+		if (!(response->porosity >= 0.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's porosity, %g, is below 0", (double)response->porosity);
+		if (!(response->porosity <= 1.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's porosity, %g, is above 1", (double)response->porosity);
+	}
 	rbtrend_lit_material_block block;
 	memcpy(&block, slot->bytes, sizeof(block));
+	// The response, or none: every value at once, so values with none
+	// take a response set before away.
+	block.cover_amount   = response ? response->cover : 0.0f;
+	block.cover_porosity = response ? response->porosity : 0.0f;
+	block.cover_responds = response ? 1.0f : 0.0f;
 	memcpy(block.base_color, v.base_color, sizeof(block.base_color));
 	memcpy(block.emission, v.emission, sizeof(float) * 3);
 	block.emission[3] = 0.0f;
@@ -1608,11 +1653,29 @@ RBT_RESULT rbtrend_lit_material_get_values(rbtrend_material material, RBTREND_LI
 		return lit;
 	if (!out_values)
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_values is NULL");
+	// A response the caller chained on, to be filled; its type the
+	// caller's, as any chain's. The root's type is written, not checked,
+	// as before the chain.
+	const RBTREND_LIT_COVER_RESPONSE *chained = nullptr;
+	for (const RBT_STRUCT_BASE *link = out_values->base.next; link; link = link->next) {
+		if (link->type != RBT_STRUCT_TYPE_REND_LIT_COVER_RESPONSE)
+			return rbtrend_fail(out_error, RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN,
+			                    "out_values has a struct chained on other than RBTREND_LIT_COVER_RESPONSE, the one it takes");
+		if (chained)
+			return rbtrend_fail(out_error, RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN, "out_values has RBTREND_LIT_COVER_RESPONSE chained on twice");
+		chained = (const RBTREND_LIT_COVER_RESPONSE *)link;
+	}
 	rbtrend_lit_material_block block;
 	memcpy(&block, slot->bytes, sizeof(block));
+	if (chained && !(block.cover_responds > 0.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "out_values has a response chained on, and the material has no RBTREND_LIT_COVER_RESPONSE");
+	if (chained) {
+		RBTREND_LIT_COVER_RESPONSE *response = (RBTREND_LIT_COVER_RESPONSE *)chained;
+		response->cover                      = block.cover_amount;
+		response->porosity                   = block.cover_porosity;
+	}
 	RBTREND_LIT_MATERIAL_VALUES &v = *out_values;
 	v.base.type = RBT_STRUCT_TYPE_REND_LIT_MATERIAL_VALUES; // field by field: the caller's padding stays as it was
-	v.base.next = nullptr;
 	memcpy(v.base_color, block.base_color, sizeof(v.base_color));
 	memcpy(v.emission, block.emission, sizeof(v.emission));
 	memcpy(v.sheen_color, block.sheen, sizeof(v.sheen_color));
@@ -2945,6 +3008,121 @@ RBT_RESULT rbtrend_lit_scene_set_fog(rbtrend_lit_scene scene, const RBTREND_LIT_
 	rbtrend_lit_scene_commit(scene);
 	return RBT_RESULT_OK;
 }
+
+// [f], 0 to 1 and finite, as a half float's bits, rounded to the nearest
+// (ties to even): the cover keeps the snow's colour and roughness so.
+static uint32_t rbtrend_half_bits(float f) {
+	uint32_t x;
+	memcpy(&x, &f, sizeof(x));
+	if (x < 0x38800000u) // below a half's least normal, 2^-14: its subnormals, in steps of 2^-24
+		return (uint32_t)std::lrint((double)f * 16777216.0);
+	const uint32_t rest = x & 0x1fffu;
+	uint32_t h          = (x - 0x38000000u) >> 13; // rebias 127 to 15; a carry out of the mantissa raises the exponent
+	if (rest > 0x1000u || (rest == 0x1000u && (h & 1u)))
+		++h;
+	return h;
+}
+
+// [v] from 0 to 1, for set_cover's messages.
+#define RBTREND_COVER_UNIT(v, name)                                                                                                                      \
+	do {                                                                                                                                                \
+		if (!finite(v))                                                                                                                                  \
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->%s is not finite", name);                                                \
+		if (!((v) >= 0.0f))                                                                                                                              \
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->%s, %g, is below 0", name, (double)(v));                                 \
+		if (!((v) <= 1.0f))                                                                                                                              \
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->%s, %g, is above 1", name, (double)(v));                                 \
+	} while (0)
+
+RBT_RESULT rbtrend_lit_scene_set_cover(rbtrend_lit_scene scene, const RBTREND_LIT_COVER *cover, RBTREND_ERROR *out_error) {
+	rbtrend_error_clear(out_error);
+	if (!scene)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "scene is NULL");
+	if (RBT_STALE(scene, "rbtrend_lit_scene_set_cover", "scene"))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "scene is destroyed");
+	RBTREND_ENTER(scene->instance, "rbtrend_lit_scene_set_cover");
+	rbtrend_lit_scene_block &b = scene->block;
+	if (!cover) {
+		b.flags &= ~(uint32_t)(RBTREND_LIT_SCENE_FLAG_COVER | RBTREND_LIT_SCENE_FLAG_COVER_ROUND);
+		rbtrend_lit_scene_commit(scene);
+		return RBT_RESULT_OK;
+	}
+	if (const RBT_RESULT base = rbtrend_base_check(out_error, "cover", &cover->base, RBT_STRUCT_TYPE_REND_LIT_COVER))
+		return base;
+	const RBTREND_LIT_COVER &c = *cover;
+	const bool round = c.frame == RBTREND_LIT_COVER_FRAME_ROUND;
+	if (c.frame != RBTREND_LIT_COVER_FRAME_ROUND && c.frame != RBTREND_LIT_COVER_FRAME_FLAT)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->frame, %u, is not ROUND or FLAT", (unsigned)c.frame);
+	if (!all_finite(c.point, 3))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->point is not finite");
+	const double up_length = std::sqrt((double)c.up[0] * c.up[0] + (double)c.up[1] * c.up[1] + (double)c.up[2] * c.up[2]);
+	if (!round && !all_finite(c.up, 3))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->up is not finite");
+	if (!round && !(up_length > 0.0))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->up is 0, which a FLAT frame needs a direction of");
+	RBTREND_COVER_UNIT(c.snow_amount, "snow_amount");
+	static const char *const color_names[3] = {"snow_color[0]", "snow_color[1]", "snow_color[2]"};
+	for (int i = 0; i < 3; ++i)
+		RBTREND_COVER_UNIT(c.snow_color[i], color_names[i]);
+	RBTREND_COVER_UNIT(c.snow_roughness, "snow_roughness");
+	if (!finite(c.slope_begin))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->slope_begin is not finite");
+	if (!(c.slope_begin >= -1.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->slope_begin, %g, is below -1", (double)c.slope_begin);
+	if (!(c.slope_begin <= 1.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->slope_begin, %g, is above 1", (double)c.slope_begin);
+	if (!finite(c.slope_full))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->slope_full is not finite");
+	if (!(c.slope_full >= c.slope_begin))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->slope_full, %g, is below slope_begin, %g", (double)c.slope_full,
+		                    (double)c.slope_begin);
+	if (!(c.slope_full <= 1.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->slope_full, %g, is above 1", (double)c.slope_full);
+	if (!finite(c.snow_line))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->snow_line is not finite");
+	if (!finite(c.snow_band))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->snow_band is not finite");
+	if (!(c.snow_band > 0.0f))
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "cover->snow_band, %g, is not above 0", (double)c.snow_band);
+	RBTREND_COVER_UNIT(c.wetness, "wetness");
+	RBTREND_COVER_UNIT(c.wet_roughness, "wet_roughness");
+	// Into the block (rbtrendlit_internal.hpp says what each lane holds).
+	if (round) {
+		for (int i = 0; i < 3; ++i)
+			b.cover_frame[i] = c.point[i];
+		b.cover_frame[3] = c.snow_line;
+	} else {
+		double along = 0.0;
+		for (int i = 0; i < 3; ++i) {
+			const double u   = (double)c.up[i] / up_length;
+			b.cover_frame[i] = (float)u;
+			along += (double)c.point[i] * u;
+		}
+		b.cover_frame[3] = (float)(along + (double)c.snow_line);
+	}
+	// The slope's ramp from slope_begin to slope_full; where they are
+	// equal, a step: any cosine above slope_begin takes it all.
+	const float span = c.slope_full - c.slope_begin;
+	b.cover_snow[0]  = c.slope_begin;
+	b.cover_snow[1]  = span > 0.0f ? 1.0f / span : 3.0e38f;
+	b.cover_snow[2]  = 1.0f / c.snow_band;
+	b.cover_snow[3]  = c.snow_amount;
+	b.cover_wet[0]   = c.wetness;
+	b.cover_wet[1]   = c.wet_roughness;
+	const uint32_t rg = rbtrend_half_bits(c.snow_color[0]) | (rbtrend_half_bits(c.snow_color[1]) << 16);
+	const uint32_t ba = rbtrend_half_bits(c.snow_color[2]) | (rbtrend_half_bits(c.snow_roughness) << 16);
+	memcpy(&b.cover_wet[2], &rg, sizeof(rg));
+	memcpy(&b.cover_wet[3], &ba, sizeof(ba));
+	b.flags |= RBTREND_LIT_SCENE_FLAG_COVER;
+	if (round)
+		b.flags |= RBTREND_LIT_SCENE_FLAG_COVER_ROUND;
+	else
+		b.flags &= ~(uint32_t)RBTREND_LIT_SCENE_FLAG_COVER_ROUND;
+	rbtrend_lit_scene_commit(scene);
+	return RBT_RESULT_OK;
+}
+
+#undef RBTREND_COVER_UNIT
 
 RBT_RESULT rbtrend_lit_scene_set_ambient_occlusion(rbtrend_lit_scene scene, rbtrend_texture_view occlusion, float strength, RBTREND_ERROR *out_error) {
 	rbtrend_error_clear(out_error);
