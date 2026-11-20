@@ -3933,6 +3933,15 @@ Left:
       beside it; the surface's diffuse ambient light along a bent normal of
       +X half the sky (127) and along its own normal the sky (255). The old
       estimator gets all 32 wrong at radius 0.6.
+      **Half resolution, 2026-11-20: the caller's, not here.**
+      LIT_AMBIENT_OCCLUSION's contract is a texel of `_depth` each, at the
+      view's target size, and rbtrend_lit_scene_set_ambient_occlusion()
+      names a texture of that size, so a caller wanting it cheaper draws
+      its depth at half the size, measures there and draws the measure up
+      onto the target's size with DRAW_TEXTURE's linear filter, with no
+      change here. A half resolution inside the command (its raw pass at
+      half, its blur the upsample, depth-aware) would change the
+      command's contract: a draft first.
 - [x] **A histogram for exposure** (Unreal's), which can leave the
       darkest and brightest few percent out, in place of the log
       average. Done 2026-10-24, run on Metal only:
