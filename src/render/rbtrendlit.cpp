@@ -804,6 +804,7 @@ static bool rbtrend_fog_check_block(rbtrend_binding_layout layout) {
 	    {"range", (uint32_t)offsetof(B, range)},
 	    {"last_range", (uint32_t)offsetof(B, last_range)},
 	    {"grid", (uint32_t)offsetof(B, grid)},
+	    {"history", (uint32_t)offsetof(B, history)},
 	    {"volumes[0].to_volume", (uint32_t)offsetof(B, volumes)},
 	    {"volumes[0].half_shape", (uint32_t)(offsetof(B, volumes) + offsetof(V, half_shape))},
 	    {"volumes[0].params", (uint32_t)(offsetof(B, volumes) + offsetof(V, params))},
@@ -3836,15 +3837,48 @@ RBT_RESULT rbtrend_lit_fit_cascades(const RBTREND_LIT_CASCADE_FIT *fit, RBTREND_
 		for (const glm::vec3 &corner : corners)
 			radius = std::max(radius, glm::length(corner - centre));
 		radius = std::ceil(radius * 16.0f) / 16.0f;
+		// The texel (2 radius / map_size) made a whole fraction of a power
+		// of two of the scene's units (card L82): the smallest power at
+		// least eight texels, so the texel grows by at most an eighth. The
+		// cascade's grid of texels then repeats every such power along the
+		// light's view's axes, and a scene a whole number of them away (any
+		// whole number of units while that power is at most one) lands on
+		// the texels as it did, rather than a fraction of a texel off. Its
+		// scale (1 / radius) is set exactly: 2 n / (period map_size), exact
+		// in float for a map size that is a power of two.
+		const double texel_size = 2.0 * (double)radius / (double)f.map_size;
+		int exponent            = 0;
+		const double mantissa   = std::frexp(8.0 * texel_size, &exponent);
+		const double period     = std::ldexp(1.0, mantissa == 0.5 ? exponent - 1 : exponent);
+		const double divisions  = std::floor(period / texel_size);
+		const float scale       = (float)(2.0 * divisions / (period * (double)f.map_size));
+		radius                  = (float)(period * (double)f.map_size / (2.0 * divisions));
 
 		// Looking down the light's direction at the sphere, from far enough
 		// out to catch what stands between it and the light.
 		const glm::vec3 light_up = std::fabs(sun.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
 		const float back         = radius + f.caster_distance;
-		const glm::mat4 view     = glm::lookAtRH(centre + sun * back, centre, light_up);
+		// glm::lookAtRH's view, its forward the light's direction itself
+		// rather than the difference of two places (card L82), so a light
+		// along an axis of the scene has the scene's axes exactly.
+		const glm::vec3 light_eye     = centre + sun * back;
+		const glm::vec3 light_forward = -sun;
+		const glm::vec3 light_side    = glm::normalize(glm::cross(light_forward, light_up));
+		const glm::vec3 light_top     = glm::cross(light_side, light_forward);
+		glm::mat4 view(1.0f);
+		for (int a = 0; a < 3; ++a) {
+			view[a][0] = light_side[a];
+			view[a][1] = light_top[a];
+			view[a][2] = -light_forward[a];
+		}
+		view[3][0] = -glm::dot(light_side, light_eye);
+		view[3][1] = -glm::dot(light_top, light_eye);
+		view[3][2] = glm::dot(light_forward, light_eye);
 		const float depth        = back + radius;
 		glm::mat4 projection     = rbtrend_flip_clip_y(f.reversed_depth ? glm::orthoRH_ZO(-radius, radius, -radius, radius, depth, 0.0f)
 		                                                               : glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.0f, depth));
+		projection[0][0] = projection[0][0] < 0.0f ? -scale : scale;
+		projection[1][1] = projection[1][1] < 0.0f ? -scale : scale;
 		// Moved by whole texels: where the scene's origin lands, rounded; or,
 		// with an anchor, where the fixed space's origin lands (the scene
 		// place -scene_origin), in double: rbtrend_anchored_offset().

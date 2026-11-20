@@ -10,7 +10,8 @@
 // fog's ambient share. Stored as the scattered light (RGB) and the
 // extinction (A), blended with last frame's grid where the froxel's middle,
 // moved by the space's shift through last frame's view-projection, lands
-// inside it.
+// inside it, that history first clipped to this frame's neighbourhood in
+// the thread group (card A72).
 //
 // Set 0 is the lit scene's own set, declared whole; this shader is among
 // the shaders the scene's layout is made from, so its bindings are seen by
@@ -85,14 +86,15 @@ float fog_sun_shadow(uint slot, float3 position) {
     return lerp(1.0, lit, d.shadow_params.w);
 }
 
-[shader("compute")]
-[numthreads(4, 4, 4)]
-void rbtrend_fog_inject_comp(uint3 id : SV_DispatchThreadID) {
-    uint3 size = u_fog.grid.xyz;
-    if (any(id >= size))
-        return;
-    float2 uv     = (float2(id.xy) + 0.5) / float2(size.xy);
-    float3 dir    = fog_view_ray(uv);
+// This frame's values of the group's froxels, before the history: the
+// neighbourhood the history is clipped to (card A72). A froxel outside the
+// grid holds none (its count 0).
+groupshared float4 fog_now[4][4][4];
+groupshared uint fog_now_held[4][4][4];
+
+// This frame's value of froxel [id] (the scattered light and the
+// extinction), [dir] its column's ray.
+float4 fog_inject_now(uint3 id, float3 dir) {
     // The point: the jitter's share of the way across the slice, by
     // distance (an even share of its length each), the first slice from
     // the eye.
@@ -109,7 +111,7 @@ void rbtrend_fog_inject_comp(uint3 id : SV_DispatchThreadID) {
         extinction += rho;
         scatter += rho * u_lit_scene.fog_albedo.rgb;
     }
-    uint base  = (id.y * size.x + id.x) * FOG_TILE_WORDS;
+    uint base  = (id.y * u_fog.grid.x + id.x) * FOG_TILE_WORDS;
     uint count = min(FogTiles.Load(base * 4u), FOG_MAX_TILE_VOLUMES);
     for (uint i = 0u; i < count; ++i) {
         RbtrendFogVolume v = u_fog.volumes[FogTiles.Load((base + 1u + i) * 4u)];
@@ -128,11 +130,34 @@ void rbtrend_fog_inject_comp(uint3 id : SV_DispatchThreadID) {
                  lit_atmosphere_sun_transmittance(s, p);
     }
     light += u_lit_scene.fog_light.y * lit_fog_ambient(lit_fog_up(fogged));
-    float4 value = float4(scatter * light, extinction);
+    return float4(scatter * light, extinction);
+}
+
+[shader("compute")]
+[numthreads(4, 4, 4)]
+void rbtrend_fog_inject_comp(uint3 id : SV_DispatchThreadID, uint3 local : SV_GroupThreadID) {
+    uint3 size  = u_fog.grid.xyz;
+    bool inside = all(id < size);
+    float2 uv   = (float2(id.xy) + 0.5) / float2(size.xy);
+    float3 dir  = fog_view_ray(uv);
+    float4 value = inside ? fog_inject_now(id, dir) : float4(0.0);
+    fog_now[local.z][local.y][local.x]      = value;
+    fog_now_held[local.z][local.y][local.x] = inside ? 1u : 0u;
+    GroupMemoryBarrierWithGroupSync();
+    if (!inside)
+        return;
 
     // Last frame's grid at the froxel's middle (its slice coordinate i +
     // 1/2, a texel's middle; not the jittered point, which would blend the
-    // slices beside it in), where it holds one.
+    // slices beside it in), where it holds one, clipped towards the mean of
+    // this frame's 3 x 3 x 3 froxels round it in the group (those the group
+    // holds) to the mean +- gamma standard deviations each way (card A70's
+    // rule, the clouds' clip: Karis's clip, Salvi's box; card A72), then
+    // blended in by the history's share. The box reaches the slices either
+    // side: the jitter moves a froxel's point along its slice, and a box of
+    // its own slice alone (whose froxels share the jitter) clipped every
+    // history to the one frame, its average lost (measured: a fog volume's
+    // T 6 to 12% off where the 3 x 3 x 3 box is 2% at most).
     float weight = u_fog.last_eye.w;
     if (weight > 0.0) {
         float middle      = fog_slice_distance(float(id.z) + 0.5, u_fog.range.x, u_fog.range.z, u_fog.range.w);
@@ -143,8 +168,32 @@ void rbtrend_fog_inject_comp(uint3 id : SV_DispatchThreadID) {
             float2 at    = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
             float k      = fog_slice_of(length(last_place - u_fog.last_eye.xyz), u_fog.last_range.x, u_fog.last_range.z, u_fog.last_range.w);
             float w      = k / u_fog.last_range.w;
-            if (all(at >= float2(0.0)) && all(at <= float2(1.0)) && w >= 0.0 && w <= 1.0)
-                value = lerp(value, fog_history.SampleLevel(fog_history_sampler, float3(at, w), 0.0), weight);
+            if (all(at >= float2(0.0)) && all(at <= float2(1.0)) && w >= 0.0 && w <= 1.0) {
+                float4 last = fog_history.SampleLevel(fog_history_sampler, float3(at, w), 0.0);
+                float4 sum = float4(0.0), squares = float4(0.0);
+                float count = 0.0;
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            int3 n = int3(local) + int3(dx, dy, dz);
+                            if (any(n < int3(0)) || any(n > int3(3)))
+                                continue;
+                            if (fog_now_held[n.z][n.y][n.x] == 0u)
+                                continue;
+                            float4 v = fog_now[n.z][n.y][n.x];
+                            sum += v;
+                            squares += v * v;
+                            count += 1.0;
+                        }
+                float4 mean   = sum / count;
+                float4 sigma  = sqrt(max(squares / count - mean * mean, float4(0.0)));
+                float4 extent = u_fog.history.x * sigma + 1e-5;
+                float4 away   = last - mean;
+                float4 units  = abs(away) / extent;
+                float most    = max(max(units.x, units.y), max(units.z, units.w));
+                float4 kept   = most > 1.0 ? mean + away / most : last;
+                value         = lerp(value, kept, weight);
+            }
         }
     }
     fog_written[id] = value;

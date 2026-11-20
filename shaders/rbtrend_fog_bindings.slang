@@ -30,6 +30,7 @@ public struct RbtrendFog {
     public float4 range;                 // x near, y far, z ln(far / near), w slices
     public float4 last_range;            // the same, last frame's
     public uint4 grid;                   // x W, y H, z S, w the volumes
+    public float4 history;               // x the clip's gamma (RBTREND_HISTORY_CLIP_GAMMA, rbtrendhistory.hpp)
     public RbtrendFogVolume volumes[FOG_MAX_VOLUMES];
 };
 

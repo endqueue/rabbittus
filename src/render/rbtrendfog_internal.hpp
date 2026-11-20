@@ -55,10 +55,11 @@ struct rbtrend_fog_block {
 	float range[4];
 	float last_range[4];
 	uint32_t grid[4];
+	float history[4];
 	rbtrend_fog_volume_block volumes[RBTREND_FOG_MAX_VOLUMES];
 };
 RBT_PLAIN_DATA(rbtrend_fog_block);
-static_assert(sizeof(rbtrend_fog_block) == 144 + 128 * RBTREND_FOG_MAX_VOLUMES, "RbtrendFog in rbtrend_fog_bindings.slang");
+static_assert(sizeof(rbtrend_fog_block) == 160 + 128 * RBTREND_FOG_MAX_VOLUMES, "RbtrendFog in rbtrend_fog_bindings.slang");
 
 /* FogIntegrateParams in shaders/rbtrend_fog_integrate_comp.slang. */
 struct rbtrend_fog_integrate_params {

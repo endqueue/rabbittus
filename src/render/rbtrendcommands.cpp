@@ -5574,6 +5574,9 @@ static bool rbtrend_cmd_lit_fog(rbtrend_command_list cmd_list, const RBTREND_COM
 	b.grid[1]  = fog->desc.grid_height;
 	b.grid[2]  = fog->desc.grid_slices;
 	b.grid[3]  = p._volume_count;
+	// The history clipped to this frame's neighbourhood (card A70's rule,
+	// card A72): its gamma, the clouds' own.
+	b.history[0] = RBTREND_HISTORY_CLIP_GAMMA;
 	for (uint32_t i = 0; i < p._volume_count; ++i) {
 		const RBTREND_FOG_VOLUME_INSTANCE &v = p._volumes[i];
 		rbtrend_fog_volume_block &o          = b.volumes[i];
@@ -5921,7 +5924,7 @@ static bool rbtrend_cmd_lit_clouds(rbtrend_command_list cmd_list, const RBTREND_
 	hb.sizes[3] = hh;
 	hb.frame[0] = sub;
 	memcpy(&hb.frame[1], &weight, sizeof(float));
-	const float gamma = RBTREND_HISTORY_CLOUDS_CLIP_GAMMA;
+	const float gamma = RBTREND_HISTORY_CLIP_GAMMA;
 	memcpy(&hb.frame[2], &gamma, sizeof(float));
 	rbtrend_material history = view.reconstruct[way];
 	rbtrend_clouds_write_material_block(history, &hb, sizeof(hb));

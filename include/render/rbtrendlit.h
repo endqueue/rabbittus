@@ -461,6 +461,13 @@ typedef enum RBTREND_LIT_ALPHA_MODE RBT_ENUM_BASE {
 	 * is a traced mask (RBTREND_LIT_SHADOW_KIND_MASK) lights it unshadowed.
 	 * Cascades and map shadows, the lights, the environment, the scene's
 	 * atmosphere, fog and cover reach it as any surface.
+	 *
+	 * Drawn with RBTREND_LIT_SHADER_SURFACE_FRAGMENT, or with
+	 * RBTREND_LIT_SHADER_SURFACE_REFLECT_FRAGMENT in a pipeline whose color
+	 * targets 1 and 2 have their writes masked off (the caller's
+	 * pipeline): those targets are written as an opaque surface's, the
+	 * normal and roughness unscaled by the opacity, so the surface behind
+	 * keeps its normal, roughness and specular weight for the reflections.
 	 */
 	RBTREND_LIT_ALPHA_MODE_BLEND  = 2,
 } RBTREND_LIT_ALPHA_MODE;

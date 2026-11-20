@@ -4019,7 +4019,15 @@ Left:
         reads an alpha that isn't the opacity. The variant writes as before
         (the specular weight premultiplied, the normal and roughness not);
         a caller's choice of what to do with them for BLEND waits on a
-        decision (the session's report has the options).
+        decision (the session's report has the options). **Decided
+        2026-11-20 with the user (card A76): a**: a BLEND surface is drawn
+        with the plain lit variant, or the reflect variant with targets 1
+        and 2's writes masked off (the caller's pipeline choice), so the
+        surface behind keeps its normal, roughness and specular weight;
+        the header says so (documentation only). **Written 2026-11-20**:
+        `RBTREND_LIT_ALPHA_MODE_BLEND`'s comment in `rbtrendlit.h`; no
+        declaration, layout or ABI changed (`./check.sh abi doxygen
+        caller-names` clean).
       - Tests (`../rabbittustests`, `rbtrend_gpu_tests`), each seen failing
         on the code before the mode (the header alone added):
         `test_lit_alpha_opaque` (opacity 0.25 x a map's 0 x a vertex
@@ -6256,6 +6264,46 @@ approved draft:
   the shared history module (`rbtrend_history_share`), measured, test 11
   held to one frame's answer again where the measurement allows. A70 is
   built, so it is ready to build; internal to Rend, no public change.
+  **Built 2026-11-20 on the Mac (Metal; D3D12 and Vulkan never built).**
+  The blend with the history is the inject's (`rbtrend_fog_inject_comp`),
+  not the integrate's: each thread group (4 x 4 x 4 froxels) keeps this
+  frame's values in group memory, and a froxel's reprojected history is
+  clipped towards the mean of its 3 x 3 x 3 neighbours (those of the
+  group) to mean +- gamma sigma per channel, the clouds' clip, then
+  blended by the share as before. The gamma is the shared module's
+  (`RBTREND_HISTORY_CLIP_GAMMA` 1.5, `RBTREND_HISTORY_CLOUDS_CLIP_GAMMA`
+  renamed, the clouds' too), carried in the fog block's new `history`
+  (16 bytes, checked against the reflection). A 3 x 3 box in the slice
+  alone was tried and refused: a slice's froxels share the frame's jitter
+  along it, so its spread is near 0 and the history was clipped to the
+  one frame (`test_fog_volume`'s T 6.2 to 11.8% off Math's, past its 3%).
+  The floor weight is the caller's `_history_weight` (the frame's weight
+  never under 1 minus it, through `rbtrend_history_share` as before): a
+  floor of A70's own (a quarter) over a caller's 0.9 would change what
+  the parameter means (a header change) and isn't made (measured: test
+  11's plain case 2.154 to 1.777%, against one frame's answer 2.664%).
+  Test 11 (`test_fog_history`): a box of fog crossing the view turned 10
+  degrees and climbing 0.2 a frame, after 8 frames, within 3.3% of the
+  still view of the pose (seen failing first: 3.460%; now 2.909%, 0.196%
+  on average from 0.223); the plain case 2.154% to 2.036% at worst (0.171
+  to 0.155% on average), within its 3%; against one frame's answer
+  recorded, not asserted: 3.163% either way, that frame being 2.4% from
+  the converged view itself (its jitter), so the measurement allows no
+  tighter bound; the still view's frames 4 and 64 0.779 to 0.753% apart.
+  **Figures moved** (the clip biases a converged view a little where the
+  fog changes inside a group): `test_fog_volume`'s even box at (24, 36)
+  0.39 to 1.98% off Math's and (40, 28) 0.26 to 0.80%, the noisy box 0.33
+  to 2.10% and 0.23 to 0.74% (the middle 0.64 and 0.56% as before), each
+  within its 3%; every other fog test's figure as before. **Measured**
+  (`test_fog_grid_measure`, Release, no validation, 2560 x 1440, three
+  builds run in turn, three rounds): 160 x 90 x 64 +0.38 to 0.42 ms
+  before, +0.60 to 0.76 ms with the clip (the in-slice box +0.43 to
+  0.51); 160 x 90 x 128 +0.54 to 0.57 before, +1.00 to 1.06 ms (+0.63 to
+  0.82). **For the user (card):** the clip costs 0.25 to 0.5 ms at
+  1440p and 1 to 2% of a converged volume's accuracy for 0.55 points of
+  error under fast motion; options: a, keep it (built); b, clip only
+  while the view moves past a threshold (the share as before when
+  still); c, take it out (A72's b). Recommended b.
 
 ### 57. GPU particles (card L73, decided 2026-11-17)
 
@@ -6827,6 +6875,40 @@ under validation (other callers' cascades unchanged). Windows and Linux
 owed: test 6's bits within FIT_ULPS, card X25. The first caller's renderer
 chains it on every cascade fit, its scene origin the frame's eye.
 
+**Card L82, 2026-11-20 on the Mac (Metal; D3D12 and Vulkan never built,
+no backend branch): a scene a whole number of units away lands on the
+same texels.** Found from a caller's test (a shadowed scene at x 0, 100 m
+and 1e7 m under a light straight down: 773 and 712 pixels a shadow's edge
+apart): the anchored grid is fixed in the fixed space, and a texel of any
+size (2 radius / map_size, the radius rounded up to a sixteenth) put a
+scene moved 100 units at another fraction of a texel. Two changes inside
+`rbtrend_lit_fit_cascades()`, no public change: (1) each cascade's texel
+is made a whole fraction of a power of two of the units, the smallest
+power at least eight texels (`period`, by `frexp`/`ldexp`, so no libm
+rounding), the radius grown to it (the texel at most an eighth larger)
+and the projection's x and y scale set exactly, 2 n / (period map_size)
+(exact for a map size that is a power of two); (2) the light's view built
+from the light's direction itself, glm::lookAtRH's arithmetic with its
+forward `-light` rather than the difference of two places, so a light
+along an axis has the scene's axes exactly (the difference had left the
+axis 1 ulp off, which 1e7 units turned into 0.15 of a texel). The grid
+then repeats every `period` along the light's view's axes: a scene moved
+by a multiple of it (any whole number of units while `period` is at most
+one) under a light along an axis lands as it did; under any other light,
+or by another distance, a fraction of a texel remains, as before.
+`rbtrend_contract_tests`' `lit_cascade_anchor` test 8 (new): a view
+anchored 100 units and (1e7, 0, -1e7) away, a light straight down, three
+scene places' texels in each cascade 0 of a texel apart (seen failing
+first: 0.481). Every fit's matrices moved, so the recorded tables were
+recorded anew once by name with `--print-fits` (the old `--print-anchor`,
+now printing every table): `s_fit_perspective_4`, `s_fit_parallel_3`,
+`s_fit_reversed_2` and `anchor_far_4.inc`. Recorded figures now: a fixed
+point's drift under a moving eye 7.09e-5 of a texel (7.6e-5 before) at
+the origin and 1e7 out, 6.86e-5 at 4.5e12; a turning light's slide a fit
+0.000128 texels at the view, 0.0081 at 200 m, 0.236 at 250 km and 0.411
+at 1e7 m. Every ctest (53) Debug and Release, `rbtrend_gpu_tests` on both
+device configurations Debug and Release under Metal's validation.
+
 ### 63. The view-set records sized by the caller (card A67, decided 2026-11-17)
 
 Decided 2026-11-17 with you: `rbtrend_view_sets_draft.h` (version 1)
@@ -7023,7 +7105,7 @@ caller's headers, is not built here.
   whole block a storage buffer), c (repacking: a few hundred bytes), d
   (the device's own `max_uniform_buffer_range`: nothing on the guaranteed
   floor).
-  Drafted 2026-11-20: `rabbittus/rbtrend_scene_block_draft.h` version 2, seven passes, for approval; not built.
+  Approved 2026-11-20 with the user after a second seven-pass critique: `rabbittus/rbtrend_scene_block_draft.h` version 3, 33b3a77d; not built.
 
 ## Suggested order
 

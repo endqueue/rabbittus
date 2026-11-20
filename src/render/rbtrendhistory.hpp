@@ -118,9 +118,11 @@ inline float rbtrend_history_share(uint32_t held, float most) {
  * settled, an exponential average of (2 - w) / w = 7 marches. */
 #define RBTREND_HISTORY_CLOUDS_WEIGHT_FLOOR 0.25f
 
-/* How many standard deviations of the march's 3 x 3 neighbourhood round
- * its mean the clouds' reprojected history is clipped to. */
-#define RBTREND_HISTORY_CLOUDS_CLIP_GAMMA 1.5f
+/* How many standard deviations of this frame's neighbourhood round its
+ * mean a reprojected history is clipped to: the clouds' (the march's 3 x 3
+ * texels) and the fog grid's (the froxel's 3 x 3 x 3 in its group, card
+ * A72) alike. */
+#define RBTREND_HISTORY_CLIP_GAMMA 1.5f
 
 /* The clouds' march (rbtrend_clouds_draft.h section 4, card A70): each
  * march texel covers 4 x 4 target texels and 2 x 2 history texels. In a

@@ -668,27 +668,29 @@ static void test_buffers(void)
 
 // ---- Lit: vertex colors, cascades and the light helpers (cards A35, A46) ----
 
-// The bits rbtrend_lit_fit_sun_cascades() gave for three framings before card
-// A35 renamed it (captured 2026-11-01 from the Debug and Release builds of
-// Rabbittus a2bbbee's lit code, which gave the same bits): each row a
-// cascade's matrix, column after column, then its split. Captured on the Mac
-// (Apple clang, arm64, multiply-adds contracted then): another platform's
-// libm rounds std::pow and std::tan differently, so a value may lie a few
-// ULPs off and is compared within FIT_ULPS (card A49).
+// The bits rbtrend_lit_fit_cascades() gives for three framings: each row a
+// cascade's matrix, column after column, then its split. First captured
+// 2026-11-01 from rbtrend_lit_fit_sun_cascades() before card A35 renamed it;
+// recorded anew 2026-11-20 on the Mac (macOS 27, Apple M5 Pro) with
+// --print-fits when card L82 made each cascade's texel a whole fraction of
+// a power of two of the units and its view's forward the light's direction
+// (every matrix moved). Another platform's libm rounds std::pow and
+// std::tan differently, so a value may lie a few ULPs off and is compared
+// within FIT_ULPS (card A49).
 static const uint32_t s_fit_perspective_4[][17] = {
-    {0x3d829439u, 0xbdbcf5a5u, 0x3bfe40dbu, 0x00000000u, 0x00000000u, 0xbd5237afu, 0xbc9ee888u, 0x00000000u, 0x3dd0ed28u, 0x3d6c330fu, 0xbb9ee888u, 0x00000000u, 0xbe640000u, 0x3e8d0000u, 0x3f53f576u, 0x3f800000u, 0x40feb9c1u},
-    {0x3d002b77u, 0xbd397923u, 0x3bb9970au, 0x00000000u, 0x00000000u, 0xbcce56c6u, 0xbc67fccbu, 0x00000000u, 0x3d4d1258u, 0x3ce7d76du, 0xbb67fccdu, 0x00000000u, 0xbf138000u, 0xbca00000u, 0x3f3b4a48u, 0x3f800000u, 0x418ce276u},
-    {0x3c70ca56u, 0xbcae3900u, 0x3b68286bu, 0x00000000u, 0x00000000u, 0xbc41d29eu, 0xbc111942u, 0x00000000u, 0x3cc0a1deu, 0x3c59c741u, 0xbb111943u, 0x00000000u, 0xbf290000u, 0xbe0e0000u, 0x3f22de72u, 0x3f800000u, 0x421730cbu},
-    {0x3b941e94u, 0xbbd6579au, 0x3ab3466au, 0x00000000u, 0x00000000u, 0xbb6e74a8u, 0xbb601803u, 0x00000000u, 0x3becfdbau, 0x3b85f6bfu, 0xba601803u, 0x00000000u, 0xbf1d0000u, 0xbe380000u, 0x3f0a8adcu, 0x3f800000u, 0x42f00000u},
+    {0x3d7e6646u, 0xbdb811c9u, 0x3bfbde12u, 0x00000000u, 0x00000000u, 0xbd4cc6fdu, 0xbc9d6acbu, 0x00000000u, 0x3dcb8504u, 0x3d66163cu, 0xbb9d6acbu, 0x00000000u, 0xbe5e0000u, 0x3e8a0000u, 0x3f532bc6u, 0x3f800000u, 0x40feb9c1u},
+    {0x3cfe6646u, 0xbd3811c9u, 0x3bb8d7aau, 0x00000000u, 0x00000000u, 0xbcccc6fdu, 0xbc670d94u, 0x00000000u, 0x3d4b8504u, 0x3ce6163cu, 0xbb670d94u, 0x00000000u, 0xbf128000u, 0xbca00000u, 0x3f3b0d25u, 0x3f800000u, 0x418ce276u},
+    {0x3c6d7085u, 0xbcabcc55u, 0x3b65ddebu, 0x00000000u, 0x00000000u, 0xbc3f2020u, 0xbc0faab2u, 0x00000000u, 0x3cbdf39eu, 0x3c56bf6bu, 0xbb0faab2u, 0x00000000u, 0xbf270000u, 0xbe0c0000u, 0x3f22865au, 0x3f800000u, 0x421730cbu},
+    {0x3b87ae03u, 0xbbc4573du, 0x3aa5cc4eu, 0x00000000u, 0x00000000u, 0xbb5a6ddbu, 0xbb4f3f61u, 0x00000000u, 0x3bd9166bu, 0x3b756d0du, 0xba4f3f61u, 0x00000000u, 0xbf0f8000u, 0xbe280000u, 0x3f09bff9u, 0x3f800000u, 0x42f00000u},
 };
 static const uint32_t s_fit_parallel_3[][17] = {
-    {0x3c8f876au, 0xbccfb308u, 0x3b82fd59u, 0x00000000u, 0x00000000u, 0xbc6710c5u, 0xbc23bcafu, 0x00000000u, 0x3ce5a577u, 0x3c81cfe5u, 0xbb23bcafu, 0x00000000u, 0xbf0f8000u, 0xbdb80000u, 0x3f289088u, 0x3f800000u, 0x42200000u},
-    {0x3c8949e1u, 0xbcc6ab40u, 0x3b7e40dcu, 0x00000000u, 0x00000000u, 0xbc5d04ecu, 0xbc1ee889u, 0x00000000u, 0x3cdba968u, 0x3c785611u, 0xbb1ee88au, 0x00000000u, 0xbfd68000u, 0xbeee0000u, 0x3f2127bbu, 0x3f800000u, 0x42a00000u},
-    {0x3c8949dfu, 0xbcc6ab40u, 0x3b7e40dcu, 0x00000000u, 0x00000000u, 0xbc5d04eau, 0xbc1ee889u, 0x00000000u, 0x3cdba968u, 0x3c78560du, 0xbb1ee888u, 0x00000000u, 0xc037e000u, 0xbf5d0000u, 0x3f1a9d74u, 0x3f800000u, 0x42f00000u},
+    {0x3c87ae03u, 0xbcc4573du, 0x3b7c3986u, 0x00000000u, 0x00000000u, 0xbc5a6ddbu, 0xbc1da3f3u, 0x00000000u, 0x3cd9166bu, 0x3c756d0du, 0xbb1da3f3u, 0x00000000u, 0xbf080000u, 0xbdb00000u, 0x3f270ddeu, 0x3f800000u, 0x42200000u},
+    {0x3c87ae03u, 0xbcc4573du, 0x3b7c3986u, 0x00000000u, 0x00000000u, 0xbc5a6ddbu, 0xbc1da3f3u, 0x00000000u, 0x3cd9166bu, 0x3c756d0du, 0xbb1da3f3u, 0x00000000u, 0xbfd40000u, 0xbeeb0000u, 0x3f20e401u, 0x3f800000u, 0x42a00000u},
+    {0x3c87ae03u, 0xbcc4573du, 0x3b7c3986u, 0x00000000u, 0x00000000u, 0xbc5a6ddbu, 0xbc1da3f3u, 0x00000000u, 0x3cd9166bu, 0x3c756d0du, 0xbb1da3f3u, 0x00000000u, 0xc035c000u, 0xbf5a8000u, 0x3f1a6717u, 0x3f800000u, 0x42f00000u},
 };
 static const uint32_t s_fit_reversed_2[][17] = {
-    {0x3ced179cu, 0xbd2b8c01u, 0xbbb1edfcu, 0x00000000u, 0x00000000u, 0xbcbed88eu, 0x3c5e697bu, 0x00000000u, 0x3d3dac7du, 0x3cd66f02u, 0x3b5e697bu, 0x00000000u, 0xbeb40000u, 0x3d300000u, 0x3e8cb292u, 0x3f800000u, 0x418ce276u},
-    {0x3b8f4e92u, 0xbbcf60c2u, 0xbaae177du, 0x00000000u, 0x00000000u, 0xbb66b540u, 0x3b599d5cu, 0x00000000u, 0x3be54a82u, 0x3b819c7au, 0x3a599d5eu, 0x00000000u, 0xbf040000u, 0xbe160000u, 0x3eea68c2u, 0x3f800000u, 0x42f00000u},
+    {0x3cdc7ac5u, 0xbd1f86e2u, 0xbbaada57u, 0x00000000u, 0x00000000u, 0xbcb17942u, 0x3c5590ecu, 0x00000000u, 0x3d306237u, 0x3cc7689bu, 0x3b5590ecu, 0x00000000u, 0xbea70000u, 0x3d200000u, 0x3e914892u, 0x3f800000u, 0x418ce276u},
+    {0x3b87ae03u, 0xbbc4573du, 0xbaa5cc4eu, 0x00000000u, 0x00000000u, 0xbb5a6ddbu, 0x3b4f3f61u, 0x00000000u, 0x3bd9166bu, 0x3b756d0du, 0x3a4f3f61u, 0x00000000u, 0xbefa0000u, 0xbe0e0000u, 0x3eeb7012u, 0x3f800000u, 0x42f00000u},
 };
 
 // The framings those bits are of: [orthographic], [cascades], [reversed].
@@ -737,6 +739,10 @@ static int64_t ulps_apart(uint32_t a_bits, uint32_t b_bits)
     return a > b ? a - b : b - a;
 }
 
+// --print-fits: each recorded fit's bits printed in its table's form (to
+// record them anew after a change to the fit), nothing checked.
+static int print_fits = 0;
+
 // The fit of [fit] into maps whose own fields hold markers: the framing is
 // [expected]'s bits within FIT_ULPS, the views and splits past the count are 0, and the
 // rectangles, biases and softness are the markers still.
@@ -759,6 +765,13 @@ static void check_fit(const RBTREND_LIT_CASCADE_FIT *fit, const uint32_t (*expec
         uint32_t bits[17];
         memcpy(bits, maps._view_projection[c], sizeof(float) * 16);
         memcpy(&bits[16], &maps._split_depths[c], sizeof(float));
+        if (print_fits)
+        {
+            printf("    {");
+            for (int k = 0; k < 17; ++k)
+                printf("0x%08xu%s", bits[k], k < 16 ? ", " : "},\n");
+            continue;
+        }
         for (int k = 0; k < 17; ++k)
             CHECK(ulps_apart(bits[k], expected[c][k]) <= FIT_ULPS);
     }
@@ -825,8 +838,6 @@ static void test_lit_fit_cascades(void)
 // chained, is test_lit_fit_cascades above; test 5 is the misuse harness).
 // The fixed world point's texel worked out in double from the fit's float
 // matrix, as the GPU applies it.
-
-static int print_anchor = 0;
 
 // The texel coordinate (x, y) a scene place lands on through cascade [c].
 static void texel_of(const RBTREND_LIT_SHADOW_MAPS *maps, uint32_t c, uint32_t map_size, const double scene[3], double out[2])
@@ -997,24 +1008,7 @@ static void test_lit_cascade_anchor(void)
         anchor.scene_origin.y = 1.5e5 - 2.25;
         anchor.scene_origin.z = -1e7 + 11.125;
         fit.base.next = &anchor.base;
-        if (print_anchor)
-        {
-            RBTREND_LIT_SHADOW_MAPS maps;
-            memset(&maps, 0, sizeof(maps));
-            maps.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
-            CHECK(rbtrend_lit_fit_cascades(&fit, &maps, NULL) == RBT_RESULT_OK);
-            for (uint32_t c = 0; c < fit.cascade_count; ++c)
-            {
-                uint32_t bits[17];
-                memcpy(bits, maps._view_projection[c], sizeof(float) * 16);
-                memcpy(&bits[16], &maps._split_depths[c], sizeof(float));
-                printf("    {");
-                for (int k = 0; k < 17; ++k)
-                    printf("0x%08Xu%s", bits[k], k < 16 ? ", " : "},\n");
-            }
-        }
-        else
-            check_fit(&fit, s_fit_anchor_far_4);
+        check_fit(&fit, s_fit_anchor_far_4);
     }
     // 7. Recorded, not asserted: a light turning 1.2e-6 radians a fit (a day
     // of 24 hours at 60 Hz), the view still, the fixed point 0, 200 m, 250 km
@@ -1058,6 +1052,55 @@ static void test_lit_cascade_anchor(void)
                    "cascade's grid moves %.3g texels a fit on average, %.3g at most (recorded, card A60)\n",
                    distances[d], sum / 599.0, most);
         }
+    }
+    // 8. Card L82: the same view anchored 100 units and (1e7, 0, -1e7) along
+    // the fixed space's axes from the first, under a light straight down
+    // (whose view's axes are the fixed space's x and z): a scene moved with
+    // it lands on each cascade's texels as it did, within 1e-3 of a texel
+    // (each cascade's texel a whole fraction of a power of two of the
+    // units). Seen failing first: the texel any size, 0.481 of a texel off.
+    {
+        const double offsets[3][3] = {{0.0, 0.0, 0.0}, {100.0, 0.0, 0.0}, {1e7, 0.0, -1e7}};
+        const double scenes[3][3] = {{0.5, -1.0, 2.0}, {-30.0, -4.0, 60.0}, {120.0, -10.0, 300.0}};
+        double first[RBTREND_LIT_MAX_CASCADES][3][2], worst = 0.0;
+        for (int o = 0; o < 3; ++o)
+        {
+            RBTREND_LIT_CASCADE_FIT fit = eye_fit();
+            fit.light_direction[0] = 0.0f;
+            fit.light_direction[1] = 1.0f;
+            fit.light_direction[2] = 0.0f;
+            RBTREND_LIT_CASCADE_ANCHOR anchor;
+            memset(&anchor, 0, sizeof(anchor));
+            anchor.base.type = RBT_STRUCT_TYPE_REND_LIT_CASCADE_ANCHOR;
+            anchor.scene_origin.x = 3.0 + offsets[o][0];
+            anchor.scene_origin.y = 1.75 + offsets[o][1];
+            anchor.scene_origin.z = -2.0 + offsets[o][2];
+            fit.base.next = &anchor.base;
+            RBTREND_LIT_SHADOW_MAPS maps;
+            memset(&maps, 0, sizeof(maps));
+            maps.base.type = RBT_STRUCT_TYPE_REND_LIT_SHADOW_MAPS;
+            CHECK(rbtrend_lit_fit_cascades(&fit, &maps, NULL) == RBT_RESULT_OK);
+            for (uint32_t c = 0; c < fit.cascade_count; ++c)
+            {
+                for (int p = 0; p < 3; ++p)
+                {
+                    double t[2];
+                    texel_of(&maps, c, fit.map_size, scenes[p], t);
+                    for (int r = 0; r < 2; ++r)
+                    {
+                        if (o == 0)
+                            first[c][p][r] = t[r];
+                        const double d = fabs(wrapped(t[r] - first[c][p][r]));
+                        if (d > worst)
+                            worst = d;
+                    }
+                }
+            }
+        }
+        printf("rbtrend_contract_tests: a view anchored 100 units and 1e7 along x and z from another, a light straight down: a scene "
+               "place's texel %.3g of a texel apart at most\n",
+               worst);
+        CHECK(worst <= 1e-3);
     }
 }
 
@@ -1376,7 +1419,7 @@ static void test_particles_contract(void)
 
 int main(int argc, char **argv)
 {
-    print_anchor = argc > 1 && strcmp(argv[1], "--print-anchor") == 0;
+    print_fits = argc > 1 && strcmp(argv[1], "--print-fits") == 0;
     test_instance_create();
     test_atmosphere_shell_command();
     test_fog_grid_contract();
