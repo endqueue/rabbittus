@@ -6,8 +6,10 @@
  * the scalars stay in the uniform block, which goes from 16,384 bytes (full)
  * to 1,024 (card A75).
  *
- * DRAFT, 2026-11-20, version 2 (version 1, then seven critique passes,
- * each fixed before the next), for the user's approval; not built.
+ * APPROVED by the user 2026-11-20 after a second seven-pass critique, every
+ * question as recommended (Q1 a to Q4 a). Version 3, 2026-11-20 (version 1,
+ * seven critique passes, version 2; then passes 8 to 14, each fixed before
+ * the next); not built. Frozen from here (ROADMAP.md, section 1).
  * Card A75 decided 2026-11-20 (b): "split it, the per-light and per-cascade
  * arrays into a storage buffer of their own and the scalars kept in the
  * uniform block (a set 0 binding freed or merged first); a Rend public
@@ -48,8 +50,22 @@
  * (CRGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET 16; storage_buffer_offset_alignment);
  * and Hazel's renderer (../.refs/HazelRenderer2025/Hazel/Hazel, present:
  * Renderer/SceneRenderer.h and .cpp, Scene/Scene.h, read for its lights'
- * buffers). rabbittus b77c873, 0.3, untagged. Not built, not in any target,
- * not compilable. Every declaration below is marked [ADDED], [CHANGED] or
+ * buffers). rabbittus b77c873, 0.3, untagged. Passes 8 to 14 rechecked
+ * against b7c51bd (the transparency stage's Rend half, built after version
+ * 2: the material block's alpha_mode, LitSurface.screen_space), whose line
+ * numbers moved: rbtrendlit.h's "Sets" 34 to 52, rbtrend_lit_scene_create()
+ * 1158, _set_view() 1241; rbtrendlit.cpp's rbtrend_lit_scene_layout() 1349,
+ * _resolve_shadows() 2503, _commit() 2610 (its two block writes 2615 and
+ * 2616), _rt_set() 2619, _ssr_set() 2639, creation 2785, set_view's tiles
+ * 2945 to 2963; rbtrend_lit_lighting.slang 156, 256, 481 to 486. Read as
+ * well: rbtrend_lit_surface.slang (lit_shade_as(), the BLEND mode's
+ * screen_space 0), rbtrend_particles_lit_frag.slang (26: lit particles shade
+ * as BLEND), rbtrend_rt_path_trace.slang's and rbtrend_rt_reflections_comp.slang's
+ * imports, rbtrend_lit_ssr_comp.slang and rbtrend_rt_shadow_mask.slang
+ * (rbtrend_lit_scene alone), and Hazel's SceneRenderer.cpp (2018 to 2023,
+ * 2173 to 2178). The uncommitted change in the working tree
+ * (rbtrend_lit_fit_cascades()) touches none of this. Not built, not in any
+ * target, not compilable. Every declaration below is marked [ADDED], [CHANGED] or
  * [REMOVED]; nothing unmarked changes.
  *
  * ---------------------------------------------------------------------------
@@ -198,6 +214,120 @@
  *     their bytes there; their set-0 images are pass 3, 4's matter.
  *
  * ---------------------------------------------------------------------------
+ * Revision notes, second round (version 2, then passes 8 to 14, each fixed
+ * before the next; version 3)
+ * ---------------------------------------------------------------------------
+ *
+ * Pass 8 (correctness against today's code and shaders, b7c51bd).
+ *  1. Version 2 was written against b77c873, before the transparency
+ *     stage's Rend half was built; every line number it cites was checked
+ *     again and the moved ones are corrected above. The block is as
+ *     counted in pass 1, 1 (RbtrendLitScene, rbtrend_lit_scene.slang 70 to
+ *     118: 16,384 bytes); the transparency stage added nothing to it.
+ *  2. Transparency (b7c51bd): a BLEND surface (lit_shade_as() with mode
+ *     BLEND, and every lit particle, rbtrend_particles_lit_frag.slang 26)
+ *     reads the lights by tile or all, the shadows and the shadow views as
+ *     an opaque surface does (lighting 481 to 486, 256, 156). Its
+ *     screen_space 0 gates only the view's screen-space inputs, the
+ *     occlusion (binding 9) and the directional masks (11 to 14), which
+ *     Q1 (a) doesn't touch. The transparency stage's rule that a view with
+ *     transparents keeps the cull without depth bounds is about what the
+ *     tiles hold, not where: unchanged by the merge. Its "nothing in set 0
+ *     or the scene block" stays true of that stage. MASK's depth cut-out
+ *     (rbtrend_lit_depth_cutout_frag.slang) reads the material alone.
+ *  3. Card A76 (a): a BLEND surface drawn with the reflect variant has
+ *     targets 1 and 2's writes masked off in the caller's pipeline: pipeline
+ *     state, nothing of set 0 or the block. Nothing here changes for it.
+ *  4. Wrong in version 2: the accessors were to go in rbtrend_lit_bindings
+ *     (section 10). The path trace imports rbtrend_lit_scene and its own
+ *     modules (rbtrend_rt_path_trace.slang 36 to 38; the traced reflections
+ *     through it, 1 to 3), not rbtrend_lit_bindings, whose sixteen bindings
+ *     (eleven images among them) the traces' set 0 would then have to
+ *     declare and hold; Metal refuses a module whose set differs from its
+ *     layout (card S27). Changed: binding 1's readonly declaration and the
+ *     three accessors in a module of their own, rbtrend_lit_storage.slang,
+ *     imported by rbtrend_lit_bindings and by rbtrend_rt_path_trace; the
+ *     traces' set 0 is bindings 0 and 1. The screen-space reflection and the
+ *     traced shadow mask import rbtrend_lit_scene alone and keep binding 0
+ *     alone. The cull keeps its read-write declaration and a twin accessor.
+ *  5. Checked: the scene layout is made from seven shaders (rbtrendlit.cpp
+ *     1349 to 1375); binding 1 gains the compute stage from the fog
+ *     inject's read of a shadow view, from the shaders, no stage written by
+ *     hand.
+ *
+ * Pass 9 (Rend's conventions: what is public, errors, plain data, callers).
+ *  1. Checked: no public declaration; nothing names a caller (./check.sh
+ *     caller-names); "a caller's tiling" stays a caller.
+ *  2. Found: the scene creation's new failure needs its own words: the
+ *     storage buffer's refusal is reported as "the scene's storage buffer
+ *     of 15,360 bytes can't be made" with Carrottus GPU's code (rbtrend_fail_cr),
+ *     as the tiles buffer's is; at set_view, the size with the tiles.
+ *  3. Checked: rbtrend_lit_scene_arrays is one record a scene, RBT_PLAIN_DATA
+ *     and no size budget (no array of it is iterated); the material slot
+ *     (rbtrend_internal.hpp 1328), an element a submission walks, gains up
+ *     to three ranges: plain data kept, its size growth named here as the
+ *     decision RBT_PLAIN_DATA's rule asks for.
+ *
+ * Pass 10 (the platform APIs, through Carrottus GPU).
+ *  1. Vulkan: maxStorageBufferRange's floor 2^27 holds the head and the
+ *     tiles at 7680 x 4320 (480 x 270 tiles of 64 uints: 33,177,600 bytes
+ *     plus 15,360); the binding is the whole buffer, no range offset.
+ *  2. D3D12: the raw view's Load4 at offsets that are multiples of 16
+ *     (ByteAddressBuffer's addresses a multiple of 4, as remembered).
+ *  3. Metal: the copy into the head is a blit encoder's, the cull a compute
+ *     encoder's and the surfaces a render encoder's: tracked between
+ *     encoders, as the block's arena range is (card S60's concurrent compute
+ *     changes nothing between encoders).
+ *  4. Vulkan: binding 1 stays readonly (NonWritable) in every stage but the
+ *     cull's compute, as a fragment stage's storage buffer must be without
+ *     fragmentStoresAndAtomics.
+ *
+ * Pass 11 (industry practice, and Hazel).
+ *  1. Hazel (read here): SceneRenderer.cpp 2018 to 2023 and 2173 to 2178
+ *     write each light array's live prefix (16 bytes of count and
+ *     sizeof(PointLight) x Count) into a per-frame uniform buffer set: Q3
+ *     (a)'s prefix and Q3 (b)'s per-frame copies. Q3 (a) kept: one copy,
+ *     no set a frame.
+ *  2. Otherwise as pass 4.
+ *
+ * Pass 12 (performance).
+ *  1. The traces' set gains one descriptor, made once a scene.
+ *  2. The cull's loop over the lights reads storage where it read the
+ *     constant block: test 8 times the cull's pass apart from the surfaces
+ *     (Rend's timestamps around each command), both figures by name.
+ *  3. Unchanged otherwise (pass 5).
+ *
+ * Pass 13 (tests: each failing first, figures by name).
+ *  1. Added: test_lit_scene_arrays_blend (a BLEND surface and a lit particle
+ *     system lit by light 127 and shadowed through shadow view 63 in a tiled
+ *     view; fails first against the stub).
+ *  2. Added to 6: rbtrend_contract_tests checks the traces' scene layout
+ *     holds bindings 0 and 1, and the screen-space reflection's binding 0
+ *     alone.
+ *  3. Named in the gate (1): the transparency stage's tests
+ *     (test_lit_alpha_opaque, _mask, _blend_screen_space, _values,
+ *     _refusals, test_particles_lit, test_particles_lit_screen_space) among
+ *     the lit ones, their figures the same line for line.
+ *  4. Said: Metal built and run; D3D12 and Vulkan never built from Rend's
+ *     side (the shaders compiled for each at build).
+ *
+ * Pass 14 (what callers above see: fog, clouds, particles, transparency).
+ *  1. Fog (card A59): stage 1's height fog stays in the block; stage 2's
+ *     inject reads a shadow view through lit_shadow_view() at binding 1,
+ *     already in its set. Nothing a caller sets changes. Stage 3 (point and
+ *     spot lights in the grid, transparents) reads the lights the same way
+ *     and has the block's 15 KiB for its values.
+ *  2. Clouds (card A57): the march and reconstruct read the directional
+ *     records and the fog from the block, untouched. Stage 3's cloud
+ *     shadows want a set-0 image (pass 3, 4).
+ *  3. Particles (card L73's Rend half): lit particles shade as BLEND through
+ *     lit_shade_as(), reading the arrays through the accessors; their
+ *     pipeline takes the scene layout at slot 0 as before
+ *     (rbtrendparticles.cpp 117 to 157).
+ *  4. Transparency and card A76: pass 8, 2 and 3. A caller's pipelines,
+ *     sets and commands are unchanged; ABI none.
+ *
+ * ---------------------------------------------------------------------------
  * 1. Why
  * ---------------------------------------------------------------------------
  *
@@ -218,8 +348,9 @@
  * view's tile lists, becomes the scene's storage buffer: the lights at byte
  * 0, the shadows at 8,192, the shadow views at 10,240, the tiles from
  * 15,360 (Q1 a: a binding merged, none added). Rend's shaders read the three
- * arrays through accessors in one module (lit_light(i), lit_shadow(i),
- * lit_shadow_view(i)), loading float4s at fixed offsets (Q4). The arrays are
+ * arrays through accessors in a module of their own, rbtrend_lit_storage
+ * (lit_light(i), lit_shadow(i), lit_shadow_view(i)), loading float4s at
+ * fixed offsets (Q4). The arrays are
  * written by the material's owned-block rule, their live prefixes only, into
  * the head of the scene's buffer (Q3). The traces' scene set gains binding
  * 1. Public: comments of rbtrendlit.h only; ABI none.
@@ -366,6 +497,15 @@
  *     the build (the same test against the old block) and after.
  *  9. The block's static_asserts (1,024 bytes; the offsets of section 3)
  *     and the reflection checks, at build and layout creation.
+ * 10. test_lit_scene_arrays_blend (pass 13, 1): a BLEND surface and a lit
+ *     particle system, in a tiled view, lit by light 127 and shadowed
+ *     through shadow view 63: their pixels the reference. Fails first
+ *     against the stub.
+ * Test 1's gate names the transparency stage's tests among the lit ones
+ * (test_lit_alpha_opaque, _mask, _blend_screen_space, _values, _refusals,
+ * test_particles_lit, test_particles_lit_screen_space); test 6's contract
+ * check also holds the screen-space reflection's scene layout to binding 0
+ * alone; test 8 times the cull's pass apart from the surfaces.
  * Where each runs: the Mac (Metal). D3D12 and Vulkan owed on Windows 11 and
  * Fedora (the shaders compiled for each at build; their runs owed).
  *
@@ -411,12 +551,15 @@
  * ---------------------------------------------------------------------------
  *
  * - shaders/rbtrend_lit_scene.slang: the three arrays out of RbtrendLitScene;
- *   the offsets' constants; rbtrend_lit_bindings.slang's binding 1 renamed
- *   RbtrendLitStorage (readonly), its comment, tile_lights() from 15,360,
- *   and lit_light(), lit_shadow(), lit_shadow_view() (Q4 a);
+ *   the offsets' constants. [Version 3, pass 8, 4] shaders/rbtrend_lit_storage.slang,
+ *   new (in RABBITTUS_SHADER_MODULES): binding 1 as RbtrendLitStorage
+ *   (readonly), its comment, tile_lights() from 15,360, and lit_light(),
+ *   lit_shadow(), lit_shadow_view() (Q4 a); rbtrend_lit_bindings.slang
+ *   imports it in place of its own binding 1; rbtrend_rt_path_trace.slang
+ *   imports it (the traced reflections through it).
  *   rbtrend_lit_cull.slang's read-write declaration the same name, its
  *   lights through lit_light()'s twin over the RW buffer and its tiles
- *   stored from 15,360; rbtrend_lit_lighting.slang (156, 251, 473, 476),
+ *   stored from 15,360; rbtrend_lit_lighting.slang (156, 256, 483, 486),
  *   rbtrend_fog_inject_comp.slang (71), rbtrend_rt_path_trace.slang (470),
  *   rbtrend_rt_reflections_comp.slang (112) through the accessors.
  * - rbtrendlit_internal.hpp: rbtrend_lit_scene_block without the three
@@ -425,8 +568,10 @@
  * - rbtrendlit.cpp: the static_asserts (1,024; the arrays' sizes and
  *   offsets); rbtrend_lit_scene_resolve_shadows() writing the scene's
  *   arrays; commit writing the 1 KiB block into both materials and marking
- *   the arrays' prefixes dirty; creation making the buffer; set_view
- *   remaking it and marking every prefix dirty; rt_set adding binding 1.
+ *   the arrays' prefixes dirty; creation making the buffer (its failure in
+ *   its own words, pass 9, 2); set_view remaking it and marking every
+ *   prefix dirty, an untiled view binding the scene's buffer where it bound
+ *   the placeholder tiles; rt_set adding binding 1; ssr_set unchanged.
  * - rbtrendmaterial.cpp: an owned slot's destination a buffer and offset
  *   of the owner's (the arena's range, or the lit scene's buffer), copied
  *   by the same rbtrend_upload_copy list, the same wait; a slot may carry
