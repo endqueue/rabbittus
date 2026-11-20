@@ -366,6 +366,11 @@ Nubis's sizes and a 512 map): a density 56.8 ns a point (shell, PLAIN),
 79.1 (shell, EQUI_ANGULAR), 53.6 (slab), against the draft's 60 to 120
 ns; the bake 1.90 us a texel, a PERLIN_WORLEY 128^3 3.99 s, a WORLEY 32^3
 60 ms (the draft's 4.1 s and 61 ms held). Windows and Linux never built.
+**Card A73 decided 2026-11-20 with the user (a):** the bake stays on the
+CPU, on the caller's scheduler (a 128-cubed PERLIN_WORLEY 0.57 s on 8
+workers); shipping the baked bytes (the caller's own packaging) when a
+caller's start-up measures it. Not a GPU bake checked against these
+bits. Nothing to build.
 
 ## Fog density (card A59, decided 2026-11-17)
 

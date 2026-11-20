@@ -3974,6 +3974,9 @@ Left:
       OPAQUE (its opacity ignored), MASK, BLEND (reading none of the view's
       screen-space inputs). Drafted 2026-11-19: `rbtrend_transparency_draft.h`
       (version 1, seven critique passes), not approved; nothing built.
+      Approved 2026-11-20 after seven passes (8 to 14), version 2, hash
+      e8dfad9b (`shasum -a 256`, first 8 hex), every question as
+      recommended; not built.
 - [ ] **Variants**: branches on the encoding, the map bits, the shadows
       and the tiles are at run time; a shader per case, or specialization
       constants (item 22), when a measurement shows them.
@@ -5931,7 +5934,10 @@ bounds what the turn carries)" holds for a view's turn, not for a cut
 like this one. Its bounds were kept and each of its pictures is drawn
 from a settled history (64 frames each: 0.055 levels, 0 texels, the
 worst 1; at 32 frames 0.53, 190, 4). A caller that turns its world by a
-jump resets the history (`_history_reset`).
+jump resets the history (`_history_reset`). **Card A74 decided
+2026-11-20 with the user (a):** such a cut is the caller's to know and
+reset (`_history_reset` when its world turns by more than a set angle in
+a step, as at its other cuts); Rend unchanged, no angle rule of its own.
 
 
 ### 56. Volumetric fog near the eye (card A59, decided 2026-11-17)
@@ -6117,7 +6123,10 @@ approved draft:
   volume's screen rectangle in tiles on the CPU and reports a tile past
   15; (b) the cull writes an overflow count read back a frame later and
   reported at the next compile; (c) leave it as the lights' tiles are.
-  Recommended (c), a card to decide.
+  Recommended (c), a card to decide. **Card A71 decided 2026-11-20 with
+  the user (c):** left as built and as the header says (the later
+  volumes left out, as the lights' tiles leave out lights); nothing a
+  caller would branch on, nothing to build.
 - **Tests, each seen failing first** (none passed against a stub that
   returned NOT_IMPLEMENTED): `rbtrend_contract_tests`' `fog_grid_contract`
   (4 failed checks: the NULL calls' results and messages); in
@@ -6157,6 +6166,13 @@ approved draft:
   two blocks of 8,336, the noise volume (128 KiB at 32).
 - **Owed:** D3D12 and Vulkan (the grid's compute over set 0, 3D storage
   images, the tiles' raw buffer); stage 3.
+- **Card A72 decided 2026-11-20 with the user (a):** the grid's history
+  blurs under motion (a view turning 10 degrees a frame and climbing:
+  its top rows 9 to 16% off one frame's answer). The fog's integrate
+  takes A70's rule (a variance clip and a floor weight, item 55) through
+  the shared history module (`rbtrend_history_share`), measured, test 11
+  held to one frame's answer again where the measurement allows. A70 is
+  built, so it is ready to build; internal to Rend, no public change.
 
 ### 57. GPU particles (card L73, decided 2026-11-17)
 
@@ -6914,6 +6930,18 @@ caller's headers, is not built here.
   counting ALU): the half-float unpacking and the normal's renormalising
   weren't counted, and submit-to-idle readings at this size move by
   about 0.02 ms.
+- **Card A75 decided 2026-11-20 with the user (b): the scene's block,
+  full, is split.** The per-light and per-cascade arrays (the lights at 32
+  bytes each, a fixed count, and the cascades) move into a storage buffer
+  of their own, and the scalars stay in the uniform block, so the next
+  scene-wide value (A59's stage 3, A57's stages 2 and 3, a caller's
+  tiling) has room. Set 0's sixteen bindings are all taken, so one is
+  freed or merged first. A public layout change for every lit shader a
+  caller writes, so **a Rend draft first** (seven critique passes; the
+  binding freed, the read cost measured), **not yet written**. Not a (the
+  whole block a storage buffer), c (repacking: a few hundred bytes), d
+  (the device's own `max_uniform_buffer_range`: nothing on the guaranteed
+  floor).
 
 ## Suggested order
 
