@@ -117,8 +117,10 @@ extern "C" {
  * the surface writes is linear radiance times the view's exposure, for a
  * float target and then RBTREND_COMMAND_TONE_MAP (rbtrendcommands.h), or
  * already clamped and sRGB-encoded for an 8-bit UNORM target shown as it is
- * (RBTREND_LIT_VIEW::output_encoding). It is premultiplied by the opacity:
- * blending is the pipeline's, and an opaque surface writes alpha 1.
+ * (RBTREND_LIT_VIEW::output_encoding). What alpha it writes is the
+ * material's alpha mode's (RBTREND_LIT_ALPHA_MODE): 1 for an opaque or
+ * cut-out surface, its opacity for a blended one, whose color is then
+ * premultiplied by it; blending is the pipeline's.
  *
  * @par Shading
  * Direct light: Cook-Torrance with GGX, Smith-Schlick (k = (r + 1)^2 / 8,
@@ -211,11 +213,13 @@ enum {
 	RBTREND_LIT_SHADER_SHADOW_VERTEX = 3,
 	/**
 	 * Depth only, as RBTREND_LIT_SHADER_DEPTH_FRAGMENT, for cut-out
-	 * materials: a fragment whose opacity (the material's base color alpha,
-	 * times the base color map's alpha, times the color's alpha at location
-	 * 4) is below the material's alpha_cutoff is discarded, so the holes in
-	 * leaves or a perforated screen let light through. Reads the lit
-	 * material at set 1 and locations 0 to 4 (it uses 2 and 4).
+	 * materials: a material of RBTREND_LIT_ALPHA_MODE_MASK discards a
+	 * fragment whose opacity (the material's base color alpha, times the
+	 * base color map's alpha, times the color's alpha at location 4) is
+	 * below its alpha_cutoff, so the holes in leaves or a perforated screen
+	 * let light through; any other is written whole (an opaque or a blended
+	 * material's shadow is its whole shape). Reads the lit material at set 1
+	 * and locations 0 to 4 (it uses 2 and 4).
 	 */
 	RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT = 4,
 	/**
@@ -283,7 +287,8 @@ enum {
 	 * RBTREND_LIT_MATERIAL_SET (rbtrend_lit_get_layered_material_layout()),
 	 * the scene at set RBTREND_LIT_SCENE_SET as the lit surface does, and
 	 * lights the blend with the lit surface's lighting. Opaque: its opacity
-	 * is the color's alpha at location 4; no cut-out.
+	 * is the color's alpha at location 4; no cut-out. It has no alpha mode:
+	 * it reads the view's screen-space inputs as an opaque surface does.
 	 */
 	RBTREND_LIT_SHADER_LAYERED_SURFACE_FRAGMENT = 9,
 	/**
@@ -428,6 +433,39 @@ RBTREND_VERTEX_LAYOUT rbtrend_get_lit_vertex_color_layout(void);
 /* ---- Materials ---------------------------------------------------------- */
 
 /**
+ * @brief What a lit surface's opacity does (glTF 2.0's alphaMode).
+ *
+ * Its opacity is the base color's alpha times the base color map's times
+ * the color's alpha at location 4, 0 to 1. Only appended to.
+ */
+typedef enum RBTREND_LIT_ALPHA_MODE RBT_ENUM_BASE {
+	/** @brief Opaque: the opacity is ignored; the surface is written whole,
+	 * alpha 1, for a pipeline that doesn't blend. A zeroed member is this. */
+	RBTREND_LIT_ALPHA_MODE_OPAQUE = 0,
+	/** @brief A cut-out: a fragment whose opacity is below
+	 * RBTREND_LIT_MATERIAL_VALUES::alpha_cutoff is discarded, in its shadows
+	 * too where they are rendered with RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT;
+	 * the rest is opaque. */
+	RBTREND_LIT_ALPHA_MODE_MASK   = 1,
+	/**
+	 * @brief Blended: written premultiplied by its opacity, for a pipeline
+	 * that blends it over what is drawn (rbtrend_get_blend_premultiplied())
+	 * or adds its light times its opacity (rbtrend_get_blend_additive()),
+	 * drawn after the opaque surfaces in the caller's order, back to front
+	 * for the first.
+	 *
+	 * It reads nothing of the view's that the opaque depth made, which
+	 * holds the surface behind it: not the view's ambient occlusion
+	 * (rbtrend_lit_scene_set_ambient_occlusion(); its ORM map's still
+	 * applies) nor its bent normals, and a directional light whose shadow
+	 * is a traced mask (RBTREND_LIT_SHADOW_KIND_MASK) lights it unshadowed.
+	 * Cascades and map shadows, the lights, the environment, the scene's
+	 * atmosphere, fog and cover reach it as any surface.
+	 */
+	RBTREND_LIT_ALPHA_MODE_BLEND  = 2,
+} RBTREND_LIT_ALPHA_MODE;
+
+/**
  * @brief A lit material's values: the metal/roughness parameters Unreal's
  * default lit shading takes and glTF's are, each multiplied by its map, and
  * glTF's clear coat and sheen.
@@ -453,10 +491,10 @@ typedef struct RBTREND_LIT_MATERIAL_VALUES {
 	/** How much of the ORM map's red (ambient occlusion) is applied, 0 to 1. */
 	float occlusion_strength;
 	/**
-	 * 0 for a surface blended by its opacity. Above 0, a cut-out: a
+	 * Read when #alpha_mode is RBTREND_LIT_ALPHA_MODE_MASK alone: a
 	 * fragment whose opacity is below this is discarded and the rest are
-	 * opaque (glTF's MASK), in its shadows too when they are rendered with
-	 * RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT.
+	 * opaque (glTF's alphaCutoff), above 0 and at most 1. Any finite value
+	 * otherwise, not read.
 	 */
 	float alpha_cutoff;
 	/**
@@ -499,6 +537,11 @@ typedef struct RBTREND_LIT_MATERIAL_VALUES {
 	/** How far light travels inside before it is tinted to
 	 * #attenuation_color (Beer's law); 0 for never. */
 	float attenuation_distance;
+	/** What the surface's opacity does: RBTREND_LIT_ALPHA_MODE. A
+	 * material starts OPAQUE (rbtrend_lit_material_create()). Written by
+	 * name with rbtrend_material_set_uniform() (`alpha_mode`), unchecked, a
+	 * value the enum doesn't name is drawn as OPAQUE. */
+	RBTREND_LIT_ALPHA_MODE alpha_mode;
 } RBTREND_LIT_MATERIAL_VALUES;
 
 /**
@@ -524,7 +567,8 @@ enum {
  * rbtrend_lit_get_material_layout(), bound at set RBTREND_LIT_MATERIAL_SET.
  *
  * It starts white, opaque, half rough (0.5), a dielectric of specular 0.5,
- * with no emission, normal scale 1, occlusion strength 1, no cut-out, the
+ * with no emission, normal scale 1, occlusion strength 1, opaque (alpha
+ * mode OPAQUE; alpha_cutoff 0, not read), the
  * identity uv transform (the material's and each map's), no clear coat and
  * no sheen; every map is Rend's
  * neutral one, read through Rend's sampler (linear, mipmapped,
@@ -573,8 +617,11 @@ RBT_RESULT rbtrend_lit_material_create(rbtrend_instance instance, rbtrend_materi
  * @return RBT_RESULT_OK; otherwise RBT_RESULT_INVALID_ARGUMENT or the failure's
  *         own code (rbtrendcontext.h, "Results and errors"), with nothing
  *         changed, if an argument is NULL, @p material is not of
- *         rbtrend_lit_get_material_layout(), or a value is not finite;
- *         RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN for a struct chained on other
+ *         rbtrend_lit_get_material_layout(), a value is not finite,
+ *         alpha_mode isn't one RBTREND_LIT_ALPHA_MODE names, or alpha_mode
+ *         is MASK and alpha_cutoff isn't above 0 or is above 1 (each its own
+ *         check and message, in that order, after the finite check and
+ *         before the response's); RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN for a struct chained on other
  *         than a response and RBT_RESULT_STRUCT_DUPLICATE_IN_CHAIN for two
  *         responses, checked with `values->base`, before any value; and
  *         RBT_RESULT_INVALID_ARGUMENT for a response's field out of its

@@ -129,7 +129,9 @@ static_assert(sizeof(rbtrend_rt_geometry_header) == 16, "GeometryHeader in rbtre
 
 /* One entry of the lit-material table (D4): the values a path trace reads
  * (rbtrendcommands.h, LIT_PATH_TRACE), from the material's block: base
- * color, emission, then roughness, metalness and specular. 48 bytes. */
+ * color, emission, then roughness, metalness and specular, and the
+ * material's alpha mode's bits (RBTREND_LIT_ALPHA_MODE; read by no ray, so
+ * every hit is opaque). 48 bytes. */
 struct rbtrend_rt_lit_entry {
 	float base_color[4];
 	float emission[4];

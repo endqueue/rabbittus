@@ -19,7 +19,7 @@ public static const uint RT_GEOMETRY_HEADER_WORDS = 4u;
 // RBTREND_LIT_VERTEX: 12 words, the position first, then the normal and uv.
 public static const uint RT_VERTEX_WORDS = 12u;
 // rbtrend_rt_lit_entry: the base color, the emission, then roughness,
-// metalness and specular.
+// metalness and specular, and the alpha mode's bits (read by no ray).
 public static const uint RT_LIT_ENTRY_BYTES = 48u;
 // A slot's index (D1, D4).
 public static const uint RT_SLOT_INDEX_MASK = 0xFFFFFFu;

@@ -3970,13 +3970,93 @@ Left:
       material's offset (red), the emission map's identity reads where the
       material's puts it (green) until its own moves it back (red); three
       refusals. Fails with the per-map transform ignored.
-- [ ] **A lit surface's alpha mode** (a caller's transparency stage):
+- [x] **A lit surface's alpha mode** (a caller's transparency stage):
       OPAQUE (its opacity ignored), MASK, BLEND (reading none of the view's
       screen-space inputs). Drafted 2026-11-19: `rbtrend_transparency_draft.h`
       (version 1, seven critique passes), not approved; nothing built.
       Approved 2026-11-20 after seven passes (8 to 14), version 2, hash
       e8dfad9b (`shasum -a 256`, first 8 hex), every question as
-      recommended; not built.
+      recommended. **Built 2026-11-20 on the Mac (M5 Pro, macOS 27, Metal),
+      Debug and Release; D3D12 and Vulkan written, not compiled (card
+      X25).** What was built:
+      - `RBTREND_LIT_ALPHA_MODE` (OPAQUE 0, MASK 1, BLEND 2) and
+        `RBTREND_LIT_MATERIAL_VALUES::alpha_mode`, appended (144 to 152
+        bytes on a 64-bit target: a listed break, `abi.txt`);
+        `alpha_cutoff` read for MASK alone. A material starts OPAQUE.
+        set_values refuses, after the finite check and before the
+        response's, each its own check and message: "alpha_mode, %u, is
+        not an RBTREND_LIT_ALPHA_MODE"; for MASK "alpha_cutoff, %g, is not
+        above 0" and "alpha_cutoff, %g, is above 1". get_values returns the
+        mode.
+      - The material block (`rbtrend_lit_material.slang`, mirrored by
+        `rbtrend_lit_material_block`): `attenuation` a float3 and
+        `alpha_mode` a uint at byte 284, the block still 288 bytes on
+        Metal, the reflection check naming the member. Nothing in set 0 or
+        the scene block (card A75).
+      - `LitSurface::screen_space` (`rbtrend_lit_lighting.slang`): 0 reads
+        neither the view's occlusion and bent normals in `lit_light()` nor
+        a light's traced mask in `directional_visibility()` (lit
+        unshadowed by it). The lit surface sets it from the mode
+        (`lit_shade_as()`, which `lit_shade_with_base_map()` calls with
+        the material's mode), the layered surface 1, the lit particle 0
+        (it shades as BLEND whatever the material's mode: item 57's
+        "Left" line done).
+      - MASK's discard moved after every map's read (the ORM, emission and
+        normal maps): defined derivatives on every backend. No cut-out
+        picture moved on Metal: every existing figure, cut-outs included,
+        is the same as before, bit for bit where a test prints it.
+        `RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT` discards for MASK alone.
+      - The lit-material table's entry (`rbtrend_rt_lit_entry`) carries the
+        mode's bits in `surface[3]`, read by no ray (hits stay opaque). The
+        draft (pass 8.2) says the entry copies the block whole: it doesn't
+        (48 bytes of chosen fields), so the mode went into the one unread
+        word, 0 for OPAQUE as before.
+      - Not built, the draft wrong against the code: the reflect variant's
+        sentence ("writes targets 1 and 2 premultiplied by its opacity as
+        target 0 is: the caller blends them with target 0's blend"). Target
+        1 is the normal and roughness, its alpha the roughness, unscaled by
+        the opacity; target 2's alpha is 0: a premultiplied blend of either
+        reads an alpha that isn't the opacity. The variant writes as before
+        (the specular weight premultiplied, the normal and roughness not);
+        a caller's choice of what to do with them for BLEND waits on a
+        decision (the session's report has the options).
+      - Tests (`../rabbittustests`, `rbtrend_gpu_tests`), each seen failing
+        on the code before the mode (the header alone added):
+        `test_lit_alpha_opaque` (opacity 0.25 x a map's 0 x a vertex
+        color's 0.5, OPAQUE: the same bytes as at 1, alpha 255; failed
+        black, alpha 0), `test_lit_alpha_mask` (OPAQUE with a cutoff not
+        cut, its shadow whole; MASK cut; a MASK checker read minified, its
+        maps after the discard, clean under shader validation; failed: cut
+        and no shadow), `test_lit_alpha_blend_screen_space` (BLEND over a
+        crease of view occlusion 0.2 within 1/1024 of no occlusion, the
+        ORM map's still applied; bent normals not read; a traced mask not
+        read; a cascade still shadowing; failed: 26 against 128, 128
+        against 255, shadowed), `test_lit_alpha_refusals` (failed: taken,
+        and a cutoff of 7 cut), `test_lit_alpha_values` (round trips, a
+        new material OPAQUE, rbtrend_material_copy(), `alpha_mode` at 284
+        and `attenuation` 12 bytes at 272 by the layout's reflection;
+        failed: no member), `test_particles_lit_screen_space` (a lit
+        particle over the crease as with no occlusion; its MASK material
+        drawn as BLEND; failed: 26 against 128, cut); and two that guard
+        what doesn't change: `test_lit_layered_screen_space` (the layered
+        surface still 0.2 over the crease) and `test_rt_materials`' BLEND
+        trace (the same accumulation). Tests 1, 3 and 7 draw twice, the
+        same bytes. The existing cut-out tests say MASK, the blended ones
+        BLEND (`test_lit_surface`'s emission at half opacity,
+        `test_fog_sky_and_transparent`'s face): the same pixels.
+        `test_frame_allocations` unchanged. Every ctest, Debug and Release;
+        `rbtrend_gpu_tests` on both devices, Debug and Release, under
+        Metal's API and shader validation with warnings as asserts.
+      - **Measured** (`test_lit_alpha_measure`, `RABBITTUSTESTS_MEASURE`,
+        Release, no validation; a lit face with four 1024 maps over 2560 x
+        1440, the view's occlusion read, submit to idle, the mean of 50;
+        settled runs): before the mode, 0.86 to 0.88 ms for the blended
+        path and the cut-out kept, 0.26 ms all cut; after, OPAQUE 0.87,
+        BLEND 0.84 to 0.87, MASK kept 0.87 to 0.89, MASK all cut 0.26 to
+        0.27 ms. Within the run-to-run noise (about 1%): the draft's
+        estimate (under 1% of the lit fragment) met; BLEND's skipped
+        occlusion read not visible at this size on this GPU, nor MASK's
+        three reads after a discard.
 - [ ] **Variants**: branches on the encoding, the map bits, the shadows
       and the tiles are at run time; a shader per case, or specialization
       constants (item 22), when a measurement shows them.
@@ -6041,7 +6121,10 @@ What stage 2 needs that the code showed (for its build):
 - **Room in the scene block:** none needed by stage 2 (the grid's data is
   the record's material's, the fog's the scene's existing members). Stage
   3's transparents reading the grid need a set-0 binding, not block room;
-  set 0 holds sixteen bindings, all taken. The block is at 16,208 of the
+  set 0 holds sixteen bindings, all taken. When stage 3 is built, the
+  grid is read at the fragment's own place by BLEND surfaces
+  (RBTREND_LIT_ALPHA_MODE_BLEND, item 24, built 2026-11-20), after card
+  A75's freed binding. The block is at 16,208 of the
   16,384 bytes Vulkan guarantees (176 free): item 55's clouds as drafted
   add nothing there; anything else that would must be weighed against it.
 
@@ -6376,12 +6459,10 @@ it waits on the caller's transparency stage (the user's decision,
   encoder with explicit memory barriers, a Carrottus GPU change (a draft).
 - **Left:** D3D12 and Vulkan (card X25); the caller's half; shadows cast
   by particles and lighting through a volume (later stages, the draft's
-  out of scope). When the transparency stage's RBTREND_LIT_ALPHA_MODE
-  (`rbtrend_transparency_draft.h`, not approved) lands, the particle lit
-  fragment shader passes BLEND to the shading in place of the material's
-  mode (today `lit_shade_with_base_map()` blends by opacity and a material
-  with an alpha_cutoff discards below it, as a lit surface does), and
-  `rbtrendparticles.h`'s "Out of scope" line on alpha modes goes.
+  out of scope). Done 2026-11-20 (item 24, the alpha mode): the particle
+  lit fragment shader shades as BLEND whatever its material's mode
+  (`lit_shade_as()`: no cut-out, none of the view's screen-space inputs),
+  and `rbtrendparticles.h`'s "Out of scope" line on alpha modes went.
 
 ### 58. A directional light given a place (card L78, decided 2026-11-17)
 

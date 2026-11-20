@@ -283,6 +283,7 @@ public LayeredSurface lit_layered_surface(LayeredFragmentInput input) {
     s.cover_amount         = cover;
     s.cover_porosity       = porosity;
     s.cover_responds       = responds;
+    s.screen_space         = 1u; // no alpha mode: opaque
     out.surface            = s;
     return out;
 }

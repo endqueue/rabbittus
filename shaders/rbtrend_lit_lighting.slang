@@ -188,14 +188,19 @@ float shadow_visibility(uint view, float4 params, float3 position, float3 n) {
 static const float CASCADE_BLEND = 0.1;
 
 // How much of directional light [slot] reaches [position], at [frag] on the
-// target: its traced mask there, if its shadow is one; or the cascade its
+// target: its traced mask there, if its shadow is one and [screen_space]
+// is 1 (none at all if 0, LitSurface.screen_space); or the cascade its
 // distance along the view falls in, blended into the next over the last
 // tenth of the cascade's stretch so no seam shows between them, the last
 // faded out to no shadow over its own.
-float directional_visibility(uint slot, float3 position, float3 n, float2 frag) {
+float directional_visibility(uint slot, float3 position, float3 n, float2 frag, uint screen_space) {
     RbtrendLitDirectional d = u_lit_scene.directional[slot];
     uint kind = d.shadow_views.x;
     if (kind == RBTREND_LIT_DIRECTIONAL_MASK) {
+        // A traced mask is made from the opaque depth: a surface that
+        // reads no screen-space input is lit unshadowed by it.
+        if (screen_space == 0u)
+            return 1.0;
         float m = directional_mask(slot, int2(frag));
         return 1.0 - d.shadow_params.w * (1.0 - m);
     }
@@ -380,6 +385,11 @@ public struct LitSurface {
     public float cover_amount;         // how much of the scene's snow lies on it
     public float cover_porosity;       // how porous it is, for the scene's wetness
     public float cover_responds;       // the share of it that answers the cover; 0: none
+    // 1: it reads the view's screen-space inputs, made from the opaque
+    // depth (the view's occlusion and bent normals, a light's traced
+    // mask); 0: it reads none of them, as a blended surface, which they
+    // hold the surface behind.
+    public uint screen_space;
 };
 
 // The eye's direction and the face's own normal turned to it, for
@@ -421,7 +431,7 @@ public LitShaded lit_light(LitFragmentInput input, LitSurface m) {
     // The view's bent normal, if the scene reads it: 0 for none.
     float occlusion    = m.occlusion;
     float3 bent_normal = float3(0.0);
-    if ((u_lit_scene.flags & RBTREND_LIT_SCENE_OCCLUSION) != 0u) {
+    if ((u_lit_scene.flags & RBTREND_LIT_SCENE_OCCLUSION) != 0u && m.screen_space != 0u) {
         float4 view_occlusion = ambient_occlusion.SampleLevel(environment_sampler, input.frag_coord.xy * u_lit_scene.target_size.zw, 0.0);
         occlusion *= lerp(1.0, view_occlusion.r, clamp(u_lit_scene.occlusion_strength, 0.0, 1.0));
         if ((u_lit_scene.flags & RBTREND_LIT_SCENE_BENT_NORMALS) != 0u)
@@ -462,7 +472,7 @@ public LitShaded lit_light(LitFragmentInput input, LitSurface m) {
         DirectionalAt at = directional_at(d, in_position);
         float3 radiance  = at.radiance * lit_atmosphere_sun_transmittance_toward(d, in_position, at.direction);
         if (any(radiance > float3(0.0)))
-            color += shade(s, at.direction, radiance * directional_visibility(d, in_position, s.geometric, input.frag_coord.xy));
+            color += shade(s, at.direction, radiance * directional_visibility(d, in_position, s.geometric, input.frag_coord.xy, m.screen_space));
     }
 
     if ((u_lit_scene.flags & RBTREND_LIT_SCENE_TILES) != 0u) {

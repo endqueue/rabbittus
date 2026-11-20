@@ -10,14 +10,19 @@ module rbtrend_lit_surface;
 // fifth, a color, multiplies the base color and the opacity (glTF's
 // COLOR_0). The two fragment shaders (rbtrend_lit_frag.slang,
 // rbtrend_lit_surface_reflect_frag.slang) are this module's lit_shade() and
-// what each writes of it.
+// what each writes of it. The material's alpha mode: OPAQUE takes the
+// opacity as 1; MASK discards below its cutoff, after every map's read (a
+// discard that ends an invocation leaves its quad's later derivatives
+// undefined), the rest opaque; BLEND keeps the opacity and reads none of the
+// view's screen-space inputs (LitSurface.screen_space 0).
 
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
 import rbtrend_lit_material;
 import rbtrend_lit_lighting;
 
-// The surface at [input]; discards a cut-out's hole.
+// The surface at [input], as its material's alpha mode says; discards a
+// cut-out's hole.
 public LitShaded lit_shade(LitFragmentInput input) {
     float4 base_map = float4(1.0);
     if ((u_lit_material.maps & MAP_BASE_COLOR) != 0u)
@@ -29,6 +34,13 @@ public LitShaded lit_shade(LitFragmentInput input) {
 // caller ([base_map]; 1 where the material has none): a particle's
 // flipbook blends two frames of it (rbtrend_particles_lit_frag.slang).
 public LitShaded lit_shade_with_base_map(LitFragmentInput input, float4 base_map) {
+    return lit_shade_as(input, base_map, u_lit_material.alpha_mode);
+}
+
+// The same, as alpha mode [mode] (an ALPHA_MODE_; any other OPAQUE) in
+// place of the material's: a particle shades as BLEND whatever its
+// material's (rbtrend_particles_lit_frag.slang).
+public LitShaded lit_shade_as(LitFragmentInput input, float4 base_map, uint mode) {
     float2 uv = material_uv(input.uv);
     uint maps = u_lit_material.maps;
 
@@ -36,11 +48,6 @@ public LitShaded lit_shade_with_base_map(LitFragmentInput input, float4 base_map
     if ((maps & MAP_BASE_COLOR) != 0u)
         base *= base_map;
     float opacity = clamp(base.a, 0.0, 1.0);
-    if (u_lit_material.alpha_cutoff > 0.0) {
-        if (opacity < u_lit_material.alpha_cutoff)
-            discard;
-        opacity = 1.0;
-    }
 
     float3 orm = float3(1.0);
     if ((maps & MAP_ORM) != 0u)
@@ -64,6 +71,14 @@ public LitShaded lit_shade_with_base_map(LitFragmentInput input, float4 base_map
             s.n = lit_tangent_normal(s.n, input.tangent, tn);
         }
     }
+    // Every map is read: a cut-out's hole is discarded now, and only a
+    // blended surface keeps its opacity. The branches are on a value
+    // uniform over a draw.
+    if (mode == ALPHA_MODE_MASK && opacity < u_lit_material.alpha_cutoff)
+        discard;
+    if (mode != ALPHA_MODE_BLEND)
+        opacity = 1.0;
+    s.screen_space        = mode == ALPHA_MODE_BLEND ? 0u : 1u;
     s.albedo              = max(base.rgb, float3(0.0));
     s.opacity             = opacity;
     s.roughness           = clamp(u_lit_material.roughness * orm.g, MIN_ROUGHNESS, 1.0);
@@ -79,7 +94,7 @@ public LitShaded lit_shade_with_base_map(LitFragmentInput input, float4 base_map
     s.ior                 = u_lit_material.transmission.y;
     s.thickness           = u_lit_material.transmission.z;
     s.attenuation_distance = u_lit_material.transmission.w;
-    s.attenuation         = u_lit_material.attenuation.rgb;
+    s.attenuation         = u_lit_material.attenuation;
     s.cover_amount        = u_lit_material.cover_amount;
     s.cover_porosity      = u_lit_material.cover_porosity;
     s.cover_responds      = u_lit_material.cover_responds;

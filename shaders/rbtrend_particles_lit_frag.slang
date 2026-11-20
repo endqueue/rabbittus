@@ -1,7 +1,9 @@
 // Rend's lit particle (rbtrendparticles.h, RBTREND_PARTICLES_SHADER_LIT_FRAGMENT):
 // the lit surface's shading (rbtrend_lit_surface.slang) of the particle's
-// material, its base color map read at the flipbook's frame, the result
-// (premultiplied by its opacity) faded by the SOFT module.
+// material as blended whatever its alpha mode (no cut-out, none of the
+// view's screen-space inputs), its base color map read at the flipbook's
+// frame, the result (premultiplied by its opacity) faded by the SOFT
+// module.
 
 import rbtrend_lit_scene;
 import rbtrend_lit_bindings;
@@ -21,5 +23,5 @@ float4 rbtrend_particles_lit_frag(ParticleFragmentInput input) : SV_Target0 {
     lit.uv         = input.uv;
     lit.tangent    = input.tangent;
     lit.color      = input.color;
-    return lit_shade_with_base_map(lit, particles_base_map(input)).color * particles_soft_fade(input);
+    return lit_shade_as(lit, particles_base_map(input), ALPHA_MODE_BLEND).color * particles_soft_fade(input);
 }

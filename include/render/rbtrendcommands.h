@@ -852,6 +852,13 @@ enum {
 	 * command. It binds a pipeline and sets of its own, so a compute
 	 * pipeline is set again after it before a dispatch, as after a pass;
 	 * the binding set slots are not touched.
+	 *
+	 * The bounds are the opaque depth's: a blended surface
+	 * (RBTREND_LIT_ALPHA_MODE_BLEND, rbtrendlit.h) in front of a tile's
+	 * nearest depth reads that tile's list, so a light whose range lies
+	 * wholly in front of it is missing there. A caller drawing blended
+	 * surfaces in such lights keeps the compile's cull (without depth
+	 * bounds) for that scene.
 	 */
 	RBTREND_COMMAND_LIT_CULL_LIGHTS             = 38,
 	/**

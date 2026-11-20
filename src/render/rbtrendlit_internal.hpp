@@ -212,7 +212,10 @@ struct rbtrend_lit_material_block {
 	/* x transmission, y index of refraction, z thickness, w attenuation
 	 * distance (0: never). */
 	float transmission[4];
-	float attenuation[4];
+	float attenuation[3];
+	/* RBTREND_LIT_ALPHA_MODE, as set_values checked it (or as written by
+	 * name, unchecked: the shader reads any other value as OPAQUE). */
+	uint32_t alpha_mode;
 };
 
 /* RbtrendLitLayer and RbtrendLitLayered in

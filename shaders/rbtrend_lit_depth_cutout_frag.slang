@@ -1,7 +1,7 @@
 // Rend's cut-out depth fragment shader (rbtrendlit.h,
 // RBTREND_LIT_SHADER_DEPTH_CUTOUT_FRAGMENT): depth only, as
-// rbtrend_lit_depth_frag.slang, but a fragment of a cut-out material whose
-// opacity is below its cutoff is discarded, so the holes in leaves or a
+// rbtrend_lit_depth_frag.slang, but a fragment of a cut-out material (alpha
+// mode MASK) whose opacity is below its cutoff is discarded, so the holes in leaves or a
 // perforated screen let light through. Reads the lit material at set 1, the
 // texture coordinate at location 2 and the color at location 4, whose alpha
 // multiplies the opacity as the surface's does.
@@ -22,7 +22,7 @@ struct LitDepthCutoutInput {
 
 [shader("fragment")]
 void rbtrend_lit_depth_cutout_frag(LitDepthCutoutInput input) {
-    if (u_lit_material.alpha_cutoff <= 0.0)
+    if (u_lit_material.alpha_mode != ALPHA_MODE_MASK)
         return;
     float opacity = u_lit_material.base_color.a * input.color.a;
     if ((u_lit_material.maps & MAP_BASE_COLOR) != 0u)

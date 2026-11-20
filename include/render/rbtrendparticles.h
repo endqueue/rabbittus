@@ -102,7 +102,11 @@
  * and its fog), with the material's opacity times the colour over life's
  * alpha times the soft fade. The unlit one is the material's base colour
  * times its map times the colour over life, plus its emission, exposed and
- * encoded as the scene's surfaces are. Particles cast no shadow.
+ * encoded as the scene's surfaces are. Particles cast no shadow. It shades
+ * the material as RBTREND_LIT_ALPHA_MODE_BLEND whatever the material's mode
+ * (rbtrendlit.h): no cut-out, and none of the view's screen-space inputs
+ * (its ambient occlusion, bent normals, a traced mask), which hold the
+ * surface behind the particle.
  *
  * @par Precision
  * A particle's place is a float relative to its anchor: within a system's
@@ -132,9 +136,7 @@
  * @par Out of scope
  * Shadows cast by particles; lighting through a volume (a later stage of
  * the fog's grid); a particle read by gameplay; an emitter's rate, bursts
- * or clock (the caller's arithmetic). A material's alpha mode: the lit
- * fragment shader shades its material as blended by its opacity
- * whatever its alpha_cutoff (a cut-out discards, as a lit surface's does).
+ * or clock (the caller's arithmetic).
  */
 
 #if __cplusplus
@@ -601,8 +603,10 @@ enum {
 	 * writes locations 0 to 4 (the mesh's normal and tangent turned with
 	 * it) and 5. Entry point "rbtrend_particles_mesh_vert". */
 	RBTREND_PARTICLES_SHADER_MESH_VERTEX      = 1,
-	/** Lit as RBTREND_LIT_SHADER_SURFACE_FRAGMENT is, with the SOFT fade and
-	 * the FLIPBOOK's blend. Entry point "rbtrend_particles_lit_frag". */
+	/** Lit as RBTREND_LIT_SHADER_SURFACE_FRAGMENT is, blended whatever the
+	 * material's alpha mode (this header's "Lit"), with the SOFT
+	 * fade and the FLIPBOOK's blend. Entry point
+	 * "rbtrend_particles_lit_frag". */
 	RBTREND_PARTICLES_SHADER_LIT_FRAGMENT     = 2,
 	/** The colour over life times the material's base colour and its map,
 	 * plus its emission, exposed and encoded as the scene's surfaces are;

@@ -195,7 +195,9 @@ static rbtrend_rt_lit_entry rbtrend_rt_lit_entry_of(const rbtrend_lit_material_b
 	entry.surface[0] = block->roughness;
 	entry.surface[1] = block->metalness;
 	entry.surface[2] = block->specular;
-	entry.surface[3] = 0.0f;
+	// The alpha mode's bits (0, OPAQUE, as 0.0f): carried, read by no ray
+	// yet; a path trace's and the traced reflections' hits stay opaque.
+	memcpy(&entry.surface[3], &block->alpha_mode, sizeof(entry.surface[3]));
 	return entry;
 }
 

@@ -235,6 +235,7 @@ static bool rbtrend_lit_check_material_block(rbtrend_binding_layout layout) {
 	    {"map_uv_transform", MEMBER(B, map_uv_transform)},
 	    {"transmission", MEMBER(B, transmission)},
 	    {"attenuation", MEMBER(B, attenuation)},
+	    {"alpha_mode", MEMBER(B, alpha_mode)},
 	};
 	return rbtrend_lit_check_block(layout, 0, "RbtrendLitMaterial", (uint32_t)sizeof(B), members, COUNT_OF(members));
 }
@@ -1594,6 +1595,7 @@ RBT_RESULT rbtrend_lit_material_create(rbtrend_instance instance, rbtrend_materi
 	block.transmission[1] = 1.5f; // glTF's default index
 	for (int i = 0; i < 3; ++i)
 		block.attenuation[i] = 1.0f;
+	block.alpha_mode = RBTREND_LIT_ALPHA_MODE_OPAQUE;
 	memcpy(slot->bytes, &block, sizeof(block));
 	slot->dirty = true;
 	// Its entry in the lit-material table, on a device with ray queries (D4).
@@ -1641,6 +1643,15 @@ RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTR
 	    !finite(v.transmission) || !finite(v.ior) || !finite(v.thickness) || !all_finite(v.attenuation_color, 3) || !finite(v.attenuation_distance)) {
 		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "a value is not a finite number");
 	}
+	if (v.alpha_mode > RBTREND_LIT_ALPHA_MODE_BLEND)
+		return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "alpha_mode, %u, is not an RBTREND_LIT_ALPHA_MODE", (unsigned)v.alpha_mode);
+	// The cutoff is read for MASK alone; any finite value otherwise.
+	if (v.alpha_mode == RBTREND_LIT_ALPHA_MODE_MASK) {
+		if (!(v.alpha_cutoff > 0.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "alpha_cutoff, %g, is not above 0", (double)v.alpha_cutoff);
+		if (!(v.alpha_cutoff <= 1.0f))
+			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "alpha_cutoff, %g, is above 1", (double)v.alpha_cutoff);
+	}
 	if (response) {
 		if (!finite(response->cover))
 			return rbtrend_fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "the response's cover is not finite");
@@ -1677,8 +1688,8 @@ RBT_RESULT rbtrend_lit_material_set_values(rbtrend_material material, const RBTR
 	block.clearcoat_roughness = v.clearcoat_roughness;
 	const float transmission[4] = {v.transmission, v.ior, v.thickness, v.attenuation_distance};
 	memcpy(block.transmission, transmission, sizeof(transmission));
-	memcpy(block.attenuation, v.attenuation_color, sizeof(float) * 3);
-	block.attenuation[3] = 0.0f;
+	memcpy(block.attenuation, v.attenuation_color, sizeof(block.attenuation));
+	block.alpha_mode = (uint32_t)v.alpha_mode;
 	// The maps' bits stay: they follow the textures set, not the values.
 	const float *t      = v.uv_transform;
 	const float rows[8] = {t[0], t[1], t[2], 0.0f, t[3], t[4], t[5], 0.0f};
@@ -1737,6 +1748,7 @@ RBT_RESULT rbtrend_lit_material_get_values(rbtrend_material material, RBTREND_LI
 	v.thickness            = block.transmission[2];
 	v.attenuation_distance = block.transmission[3];
 	memcpy(v.attenuation_color, block.attenuation, sizeof(v.attenuation_color));
+	v.alpha_mode           = (RBTREND_LIT_ALPHA_MODE)block.alpha_mode;
 	const float *r        = block.uv_transform;
 	const float t[6]      = {r[0], r[1], r[2], r[4], r[5], r[6]};
 	memcpy(v.uv_transform, t, sizeof(t));

@@ -11,6 +11,12 @@ public static const uint MAP_NORMAL     = 2u;
 public static const uint MAP_ORM        = 4u;
 public static const uint MAP_EMISSION   = 8u;
 
+// RbtrendLitMaterial.alpha_mode: RBTREND_LIT_ALPHA_MODE. Any other value
+// (written by name, unchecked) is read as OPAQUE.
+public static const uint ALPHA_MODE_OPAQUE = 0u;
+public static const uint ALPHA_MODE_MASK   = 1u;
+public static const uint ALPHA_MODE_BLEND  = 2u;
+
 public struct RbtrendLitMaterial {
     public float4 base_color;      // rgb linear, a: opacity
     public float4 emission;        // rgb linear
@@ -20,7 +26,7 @@ public struct RbtrendLitMaterial {
     public float specular;         // a dielectric's reflectance: 0.5 is F0 0.04
     public float normal_scale;
     public float occlusion_strength;
-    public float alpha_cutoff;     // 0: blended by opacity; above: a cut-out
+    public float alpha_cutoff;     // read for ALPHA_MODE_MASK alone: below it, cut
     public float clearcoat;        // 0 to 1: how much of a clear coat there is
     public float clearcoat_roughness;
     public uint maps;
@@ -37,7 +43,8 @@ public struct RbtrendLitMaterial {
     // in the scene's units; w the distance light travels before it is
     // tinted to the attenuation color, 0 for never.
     public float4 transmission;
-    public float4 attenuation;     // rgb: the color light is tinted to over w's distance
+    public float3 attenuation;     // the color light is tinted to over transmission.w's distance
+    public uint alpha_mode;        // ALPHA_MODE_: what the opacity does
 };
 [[vk::binding(0, 1)]] public ConstantBuffer<RbtrendLitMaterial> u_lit_material : register(b0, space1);
 [[vk::binding(1, 1)]] public Texture2D<float4> base_color_map : register(t1, space1);
