@@ -6942,6 +6942,7 @@ caller's headers, is not built here.
   whole block a storage buffer), c (repacking: a few hundred bytes), d
   (the device's own `max_uniform_buffer_range`: nothing on the guaranteed
   floor).
+  Drafted 2026-11-20: `rabbittus/rbtrend_scene_block_draft.h` version 2, seven passes, for approval; not built.
 
 ## Suggested order
 
