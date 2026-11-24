@@ -40,7 +40,7 @@ nothing of the other modules, and no header includes all of Rabbittus (card A27,
 2026-10-28; it was `rabbittus.h` until 2026-10-29). `check.sh umbrella` checks it
 reaches every header in `render/`. Callers include the module header they need.
 
-Each module that has unfinished work keeps it in `AP<MODULE>_TODO.md` at the repo
+Each module that has unfinished work keeps it in `RBT<MODULE>_TODO.md` at the repo
 root. Read the module's TODO before changing it, and update it in the same change
 when you finish or add an item.
 
@@ -59,7 +59,7 @@ its own.
 | Indentation, braces | tabs, attached braces | 4 spaces, Allman braces |
 | Creating a handle | returns `RBT_RESULT`, handle through an `out_` parameter (set to null on failure) | the same |
 | Allocation | `malloc` + in-place construction, `goto` cleanup | `new (std::nothrow)` and `delete`, then a `try` block - not the convention any more, see "Code conventions" |
-| Failure detail | per-call `RBTREND_ERROR` (`rbtrend_fail`, `rbtrend_fail_cr`; a compile's and a submit's through `rbtrend_cmd_report` / `rbtrend_report`) | per-call `AP<MODULE>_ERROR` message struct |
+| Failure detail | per-call `RBTREND_ERROR` (`rbtrend_fail`, `rbtrend_fail_cr`; a compile's and a submit's through `rbtrend_cmd_report` / `rbtrend_report`) | per-call `RBT<MODULE>_ERROR` message struct |
 
 Public headers use tabs in both generations.
 
@@ -78,7 +78,7 @@ block near the top. A new header gets the same block.
   Rabbittus Sync 2001+, Rabbittus Text 6001+; struct types Rabbittus Jobs 7000+). Never renumber an
   existing code.
 - **Error messages.** A call that can fail for a reason worth a sentence takes an
-  `AP<MODULE>_ERROR *` (NULL to skip). It is per call, not stored on the object, so
+  `RBT<MODULE>_ERROR *` (NULL to skip). It is per call, not stored on the object, so
   reads a header allows to overlap (an archive reader's) stay safe.
 - **Struct bases.** Every public struct that may grow starts with an
   `RBT_STRUCT_BASE base` (`RBT_STRUCT_BASE_OUT` for one Rabbittus fills in),
@@ -156,7 +156,7 @@ heap.
 - **Argument checks are written line by line: one `if`, one condition, one
   return.** They sit at the top of the function, in parameter order, before any
   allocation or call into Carrottus, and each reports exactly what was wrong: its own
-  `RBT_RESULT`, and its own message where the call takes an `AP<MODULE>_ERROR`:
+  `RBT_RESULT`, and its own message where the call takes an `RBT<MODULE>_ERROR`:
 
   ```cpp
   if (d.max_backlog_size == 0)
@@ -399,7 +399,7 @@ handled the same way: find the rule it meets and follow the rule.
 
 ## Tests
 
-Headless, no GPU, no window: `tests/ap<module>*_tests.*`, one or more executables per module,
+Headless, no GPU, no window: `tests/rbt<module>*_tests.*` (`rbtmathnoise_tests.c`, `rbtrendcopies_tests.cpp`), one or more executables per module,
 registered with `add_test` behind `RABBITTUS_BUILD_TESTS`.
 
 - Tests for a C header are written in C on purpose, to prove the header compiles

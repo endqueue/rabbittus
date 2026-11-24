@@ -6,6 +6,7 @@
 #include "../rbtstale.hpp"
 #include "../rbtstructbase.hpp"
 #include <algorithm>
+#include <assert.h>
 #include <atomic>
 #include <bit>
 #include <eqstd.hpp>
@@ -1134,13 +1135,15 @@ RBT_PLAIN_DATA(SoundStream);
 // when the decoding opens it), and the counters by which the decoding and
 // the render keep each other in step without waiting. Array of structs,
 // max_streams of them made with the mixer: the decoding's item for a stream
-// and the render each touch one record's few fields together. Line 0 is the
-// decoding's to write and the render's to read; line 1 the render's to write
-// and the decoding's and the update's to read; the rest, cold, the update's
-// and the decoding's own. So the decoding and the render never write one
-// line, and no two streams' writers share one. Plain data: what two threads
-// share is read and written through std::atomic_ref.
-struct alignas(RBT_CACHE_LINE) Stream
+// and the render each touch one record's few fields together. Three roles,
+// each a block of RBT_ROLE_GAP bytes of its own: block 0 is the decoding's
+// to write and the render's to read; block 1 the render's to write and the
+// decoding's and the update's to read; the rest, cold, the update's and the
+// decoding's own. So the decoding and the render never write one block, and
+// no two streams' writers share one: not on Apple silicon's 128-byte line,
+// nor in the pair of 64-byte lines x86 prefetches together. Plain data: what
+// two threads share is read and written through std::atomic_ref.
+struct alignas(RBT_ROLE_GAP) Stream
 {
     // The decoding's, published by `written` (release; the render acquires).
     uint64_t written; // play order: the ring holds frames up to here
@@ -1152,13 +1155,13 @@ struct alignas(RBT_CACHE_LINE) Stream
     uint32_t failed; // its failure's RBT_RESULT, set after `failure`; 0 while none
 
     // The render's.
-    alignas(RBT_CACHE_LINE) uint64_t read; // play order: the lowest frame the render may still read
+    alignas(RBT_ROLE_GAP) uint64_t read; // play order: the lowest frame the render may still read
     uint64_t request_origin;                // the sound frame the stream starts at
     uint64_t release_sequence;              // a collect frees it once the render sequence reaches this
     uint32_t state;                         // STREAM_*
 
     // The update's and the decoding's.
-    alignas(RBT_CACHE_LINE) uint32_t voice_index;
+    alignas(RBT_ROLE_GAP) uint32_t voice_index;
     uint32_t voice_generation;
     uint64_t sound_id;
     SoundStream sound;
@@ -1171,7 +1174,13 @@ struct alignas(RBT_CACHE_LINE) Stream
     bool reported; // its failure told by an update
 };
 RBT_PLAIN_DATA(Stream);
-RBT_HOT_RECORD(Stream, 5 * RBT_CACHE_LINE);
+// 512 bytes, 8 lines: the decoding's block (44 bytes used of 128), the
+// render's (28 of 128), and the cold part (up to 192 bytes) rounded up to
+// two blocks by the type's alignment. 320 bytes at 64 apart, before.
+RBT_HOT_RECORD(Stream, 8 * RBT_CACHE_LINE);
+RBT_ROLE_START(Stream, written);
+RBT_ROLE_START(Stream, read);
+RBT_ROLE_START(Stream, voice_index);
 
 struct rbtaudio_mixer_t
 {
@@ -4239,6 +4248,9 @@ extern "C"
                         m->stream_tasks.resize(d.max_streams) == EQ_SUCCESS &&
                         m->sound_streams.resize(m->max_sounds) == EQ_SUCCESS &&
                         m->voice_streams.resize(m->record_count) == EQ_SUCCESS;
+            // Stream's roles are apart only if its array keeps its alignment
+            // (eq::array passes alignof(Stream) to its allocator).
+            assert(!allocated || (uintptr_t)m->streams.data % RBT_ROLE_GAP == 0);
             m->has_scheduler = d.scheduler != nullptr;
             if (d.scheduler)
             {

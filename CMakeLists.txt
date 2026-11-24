@@ -373,7 +373,9 @@ target_include_directories(rabbittus PRIVATE ${RABBITTUS_SHADER_INC_DIR})
 declare_vendored_or_fetch(glm glm https://github.com/g-truc/glm.git 1.0.1)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 FetchContent_MakeAvailable(glm)
-target_link_libraries(rabbittus PUBLIC glm::glm)
+# PRIVATE: no public header includes glm (rbtmath.h's types are laid out as
+# glm's, not made of them). A caller that includes glm links it itself.
+target_link_libraries(rabbittus PRIVATE glm::glm)
 
 # libdeflate - DEFLATE and CRC-32 for RbtArchive. Vendored under
 # eqdev/.deps/libdeflate (git checkout of tag v1.26), like glm and
@@ -825,6 +827,7 @@ rabbittus_no_contract(
                 src/math/rbtmathbvh.cpp src/math/rbtmathmedium.cpp src/math/rbtmathfog.cpp
                 src/math/rbtmathclouds.cpp
                 src/text/rbttext.cpp src/text/rbttext_layout.cpp src/text/rbttext_atlas.cpp
+                src/text/rbttext_cadfonts.cpp
                 src/render/rbtrendlit.cpp)
 
 if (NOT MSVC)
@@ -915,8 +918,9 @@ if (RABBITTUS_BUILD_TESTS)
     # The Debug builds' overlap check every module opens its calls with
     # (src/rbtoverlap.hpp), driven with threads; skips itself in Release.
     add_executable(rbtoverlap_tests tests/rbtoverlap_tests.cpp)
-    # Rbtrend's ray tracing calls too, on objects of its internal headers.
-    target_link_libraries(rbtoverlap_tests PRIVATE rabbittus eqstd)
+    # Rbtrend's ray tracing calls too, on objects of its internal headers,
+    # which include glm (rbtrend_internal.hpp), linked PRIVATE to rabbittus.
+    target_link_libraries(rbtoverlap_tests PRIVATE rabbittus eqstd glm::glm)
     add_test(NAME rbtoverlap_tests COMMAND rbtoverlap_tests)
     add_executable(rbtjobs_tests tests/rbtjobs_tests.c)
     target_link_libraries(rbtjobs_tests PRIVATE rabbittus)
@@ -940,6 +944,7 @@ if (RABBITTUS_BUILD_TESTS)
     # Run by hand, Release.
     add_executable(rbtaudio_bench tests/rbtaudio_bench.c)
     target_link_libraries(rbtaudio_bench PRIVATE rabbittus)
+    target_compile_definitions(rbtaudio_bench PRIVATE RBTAUDIO_BENCH_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/rbtaudio")
     add_executable(rbtmathbvh_bench tests/rbtmathbvh_bench.c)
     target_link_libraries(rbtmathbvh_bench PRIVATE rabbittus)
     add_executable(rbtmathmedium_tests tests/rbtmathmedium_tests.c)
