@@ -610,3 +610,11 @@ before relying on them:
       winding number over any rings. Tested against a slow angle sum in
       doubles at 8,000 random points of random crossing rings, under every
       fill rule, and on edges, corners and level with a vertex.
+
+## A triangle with no area in the volume tests (card T22, decided 2026-11-24 with you: a)
+
+A mesh BVH drops triangles with no area at its build ("Geometry": never
+hit), so the volume tests can't find one either. The approved header's
+sentence "a triangle with no area counts, as a segment or a point"
+becomes "a triangle with no area is never found, as it is never hit",
+with a test of it. No change to what a mesh BVH stores.

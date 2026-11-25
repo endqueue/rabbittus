@@ -7318,3 +7318,29 @@ with Rend's own code and message in its error struct (card A2), so the
 caller never meets Carrottus' codes from a texture call. Tests: each
 refusal seen failing first, with its words.
 
+### 67. A selection's glow as a halo only (card T60, decided 2026-11-24 with you: a)
+
+The glow is written into the glow target over the element's whole face
+and spread by one bloom whose chain adds its levels together, so about
+five times the glow comes back over the face: a wall selected in Windows'
+blue glowing at 0.2 or more turns cyan (seen 2026-11-08 in Trellis_Win32,
+over Rend's bloom). The glow is composited only outside the element's
+coverage (or its own glow subtracted under it), so a strength means the
+halo's and the selected face keeps its material and tint, which are
+functional feedback. Linxer's selection glow inherits it; a test of a
+selected face's colour at full glow against its unselected colour.
+
+### 68. Metal's argument buffers padded in SPIR-V (card S31, decided 2026-11-24 with you: a)
+
+The shader step pads each set's argument buffer for Metal by writing
+Metal members into SPIRV-Cross's text output with a type mapping of its
+own, which a SPIRV-Cross formatting change breaks and a wrong type passes.
+Instead, a pass in the shader step (`cmake/rbtrend_slang.cmake`), from
+Slang's `-reflection-json`, adds each binding Slang dropped as a real
+SPIR-V variable of its declared type, only in the copy given to
+Carrottus' `crgpu_msl`; the Vulkan SPIR-V and the reflection input stay
+Slang's. SPIRV-Cross then writes every member itself, and the text
+writer goes. Report Slang's `-preserve-params` keeping no bindings (and
+aborting on a `readonly RWByteAddressBuffer`, 2026.18.3); when Slang
+keeps them, the pass goes too. Run on the Mac and with the Metal check
+on Linux.

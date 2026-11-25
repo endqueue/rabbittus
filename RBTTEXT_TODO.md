@@ -481,3 +481,13 @@ variable faces, the CAD arcs, the left-to-right fast path), MSVC 14.51.
       passing on macOS and on Windows (2026-10-29, MSVC, Debug and
       Release: the same CRCs) and on Linux (2026-11-04, GCC 16, Debug
       and Release, passing).
+
+## Right-to-left relayout allocates in SheenBidi (card A31, decided 2026-11-24 with you: a, with c filed)
+
+A paragraph with right-to-left text allocates SheenBidi's objects at
+every build (3 a paragraph, 2 a line, through its one `malloc`; 2.9.0 has
+no allocator hook). Left as is: a few microseconds beside the shaping of
+the same text, paid only by right-to-left runs, revisited if a host's
+profile shows it. Filed upstream: an allocator hook or an object reset
+for new text (option c). No global state brought into Rabbittus (b), and
+no Unicode bidi algorithm of our own (d).

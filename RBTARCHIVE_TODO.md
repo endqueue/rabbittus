@@ -396,3 +396,15 @@ archive is damaged when memory ran out.
 
 - **Encryption** (ZipCrypto or WinZip AES).
 - **Split and multi-disk archives.**
+
+## A compressed entry's read allocates (card A32, decided 2026-11-24 with you: a)
+
+`rbtarchive_reader_read_entry` allocates three times a call (the local
+header's look, the read's state, the DEFLATE decompressor) and the data
+offset's getter once. The reader keeps what reading needs, made at open
+or first use: a decompressor per codec and the local-header scratch, so a
+repeated read allocates nothing. The reader's calls may overlap
+("Threads"), and the codecs table is shared by any number of readers and
+writers (card A52), so the kept state is per call's thread or follows the
+overlap rule: settled in the change, with a no-allocation test of a
+second DEFLATE read.

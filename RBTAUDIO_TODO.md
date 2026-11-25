@@ -614,3 +614,15 @@ Not Rabbittus Audio's to decide, but nothing in the design prompts its callers t
   Carrottus Audio reports device events on CoreAudio, WASAPI and ALSA
   (`craudio_instance_set_device_event_callback`); only the stub built with no audio API
   refuses.
+
+## A streamed Opus voice after a seek (card A34, decided 2026-11-24 with you: a)
+
+opusfile seeks exactly to a frame, but an Opus decoder's state depends on
+every packet before it: after a seek it decodes and drops at least 80 ms
+of pre-roll, and what follows converges on the continuous decode without
+being its bits (RFC 7845, 4.6). Accepted, and the header says so: a
+streamed Opus voice plays the whole file's bits from 0 (a new play,
+RESTART, each loop), and differs only after a CONTINUE or PAUSE return
+mid-file (faded in over `transition_fade_us` in any real mix) and in a
+looping voice's first frames through the resampler's outer taps. FLAC
+and Vorbis seek to the whole file's bits. The tests follow this.
