@@ -58,6 +58,29 @@ extended, and the camera data carries a jitter offset that is zero today.
 Video export needs 6 and 12 (card A28): nothing frozen may assume one
 queue or a blocking readback.
 
+## Public unions (card A79, decided 2026-11-24 with you)
+
+`CONVENTIONS.md`'s "Bindable as written" bans unions in public headers.
+Rend has two:
+- **`RBTREND_COMMAND._params`: kept, a named exception (c).** 128 bytes
+  (`_type`, then 52 members padded to 120); separate fields would be
+  about 1,504, 24 cache lines against 2, in an array recorded every
+  frame and passed by value to `rbtrend_command_list_send`. Owed: a
+  layout test (its size, `_type` at offset 0 and `_params` after it,
+  each member's size within the union), and the header saying the
+  union is the rule's exception and how a binding maps it (C# explicit
+  offsets; Swift imports it).
+- **`RBTREND_BINDING_SET_ENTRY._resource`: split into fields (a).**
+  40 bytes now, 56 after (storage and uniform buffers sharing one
+  `_buffer`, `_offset` and `_range`, the image's `_view` and `_sampler`
+  beside them), under one 64-byte line, in an array read when a set is
+  created or updated, not per draw. A public layout change, so a draft
+  header for your approval first (root `CLAUDE.md`, "Working
+  conventions"), with its ABI break listed for the next minor version;
+  once built, `check.baseline`'s line for it goes.
+
+Hardening session D, which this waited on, finished 2026-11-23.
+
 ## The contract conversion (cards A2, A10, A14; decided 2026-10-28)
 
 **Decided with the user 2026-10-28; not started.** All of Rend moves to
@@ -6312,7 +6335,12 @@ approved draft:
   1440p and 1 to 2% of a converged volume's accuracy for 0.55 points of
   error under fast motion; options: a, keep it (built); b, clip only
   while the view moves past a threshold (the share as before when
-  still); c, take it out (A72's b). Recommended b.
+  still); c, take it out (A72's b). Recommended b. **Card A78 decided
+  2026-11-24 with you: b**: the fog's inject clips its history only
+  while the view moves (the camera's turn or move past a threshold the
+  caller's fog desc states, no default), the share as before when still;
+  measured again, test 11 held as now. Internal to Rend but the
+  threshold, which follows the fog desc's pattern.
 
 ### 57. GPU particles (card L73, decided 2026-11-17)
 
@@ -7258,3 +7286,35 @@ belongs to.
    fullest buffer that has room, so lightly used buffers drain, and a trim
    that releases the spare buffer. Held until item 35 decides what the
    arena's bookkeeping is.
+
+### 65. GPU memory from heaps, after a census (card A80, decided 2026-11-24 with you)
+
+Rend makes every buffer and image as its own device allocation
+(`crgpu_buffer_create()`, `crgpu_image_create()`), and Carrottus' heaps
+and placed resources (`crgpu_heap_create()`, `crgpu_*_create_placed()`)
+are unused above it. Vulkan guarantees 4,096 live allocations
+(`maxMemoryAllocationCount`'s minimum), about what Windows drivers report.
+
+- **First, the census:** the live allocation count in Warpwake's worst
+  scene on the A2000 under Vulkan (its limit read from `vulkaninfo`) and
+  on the M5, counted at the backend.
+- **If past about a quarter of the A2000's limit:** Rend suballocates
+  from heaps by kind and lifetime, a few hundred MB each: a TLSF-style
+  allocator for long-lived resources, linear rings for per-frame ones.
+  Otherwise one allocation per resource stays, the census recorded here.
+- **Not in it:** two live resources over one heap's bytes (aliasing
+  within a frame) is undefined today (`crgpu.h`,
+  `crgpu_buffer_create_placed()`) and needs a Carrottus draft for its
+  barriers first. Reuse one after another works now.
+- **Video:** decode surfaces stay possible, as a heap of their own.
+
+### 66. Texture creates and copies refused in Rend's own words (card A77, decided 2026-11-24 with you: a)
+
+Built with Carrottus' card S58 (a usage without its format bit refused,
+and a two-aspect copy without a named aspect). Rend reads the format
+table (`crgpu`'s per-format capabilities, card S51) before creating a
+texture, and names or refuses a two-aspect copy itself, each refusal
+with Rend's own code and message in its error struct (card A2), so the
+caller never meets Carrottus' codes from a texture call. Tests: each
+refusal seen failing first, with its words.
+
