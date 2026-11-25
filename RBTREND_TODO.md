@@ -7323,11 +7323,11 @@ refusal seen failing first, with its words.
 The glow is written into the glow target over the element's whole face
 and spread by one bloom whose chain adds its levels together, so about
 five times the glow comes back over the face: a wall selected in Windows'
-blue glowing at 0.2 or more turns cyan (seen 2026-11-08 in Trellis_Win32,
+blue glowing at 0.2 or more turns cyan (seen 2026-11-08 in a caller,
 over Rend's bloom). The glow is composited only outside the element's
 coverage (or its own glow subtracted under it), so a strength means the
 halo's and the selected face keeps its material and tint, which are
-functional feedback. Linxer's selection glow inherits it; a test of a
+functional feedback. Every caller's selection glow inherits it; a test of a
 selected face's colour at full glow against its unselected colour.
 
 ### 68. Metal's argument buffers padded in SPIR-V (card S31, decided 2026-11-24 with you: a)
