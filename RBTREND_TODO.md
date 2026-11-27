@@ -7074,7 +7074,8 @@ caller's headers, is not built here.
   span (3e38 where begin equals full: a step), 1 / the band, the amount),
   `cover_wet` (the wetness, its roughness, then the snow's colour and
   roughness as four half floats, rounded to nearest even on the CPU,
-  `f16tof32` in the shader: within 1/2048, said in the header). Flags
+  `unpackHalf2x16ToFloat` in the shader since 2026-11-25, `f16tof32`
+  before: within 1/2048, said in the header). Flags
   COVER 8192 (the draft's 4096 had gone to the fog) and COVER_ROUND
   16384.
 - **The material's block:** the response in the three spare floats after
@@ -7119,6 +7120,33 @@ caller's headers, is not built here.
   a cover set every frame: 0 of ours), and `rbtrend_contract_tests` (a
   NULL scene, headless). Every other GPU test's printed figures the same
   as before the build (Debug and Release logs compared line for line).
+- **Vulkan, 2026-11-25 (Fedora 44, the ThinkPad P1 Gen 5; found by a
+  caller's Vulkan run):** `f16tof32` reached SPIR-V
+  through Slang's 16-bit types, so the five lit fragment shaders that
+  import `rbtrend_lit_lighting.slang` (`rbtrend_lit_frag`,
+  `_lit_layered_frag`, `_lit_layered_reflect_frag`,
+  `_lit_surface_reflect_frag`, `_particles_lit_frag`) declared `Int16`
+  and `Float16`, which a device made without `shaderInt16` and
+  `shaderFloat16` refuses: `VUID-VkShaderModuleCreateInfo-pCode-08740`
+  on every lit shader's creation (the Windows and Fedora runs since
+  2026-11-19 recorded it as a finding). Now `unpackHalf2x16ToFloat`,
+  GLSL.std.450's `UnpackHalf2x16` in SPIR-V (`Shader` only), `f16tof32`
+  in HLSL and `as_type<half2>` in SPIRV-Cross's Metal: the same values.
+  No built SPIR-V of Rend's declares either capability now. The cover's
+  tests on Vulkan for the first time (Debug, the SDK 1.4.363.1's
+  validation): `test_lit_cover_refusals`, `_off`, `_snow_slope`,
+  `_snow_line`, `_wet`, `_response` and `test_layered_cover` passing on
+  ANV (the Iris Xe), no message; the A2000 (NVK) lost its channels in
+  every GPU test that day, `test_push_constants` too (nouveau's GSP,
+  failing since 01:39 that morning), so owed there. Metal not rebuilt
+  here: owed on the Mac (the T2 hash, `06a6f47e768ba383`, should hold).
+  The whole `rbtrend_gpu_tests` on ANV after it, Debug and Release
+  under validation: every test passing but `test_atmosphere_infinite_far`
+  (`below == 0`, 4 checks) and `test_lit_split_same_pixels` (the Mac's
+  recorded hashes, 10), which fail the same with the old shader (seen):
+  Vulkan's first run of them, not this change's. Messages only card
+  A50's `OutputNotConsumed`; no `pCode-08740` and no module of the build
+  declaring Int16 or Float16.
 - **Measured** (`test_lit_cover_measure`, Release, no validation, the M5
   Pro, submit to idle, a lit face over 2560 x 1440, three rounds of the
   mean of 50 after 10): three runs, each on both devices: no cover

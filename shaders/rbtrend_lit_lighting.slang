@@ -334,11 +334,16 @@ void lit_cover(float3 position, float3 geometric, float amount, float porosity, 
     float above = cover_smoothstep(saturate((height - frame.w) * snow.z));
     float s     = snow.w * slope * above * amount;
     if (s > 0.0) {
-        uint rg          = asuint(wet.z);
-        uint ba          = asuint(wet.w);
-        float3 color     = float3(f16tof32(rg & 0xffffu), f16tof32(rg >> 16), f16tof32(ba & 0xffffu));
+        // Two halves a word, the low one first. unpackHalf2x16ToFloat, not
+        // f16tof32: Slang writes f16tof32 to SPIR-V through 16-bit types,
+        // whose Int16 and Float16 capabilities a Vulkan device made without
+        // shaderInt16 and shaderFloat16 refuses (pCode-08740); this is
+        // GLSL.std.450's UnpackHalf2x16, the same values, no capability.
+        float2 rg        = unpackHalf2x16ToFloat(asuint(wet.z));
+        float2 ba        = unpackHalf2x16ToFloat(asuint(wet.w));
+        float3 color     = float3(rg.x, rg.y, ba.x);
         albedo           = lerp(albedo, color, s);
-        roughness        = lerp(roughness, f16tof32(ba >> 16), s);
+        roughness        = lerp(roughness, ba.y, s);
         metalness        = metalness * (1.0 - s);
         n                = safe_normalize(lerp(n, geometric, s), geometric);
     }
