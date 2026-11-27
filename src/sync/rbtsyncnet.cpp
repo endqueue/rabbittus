@@ -254,6 +254,19 @@ static std::string describe(const char *what, CR_RESULT result, const crnet_erro
     return text;
 }
 
+// An address as a message names it: its text, the scope after a '%' where
+// it has one, so two tries of one address on two interfaces read apart
+// ("fe80::1%15").
+static std::string address_text(const crnet_address &address)
+{
+    char text[CRNET_MAX_ADDRESS_STRING_LEN] = "?";
+    crnet_address_to_string(&address, text);
+    std::string named = text;
+    if (address.scope_id != 0)
+        named += "%" + std::to_string(address.scope_id);
+    return named;
+}
+
 static std::string describe_socket(crnet_tcp_socket socket, CRNET_ERROR_SIDE side, const char *what,
                                    CR_RESULT result)
 {
@@ -1099,7 +1112,7 @@ static const uint32_t RBTSYNC_MAX_RESOLVED_ADDRESSES = 8;
 // Looks the host's name up. False when there is nothing to connect to, in
 // which case the event saying why has been emitted - unless the session is
 // being destroyed, which needs none.
-static bool resolve_host(rbtsync_session_t &s, char addresses[][CRNET_MAX_ADDRESS_STRING_LEN], uint32_t &count)
+static bool resolve_host(rbtsync_session_t &s, crnet_address *addresses, uint32_t &count)
 {
     crnet_error none{};
     crnet_resolver_desc desc{{CR_STRUCT_TYPE_NET_RESOLVER_DESC, nullptr}};
@@ -1191,7 +1204,7 @@ static bool resolve_host(rbtsync_session_t &s, char addresses[][CRNET_MAX_ADDRES
 // emitted (or none, when the session is being destroyed).
 static bool connect_to_host(rbtsync_session_t &s)
 {
-    char addresses[RBTSYNC_MAX_RESOLVED_ADDRESSES][CRNET_MAX_ADDRESS_STRING_LEN];
+    crnet_address addresses[RBTSYNC_MAX_RESOLVED_ADDRESSES];
     uint32_t count = 0;
     if (!resolve_host(s, addresses, count))
         return false;
@@ -1224,19 +1237,29 @@ static bool connect_to_host(rbtsync_session_t &s)
         if (s.stop.load())
             crnet_tcp_socket_abort(socket);
 
+        // The resolver's value as it is, scope and all; the port is the
+        // join's (a lookup has none).
         crnet_tcp_socket_connect_desc desc{{CR_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC, nullptr}};
-        desc.address = addresses[i];
-        desc.port = s.join_port;
+        desc.to = addresses[i];
+        desc.to.port = s.join_port;
         desc.timeout_ms = s.connect_timeout_ms;
         result = crnet_tcp_socket_connect(socket, &desc);
+        const std::string named = address_text(desc.to);
         if (result == CR_RESULT_NET_TIMED_OUT)
         {
-            message = std::string("connecting to ") + addresses[i] + " took too long";
+            message = "connecting to " + named + " took too long";
+        }
+        else if (result == CR_RESULT_NET_INVALID_ADDRESS || result == CR_RESULT_NET_INVALID_SCOPE)
+        {
+            // Refused before any system call (a link-local answer the
+            // system gave no interface): the result alone names it.
+            every_attempt_timed_out = false;
+            message = describe(("connecting to " + named).c_str(), result, none);
         }
         else if (result != CR_SUCCESS && result != CR_RESULT_NET_ABORTED)
         {
             every_attempt_timed_out = false;
-            std::string what = std::string("connecting to ") + addresses[i];
+            std::string what = "connecting to " + named;
             message = describe_socket(socket, CRNET_ERROR_SIDE_RECEIVING, what.c_str(), result);
         }
         {
@@ -1536,9 +1559,10 @@ extern "C"
             for (uint32_t i = 0; i < h.listen_address_count; ++i)
             {
                 crnet_tcp_listener_desc listener_desc{{CR_STRUCT_TYPE_NET_TCP_LISTENER_DESC, nullptr}};
-                listener_desc.address = h.listen_addresses[i];
-                listener_desc.port = h.port;
                 listener_desc.backlog = h.listen_backlog;
+                // Text with no '%' suffix, and so no scope: a link-local
+                // listen address is then Carrottus Net's INVALID_SCOPE.
+                const CR_RESULT read = crnet_address_from_string(h.listen_addresses[i], h.port, 0, &listener_desc.local);
                 // The entry first, so that a listener is owned by the session
                 // from the moment it exists.
                 std::unique_ptr<rbtsync_listener> listener(new rbtsync_listener());
@@ -1548,16 +1572,18 @@ extern "C"
                 s->ports.reserve(s->listeners.size());
 
                 crnet_tcp_listener handle = nullptr;
-                crnet_error detail;
-                CR_RESULT result = crnet_tcp_listener_create(s->instance, &listener_desc, &handle, &detail);
+                crnet_error detail{};
+                CR_RESULT result =
+                    read != CR_SUCCESS ? read : crnet_tcp_listener_create(s->instance, &listener_desc, &handle, &detail);
                 if (result != CR_SUCCESS)
                 {
                     std::string what = std::string("listening on ") + h.listen_addresses[i];
                     std::string message = describe(what.c_str(), result, detail);
                     destroy_session(s);
-                    RBT_RESULT code = result == CR_RESULT_NET_ADDRESS_IN_USE   ? RBT_RESULT_SYNC_ADDRESS_IN_USE
-                                    : result == CR_RESULT_NET_INVALID_ADDRESS ? RBT_RESULT_INVALID_ARGUMENT
-                                                                                   : RBT_RESULT_IO;
+                    RBT_RESULT code = result == CR_RESULT_NET_ADDRESS_IN_USE ? RBT_RESULT_SYNC_ADDRESS_IN_USE
+                                    : result == CR_RESULT_NET_INVALID_ADDRESS || result == CR_RESULT_NET_INVALID_SCOPE
+                                        ? RBT_RESULT_INVALID_ARGUMENT
+                                        : RBT_RESULT_IO;
                     return fail(out_error, code, "%s", message.c_str());
                 }
                 added->handle = handle;
@@ -1598,6 +1624,10 @@ extern "C"
         const RBTSYNC_JOIN_DESC &j = *join_desc;
         if (!j.host || j.host[0] == '\0')
             return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "join_desc has no host");
+        // A scope is never text here (Carrottus Net's resolver refuses a '%'
+        // at its create, which would reach the session only as DISCONNECTED).
+        if (strchr(j.host, '%'))
+            return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "join_desc's host holds a '%%' suffix");
         if (j.family != RBTSYNC_ADDRESS_FAMILY_ANY && j.family != RBTSYNC_ADDRESS_FAMILY_IPV4 &&
             j.family != RBTSYNC_ADDRESS_FAMILY_IPV6)
             return fail(out_error, RBT_RESULT_INVALID_ARGUMENT, "join_desc has no such address family");

@@ -278,7 +278,9 @@ typedef struct RBTSYNC_HOST_DESC {
 	RBT_STRUCT_BASE base;
 
 	/**
-	 * The local addresses to listen on, numeric, as Carrottus Net takes them:
+	 * The local addresses to listen on, numeric, as
+	 * crnet_address_from_string() reads them: no '%' suffix, and not IPv6
+	 * link-local, which has no field here for its interface.
 	 * "0.0.0.0" for every IPv4 interface, "::" for every IPv6 one,
 	 * "127.0.0.1" for this machine only, or an interface's own. One
 	 * listener each; listening on both families is two entries. None may
@@ -326,7 +328,7 @@ typedef struct RBTSYNC_JOIN_DESC {
 	/** This struct's type, RBT_STRUCT_TYPE_SYNC_JOIN_DESC, and its chain (rbtcore.h, "Struct bases"). */
 	RBT_STRUCT_BASE base;
 
-	/** The host: a name or a numeric address, UTF-8. Neither NULL nor empty. Copied. */
+	/** The host: a name or a numeric address, no '%' suffix, UTF-8. Neither NULL nor empty. Copied. */
 	const char *host;
 	/** The port the host listens on. */
 	uint16_t port;

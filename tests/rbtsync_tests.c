@@ -173,6 +173,12 @@ static void test_arguments(void)
     RBTSYNC_JOIN_DESC chained_join = join_desc;
     chained_join.base.next = &chained;
     CHECK(rbtsync_session_join(&desc, &chained_join, &session, NULL) == RBT_RESULT_STRUCT_UNKNOWN_IN_CHAIN);
+    // A '%' in the host is refused up front (card N26), never handed to the
+    // resolver.
+    RBTSYNC_JOIN_DESC suffixed = join_desc;
+    suffixed.host = "fe80::1%lo0";
+    CHECK(rbtsync_session_join(&desc, &suffixed, &session, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(session == NULL && error.message[0] != '\0');
 
     RBTSYNC_EVENT event;
     memset(&event, 0, sizeof(event));
@@ -375,6 +381,19 @@ static void test_refusals(void)
     rbtsync_session second = NULL;
     RBTSYNC_ERROR error;
     CHECK(rbtsync_session_host(&desc, &host_desc, &second, &error) == RBT_RESULT_SYNC_ADDRESS_IN_USE);
+    CHECK(second == NULL && error.message[0] != '\0');
+
+    // Addresses a host can't take (card N26): a link-local one has no field
+    // here for its interface, and a '%' suffix is never read. Each refused
+    // as an argument, before any system call.
+    static const char *const link_local[1] = {"fe80::1"};
+    host_desc.listen_addresses = link_local;
+    host_desc.port = 0;
+    CHECK(rbtsync_session_host(&desc, &host_desc, &second, &error) == RBT_RESULT_INVALID_ARGUMENT);
+    CHECK(second == NULL && error.message[0] != '\0');
+    static const char *const suffixed[1] = {"fe80::1%1"};
+    host_desc.listen_addresses = suffixed;
+    CHECK(rbtsync_session_host(&desc, &host_desc, &second, &error) == RBT_RESULT_INVALID_ARGUMENT);
     CHECK(second == NULL && error.message[0] != '\0');
 
     // Destroyed while a join is still under way, and with nobody listening.
